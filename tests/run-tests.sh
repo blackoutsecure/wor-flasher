@@ -30,6 +30,7 @@ export NO_UPDATE=1
 [ -z "$TEST_DL_DIR" ] && TEST_DL_DIR="$TEST_DIR/downloads"
 
 [ -z "$TEST_WIN_LANG" ] && TEST_WIN_LANG='en-us'
+[ -z "$TEST_COMMAND_TIMEOUT" ] && TEST_COMMAND_TIMEOUT=120
 
 #Which Raspberry Pi models to exercise. Each one pulls a different UEFI package.
 [ -z "$TEST_MODELS" ] && TEST_MODELS='3 4 5'
@@ -75,6 +76,8 @@ cleanup() {
 
 static_checks() {
   info "== Static checks =="
+  git -C "$REPO_DIR" diff --check >/dev/null 2>&1 \
+    && pass "working tree has no whitespace errors" || fail "working tree has whitespace errors"
   for f in install-wor.sh install-wor-gui.sh terminal-run ;do
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
@@ -139,16 +142,28 @@ seed_winfiles() { #Input: build id. Makes install-wor.sh skip the multi-gigabyte
   touch "$TEST_DL_DIR/winfiles_${1}_${TEST_WIN_LANG}/alldone"
 }
 
+run_with_timeout() {
+  if command -v timeout >/dev/null ;then
+    timeout "$TEST_COMMAND_TIMEOUT" "$@"
+  else
+    "$@"
+  fi
+}
+
 run_flasher() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
-  LAST_OUT="$(env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
+  progress "running install-wor.sh with $(printf '%s ' "$@")"
+  LAST_OUT="$(run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
   LAST_CODE=$?
+  progress "install-wor.sh finished with exit $LAST_CODE"
 }
 
 run_flasher_with_input() { #Input: stdin text, then VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
   local input="$1"
   shift
-  LAST_OUT="$(printf '%b' "$input" | env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
+  progress "running install-wor.sh with stdin and $(printf '%s ' "$@")"
+  LAST_OUT="$(printf '%b' "$input" | run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
   LAST_CODE=$?
+  progress "install-wor.sh finished with exit $LAST_CODE"
 }
 
 show_last_out() {
@@ -221,6 +236,7 @@ if [ "$(uname -s)" != Linux ];then
   if [ "$MODE" == suite ] && [ -z "${WOR_FLASHER_CONTAINER_TEST:-}" ] && [ -x "$REPO_DIR/tests/run-linux-integration.sh" ];then
     if command -v docker >/dev/null && docker info >/dev/null 2>&1 ;then
       info "== Linux integration via Docker =="
+      progress "starting Docker integration; dependency setup can take several minutes"
       "$REPO_DIR/tests/run-linux-integration.sh" "$@"
       exit $?
     fi
@@ -411,13 +427,18 @@ else
       #point the clone's self-updater at this same repo/branch, so it dynamically pulls whatever is actually being worked on
       update_env=(UPDATE_REPO_URL="$REPO_DIR" UPDATE_REF="$branch" NO_UPDATE=0 ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2)
 
-      LAST_OUT="$(env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
+      progress "self-updater: checking clean clone already on $branch"
+      LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
       LAST_CODE=$?
+      progress "self-updater clean-clone check finished with exit $LAST_CODE"
+      expect_ok "already level with $branch: flasher still runs"
       expect_no_output "already level with $branch: self-updater stays quiet" "Auto-updating wor-flasher"
 
       printf '\n' >> "$clone_dir/README.md"
-      LAST_OUT="$(env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
+      progress "self-updater: checking dirty clone protection"
+      LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
       LAST_CODE=$?
+      progress "self-updater dirty-clone check finished with exit $LAST_CODE"
       expect_ok "dirty checkout: flasher still runs"
       expect_output "dirty checkout: self-updater preserves local changes" "Skipping automatic update because this checkout has uncommitted changes"
       git -C "$clone_dir" diff --quiet \
@@ -427,8 +448,11 @@ else
 
       #fall one commit behind $REPO_DIR's $branch, so the clone actually has something to pull
       if git -C "$clone_dir" reset -q --hard HEAD~1 2>/dev/null ;then
-        LAST_OUT="$(env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
+        progress "self-updater: checking behind clone fast-forward and reload"
+        LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
         LAST_CODE=$?
+        progress "self-updater behind-clone check finished with exit $LAST_CODE"
+        expect_ok "behind $branch: flasher still runs after update"
         expect_output "behind $branch: self-updater detects the update" "Auto-updating wor-flasher"
         expect_output "behind $branch: self-updater pulls and reloads" "Reloading script"
         [ "$(git -C "$clone_dir" rev-parse HEAD)" == "$(git -C "$REPO_DIR" rev-parse "$branch")" ] \
