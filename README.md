@@ -85,14 +85,14 @@ Now, using the new WoR-flasher, it's a _piece of cake_.
 
 WoR-flasher runs on a Linux machine and flashes a drive that you then move to a Raspberry Pi. The table below is about the **computer running the flasher**, not the Pi.
 
-| Host operating system | Supported | Notes |
-| --- | --- | --- |
-| Raspberry Pi OS (32 or 64-bit) | Yes | The only system upstream tests against |
-| Debian, Ubuntu, Linux Mint and other Debian-based distros | Yes | ARM or x86_64 |
-| Fedora, Arch, openSUSE and other non-Debian Linux | No | Dependencies are installed with `apt`, and installed packages are detected by reading the dpkg database |
-| macOS | No | Requires `lsblk`, `parted` and the Linux `/dev` layout |
-| Windows | No | Same reason |
-| Windows with WSL2 | Untested | WSL2 does not expose removable drives by default, so assume it does not work |
+| Host operating system                                     | Supported | Notes                                                                                                   |
+| --------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------- |
+| Raspberry Pi OS (32 or 64-bit)                            | Yes       | The only system upstream tests against                                                                  |
+| Debian, Ubuntu, Linux Mint and other Debian-based distros | Yes       | ARM or x86_64                                                                                           |
+| Fedora, Arch, openSUSE and other non-Debian Linux         | No        | Dependencies are installed with `apt`, and installed packages are detected by reading the dpkg database |
+| macOS                                                     | No        | Requires `lsblk`, `parted` and the Linux `/dev` layout                                                  |
+| Windows                                                   | No        | Same reason                                                                                             |
+| Windows with WSL2                                         | Untested  | WSL2 does not expose removable drives by default, so assume it does not work                            |
 
 You also need:
 
@@ -269,9 +269,9 @@ chmod +x install-wor.sh
 ```
 
 > [!IMPORTANT]
-> This only works for the terminal interface. **`install-wor-gui.sh` cannot be downloaded on its own** - it needs `install-wor.sh`, `terminal-run`, `config_txt_tips` and several images beside it, and exits with *"No script found named install-wor.sh"* if they are missing. Use `git clone` for the graphical interface.
+> This only works for the terminal interface. **`install-wor-gui.sh` cannot be downloaded on its own** - it needs `install-wor.sh`, `terminal-run`, `config_txt_tips` and several images beside it, and exits with _"No script found named install-wor.sh"_ if they are missing. Use `git clone` for the graphical interface.
 >
-> **Do not pipe either script into bash.** `curl ... | bash` fails, because the script needs to know its own directory and exits with *"Failed to determine the directory that contains this script"*. It also means nobody reads the code before it runs `parted`, `mkfs` and `dd` on a drive.
+> **Do not pipe either script into bash.** `curl ... | bash` fails, because the script needs to know its own directory and exits with _"Failed to determine the directory that contains this script"_. It also means nobody reads the code before it runs `parted`, `mkfs` and `dd` on a drive.
 
 The script normally keeps itself up to date with `git pull`. A single-file copy has no git repository, so that step is skipped silently and you are responsible for re-downloading it.
 
@@ -638,12 +638,18 @@ This repository is looking for a maintainer, so contributions are genuinely welc
 
 Useful when testing changes:
 
-| Command                      | Purpose                                               |
-| ---------------------------- | ----------------------------------------------------- |
-| `bash -n install-wor.sh`     | Check syntax without running anything                 |
-| `DRY_RUN=1 ...`              | Run the whole flow but stop before touching the drive |
-| `USE_CACHE=1 ...`            | Reuse downloaded components so iterations are fast    |
-| `DEBUG=1 ./terminal-run ...` | Print which terminal emulator was selected            |
+| Command                              | Purpose                                                                          |
+| ------------------------------------ | -------------------------------------------------------------------------------- |
+| `./tests/run-tests.sh`               | Run the automated suite against loopback drives, so nothing touches real storage |
+| `./tests/run-tests.sh --walkthrough` | Create fake drives, then step through the terminal interface by hand             |
+| `./tests/run-tests.sh --gui`         | Same, but launch the graphical interface                                         |
+| `./tests/run-tests.sh --clean`       | Remove the test workspace and detach its loop devices                            |
+| `bash -n install-wor.sh`             | Check syntax without running anything                                            |
+| `DRY_RUN=1 ...`                      | Run the whole flow but stop before touching the drive                            |
+| `USE_CACHE=1 ...`                    | Reuse downloaded components so iterations are fast                               |
+| `DEBUG=1 ./terminal-run ...`         | Print which terminal emulator was selected                                       |
+
+The harness needs passwordless `sudo` to create loopback devices. It detects the newest bootable build for each model from the catalog, so no build number is hardcoded, and it writes everything to `.test-workspace/`, which git ignores and which is removed afterwards unless you pass `--keep`.
 
 Both scripts are plain Bash with no build step. `install-wor-gui.sh` sources `install-wor.sh` for its functions, so shared logic belongs in the latter.
 
