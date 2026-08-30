@@ -869,20 +869,27 @@ if [ ! -d "$PWD/pi${RPI_MODEL}-uefipackage" ];then
   #from: https://github.com/pftf/RPi4/releases
   #example download URL (will be outdated) https://github.com/pftf/RPi4/releases/download/v1.29/RPi4_UEFI_Firmware_v1.29.zip
   
-  #determine latest release download URL:
-  #URL="$(wget -qO- https://api.github.com/repos/pftf/RPi${RPI_MODEL}/releases/latest | grep '"browser_download_url":'".*RPi${RPI_MODEL}_UEFI_Firmware_.*\.zip" | sed 's/^.*browser_download_url": "//g' | sed 's/"$//g')"
-  
-  case "$RPI_MODEL" in
-    5)
-      URL='https://github.com/worproject/rpi5-uefi/releases/download/v0.3/RPi5_UEFI_Release_v0.3.zip'
-      ;;
-    4)
-      URL='https://github.com/pftf/RPi4/releases/download/v1.33/RPi4_UEFI_Firmware_v1.33.zip'
-      #held back on 1.33 for greater stability: https://github.com/pftf/RPi4/issues/227
-      ;;
-    3)
-      URL='https://github.com/pftf/RPi3/releases/download/v1.39/RPi3_UEFI_Firmware_v1.39.zip'
-  esac
+  # Attempt to query latest release URL via GitHub API
+  if [ "$RPI_MODEL" == "4" ] || [ "$RPI_MODEL" == "3" ]; then
+    URL="$(wget -qO- "https://api.github.com/repos/pftf/RPi${RPI_MODEL}/releases/latest" 2>/dev/null | grep '"browser_download_url":' | grep -o 'https://[^"]*RPi[34]_UEFI_Firmware_[^"]*\.zip' | head -n1)"
+  elif [ "$RPI_MODEL" == "5" ]; then
+    URL="$(wget -qO- "https://api.github.com/repos/worproject/rpi5-uefi/releases/latest" 2>/dev/null | grep '"browser_download_url":' | grep -o 'https://[^"]*\.zip' | head -n1)"
+  fi
+
+  # Fallback to known working releases if API lookup returned empty
+  if [ -z "$URL" ]; then
+    case "$RPI_MODEL" in
+      5)
+        URL='https://github.com/worproject/rpi5-uefi/releases/download/v0.3/RPi5_UEFI_Release_v0.3.zip'
+        ;;
+      4)
+        URL='https://github.com/pftf/RPi4/releases/download/v1.35/RPi4_UEFI_Firmware_v1.35.zip'
+        ;;
+      3)
+        URL='https://github.com/pftf/RPi3/releases/download/v1.39/RPi3_UEFI_Firmware_v1.39.zip'
+        ;;
+    esac
+  fi
   
   wget -O "$PWD/RPi${RPI_MODEL}_UEFI_Firmware.zip" "$URL" || error "Failed to download UEFI package"
   
