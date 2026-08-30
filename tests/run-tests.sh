@@ -7,6 +7,7 @@
 #  ./tests/run-tests.sh               run the automated suite; uses Docker for Linux integration on non-Linux hosts when available
 #  ./tests/run-tests.sh --walkthrough create fake drives, then run the CLI interactively
 #  ./tests/run-tests.sh --gui         create fake drives, then launch the GUI (needs a display)
+#  ./tests/run-tests-gui.sh           run the GUI walkthrough test with display preflight
 #  ./tests/run-tests.sh --full        also download the real Windows image (several GB)
 #  ./tests/run-tests.sh --keep        leave the fake drives and downloads in place afterwards
 #  ./tests/run-tests.sh --clean       remove the test workspace and detach fake drives
@@ -205,6 +206,8 @@ fi
 
 static_checks
 
+info "== WoR-Flasher test suite =="
+
 if [ "$(uname -s)" != Linux ];then
   if [ "$MODE" == suite ] && [ -z "${WOR_FLASHER_CONTAINER_TEST:-}" ] && [ -x "$REPO_DIR/tests/run-linux-integration.sh" ];then
     if command -v docker >/dev/null && docker info >/dev/null 2>&1 ;then
@@ -402,6 +405,16 @@ else
       LAST_OUT="$(env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
       LAST_CODE=$?
       expect_no_output "already level with $branch: self-updater stays quiet" "Auto-updating wor-flasher"
+
+      printf '\n' >> "$clone_dir/README.md"
+      LAST_OUT="$(env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
+      LAST_CODE=$?
+      expect_ok "dirty checkout: flasher still runs"
+      expect_output "dirty checkout: self-updater preserves local changes" "Skipping automatic update because this checkout has uncommitted changes"
+      git -C "$clone_dir" diff --quiet \
+        && fail "dirty checkout: self-updater discarded local changes" \
+        || pass "dirty checkout: local changes were preserved"
+      git -C "$clone_dir" restore README.md
 
       #fall one commit behind $REPO_DIR's $branch, so the clone actually has something to pull
       if git -C "$clone_dir" reset -q --hard HEAD~1 2>/dev/null ;then

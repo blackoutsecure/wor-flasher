@@ -16,6 +16,10 @@ error() {
   exit 1
 }
 
+status() {
+  echo -e "\e[96m$1\e[0m" 1>&2
+}
+
 resolve_path() {
   if command -v realpath >/dev/null ;then
     realpath "$1"
@@ -37,40 +41,40 @@ $commands"
 
 if command -v lxterminal >/dev/null ;then
   lxterminal --title="$title" -e bash -c "$commands" &
-  [ $DEBUG == 1 ] && echo lxterminal
+  [ $DEBUG == 1 ] && status "terminal-run: using lxterminal"
 
 elif command -v xfce4-terminal >/dev/null ;then
   xfce4-terminal --title="$title" -x bash -c "$commands" &
-  [ $DEBUG == 1 ] && echo xfce4-terminal
+  [ $DEBUG == 1 ] && status "terminal-run: using xfce4-terminal"
 
 elif command -v mate-terminal >/dev/null ;then
   mate-terminal --title="$title" -x bash -c "$commands" &
-  [ $DEBUG == 1 ] && echo mate-terminal
+  [ $DEBUG == 1 ] && status "terminal-run: using mate-terminal"
 
 elif command -v xterm >/dev/null ;then
   xterm -T "$title" -e bash -c "$commands" &
-  [ $DEBUG == 1 ] && echo xterm
+  [ $DEBUG == 1 ] && status "terminal-run: using xterm"
 
 elif command -v konsole >/dev/null ;then
   konsole -p tabtitle="$title" -e bash <(echo "$commands") &
-  [ $DEBUG == 1 ] && echo konsole
+  [ $DEBUG == 1 ] && status "terminal-run: using konsole"
 
 elif command -v terminator >/dev/null ;then
   terminator -T "$title" -x bash -c "$commands" &
-  [ $DEBUG == 1 ] && echo terminator
+  [ $DEBUG == 1 ] && status "terminal-run: using terminator"
 
 elif command -v gnome-terminal >/dev/null ;then
   #gnome-terminal removed -x in favour of --
   gnome-terminal --title="$title" -- bash -c "$commands" &
-  [ $DEBUG == 1 ] && echo gnome-terminal
+  [ $DEBUG == 1 ] && status "terminal-run: using gnome-terminal"
 
 elif command -v qterminal >/dev/null ;then
   qterminal -e bash <(echo "$commands") &
-  [ $DEBUG == 1 ] && echo qterminal
+  [ $DEBUG == 1 ] && status "terminal-run: using qterminal"
 
 elif command -v x-terminal-emulator >/dev/null ;then
   "$(resolve_path "$(command -v x-terminal-emulator)")" -e bash -c "$commands" &
-  [ $DEBUG == 1 ] && echo x-terminal-emulator
+  [ $DEBUG == 1 ] && status "terminal-run: using x-terminal-emulator"
 
 else
   error "terminal-run: Failed to locate any terminal emulators!"
@@ -93,14 +97,4 @@ if [ ! -z "$temp_pid_file" ];then
   while [ -d /proc/${terminalrun_pid} ];do
     sleep 1
   done
-
 fi
-
-
-
-
-
-
-
-
-

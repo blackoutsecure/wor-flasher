@@ -310,28 +310,12 @@ echo "DEVICE: $DEVICE"
 
 { #choose installation mode from the detected drive capacity
 device_capability="$(drive_capability "$DEVICE")"
-case "$device_capability" in
-  too-small)
-    error "Drive $DEVICE is smaller than 8GB and cannot be used."
-    ;;
-  recovery|install)
-    true
-    ;;
-  *)
-    error "Unexpected drive capability '$device_capability' for $DEVICE"
-    ;;
-esac
+validate_install_mode "$device_capability"
 
-if [ ! -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
-  if [ "$CAN_INSTALL_ON_SAME_DRIVE" != 0 ] && [ "$CAN_INSTALL_ON_SAME_DRIVE" != 1 ];then
-    error "Unknown value for CAN_INSTALL_ON_SAME_DRIVE. Expected '0' or '1'."
-  elif [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && [ "$device_capability" != install ];then
-    error "Drive $DEVICE is smaller than 25GB and cannot be used for self-installation.\nPlease set CAN_INSTALL_ON_SAME_DRIVE=0"
-  fi
-elif [ "$device_capability" == recovery ];then
+if [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ] && [ "$device_capability" == recovery ];then
   echo "Drive $DEVICE is too small to install Windows to itself. Using recovery-drive mode to install Windows on another larger device."
   CAN_INSTALL_ON_SAME_DRIVE=0
-else
+elif [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
   while [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];do
     install_mode="$(echo -e "TRUE\ninstall\nInstallation drive\nInstall Windows onto this 25 GB+ drive\nFALSE\nrecovery\nRecovery drive\nInstall Windows onto another >16 GB drive" | yad "${yadflags[@]}" --width=520 \
       --list --radiolist --column=chk:CHK --column=value:HD --column=Mode --column=Description --no-headers --print-column=2 --no-selection \
@@ -522,7 +506,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
   output="$(yad "${yadflags[@]}" --width=500 --height=400 --image="$DIRECTORY/overview.png" --image-on-top \
     --form --field="$window_text":LBL '' \
     "${existing_img_chk[@]}" \
-    --field="<b>Edit config.txt:</b>     <small>Want to overclock? <a href="\""file://${DIRECTORY}/config_txt_tips"\"">Click here</a></small>":TXT "$CONFIG_TXT" \
+    --field="<b>Edit config.txt:</b>     <small><a href=\"https://www.raspberrypi.com/documentation/computers/config_txt.html\">Configuration reference</a></small>":TXT "$CONFIG_TXT" \
     --field="$deletion_warning":LBL '' \
     --button='<b>Advanced...</b>'!!"More settings, intended for the advanced user or for troubleshooting":2 \
     --button='<b>Flash</b>'!!"$deletion_warning_2":0

@@ -6,7 +6,8 @@
 
 <!-- Which Raspberry Pi model, which Windows build, and what you observed. -->
 
-- [ ] `bash -n install-wor.sh && bash -n install-wor-gui.sh` passes
+- [ ] `bash -n install-wor.sh install-wor-gui.sh terminal-run tests/*.sh` passes
+- [ ] `./tests/run-tests.sh` passes, skips only expected host/display/container checks, or the reason is explained
 - [ ] Tested with `DRY_RUN=1`, or flashed a real drive
 - [ ] Raspberry Pi model tested:
 - [ ] Windows build tested:
@@ -15,4 +16,4 @@
 
 - [ ] The GUI and CLI still agree, if shared logic changed
 - [ ] README updated, if behaviour or variables changed
-- [ ] No new ShellCheck errors (`shellcheck --severity=error install-wor.sh install-wor-gui.sh terminal-run`)
+- [ ] No new ShellCheck errors (`shellcheck --severity=error install-wor.sh install-wor-gui.sh terminal-run tests/*.sh`)

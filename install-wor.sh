@@ -403,6 +403,27 @@ drive_capability() { #Input: block device. Output: 'too-small', 'recovery' or 'i
   fi
 }
 
+validate_install_mode() { #Input: drive capability. Validates CAN_INSTALL_ON_SAME_DRIVE when supplied.
+  case "$1" in
+    too-small)
+      error "Drive $DEVICE is smaller than 8GB and cannot be used."
+      ;;
+    recovery|install)
+      ;;
+    *)
+      error "Unexpected drive capability '$1' for $DEVICE"
+      ;;
+  esac
+
+  if [ -n "$CAN_INSTALL_ON_SAME_DRIVE" ];then
+    if [ "$CAN_INSTALL_ON_SAME_DRIVE" != 0 ] && [ "$CAN_INSTALL_ON_SAME_DRIVE" != 1 ];then
+      error "Unknown value for CAN_INSTALL_ON_SAME_DRIVE. Expected '0' or '1'."
+    elif [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && [ "$1" != install ];then
+      error "Drive $DEVICE is smaller than 25GB and cannot be used for self-installation.\nPlease set CAN_INSTALL_ON_SAME_DRIVE=0"
+    fi
+  fi
+}
+
 get_space_free() { #Input: folder to check. Output: show many bytes can fit before the disk is full
   if df -B 1 "$1" --output=avail >/dev/null 2>&1 ;then
     df -B 1 "$1" --output=avail | tail -1 | tr -d ' '
@@ -619,21 +640,20 @@ if [ -e "$DIRECTORY" ] && [ "$NO_UPDATE" != 1 ] && command -v git >/dev/null && 
   remote_commit="$(git ls-remote "$UPDATE_REPO_URL" "$UPDATE_REF" | awk '{print $1}')" #latest commit on UPDATE_REPO_URL/UPDATE_REF
 
   if [ "$local_commit" != "$remote_commit" ] && [ ! -z "$remote_commit" ] && [ ! -z "$local_commit" ];then
-    status "Auto-updating wor-flasher for the latest features and improvements..."
-    status "To disable this next time, set NO_UPDATE=1"
-    sleep 1
-
-    (cd "$DIRECTORY"
-    git restore . #abandon changes to tracked files (otherwise users who modified this script are left behind)
-    git -c color.ui=always pull | cat #piping through cat makes git noninteractive
-    exit "${PIPESTATUS[0]}")
-
-    if [ $? == 0 ];then
-      status "git pull finished. Reloading script..."
-      "$0" "$@"
-      exit $?
+    if ! git diff --quiet || ! git diff --cached --quiet ;then
+      status "Skipping automatic update because this checkout has uncommitted changes."
     else
-      warning "git pull failed. Continuing..."
+      status "Auto-updating wor-flasher for the latest features and improvements..."
+      status "To disable this next time, set NO_UPDATE=1"
+      sleep 1
+
+      if git fetch --quiet "$UPDATE_REPO_URL" "$UPDATE_REF" && git merge --ff-only FETCH_HEAD ;then
+        status "Update finished. Reloading script..."
+        "$0" "$@"
+        exit $?
+      else
+        warning "Automatic update failed. Continuing..."
+      fi
     fi
   fi
   cd "$prepwd"
@@ -919,9 +939,7 @@ fi
 
 { #CAN_INSTALL_ON_SAME_DRIVE
 device_capability="$(drive_capability "$DEVICE")"
-if [ "$device_capability" == too-small ];then
-  error "Drive $DEVICE is smaller than 8GB and cannot be used."
-fi
+validate_install_mode "$device_capability"
 
 if [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ] && [ "$device_capability" == install ];then
   #Drive is >=25GB, so present the user with the option to make this a recovery drive or a full installation
@@ -949,16 +967,6 @@ elif [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
   #Drive is <25GB, so user's only choice is to make this a recovery drive
   status "Drive $DEVICE is too small to install Windows to itself. Using recovery-drive mode to install Windows on another larger device."
   CAN_INSTALL_ON_SAME_DRIVE=0
-
-elif [ "$CAN_INSTALL_ON_SAME_DRIVE" != 0 ] && [ "$CAN_INSTALL_ON_SAME_DRIVE" != 1 ];then
-  error "Unknown value for CAN_INSTALL_ON_SAME_DRIVE. Expected '0' or '1'."
-
-elif [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ];then
-  #Variable pre-populated, so if it is 1 make sure the drive is 25GB or larger
-  if [ "$device_capability" != install ];then
-    error "Drive $DEVICE is smaller than 25GB and cannot be used for self-installation.\nPlease set CAN_INSTALL_ON_SAME_DRIVE=0"
-  fi
-  #no need to check if drive is >8GB, because it was already done earlier
 fi
 }
 

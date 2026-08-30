@@ -1,4 +1,4 @@
-name: ShellCheck
+name: ShellCheck and Tests
 
 on:
   push:
@@ -6,11 +6,13 @@ on:
       - "**.sh"
       - "terminal-run"
       - ".github/workflows/shellcheck.yml"
+      - "README.md"
   pull_request:
     paths:
       - "**.sh"
       - "terminal-run"
       - ".github/workflows/shellcheck.yml"
+      - "README.md"
   workflow_dispatch:
 
 jobs:
@@ -26,8 +28,19 @@ jobs:
 
       # Errors fail the build. The scripts are clean at this level today.
       - name: Check for errors
-        run: shellcheck --severity=error install-wor.sh install-wor-gui.sh terminal-run
+        run: shellcheck --severity=error install-wor.sh install-wor-gui.sh terminal-run tests/*.sh
 
       - name: Report warnings
         continue-on-error: true
-        run: shellcheck --severity=warning install-wor.sh install-wor-gui.sh terminal-run
+        run: shellcheck --severity=warning install-wor.sh install-wor-gui.sh terminal-run tests/*.sh
+
+  dry-run-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run one-model dry-run integration suite
+        env:
+          TEST_MODELS: "4"
+        run: ./tests/run-tests.sh

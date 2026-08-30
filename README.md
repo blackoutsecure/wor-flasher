@@ -281,7 +281,7 @@ chmod +x install-wor.sh
 ```
 
 > [!IMPORTANT]
-> This only works for the terminal interface. **`install-wor-gui.sh` cannot be downloaded on its own** - it needs `install-wor.sh`, `terminal-run`, `config_txt_tips` and several images beside it, and exits with _"No script found named install-wor.sh"_ if they are missing. Use `git clone` for the graphical interface.
+> This only works for the terminal interface. **`install-wor-gui.sh` cannot be downloaded on its own** - it needs `install-wor.sh`, `terminal-run` and several images beside it, and exits with _"No script found named install-wor.sh"_ if they are missing. Use `git clone` for the graphical interface.
 >
 > **Do not pipe either script into bash.** `curl ... | bash` fails, because the script needs to know its own directory and exits with _"Failed to determine the directory that contains this script"_. It also means nobody reads the code before it runs `parted`, `mkfs` and `dd` on a drive.
 
@@ -438,6 +438,31 @@ Setting `BID`, `WIN_LANG`, `RPI_MODEL`, `DEVICE` or `CAN_INSTALL_ON_SAME_DRIVE` 
 | `USE_CACHE`                 | `0`                   | Controls reuse of downloaded components. `0` deletes them and downloads again every run, `1` reuses them only while they are still the newest version, `2` reuses them without checking for updates                             |
 | `DRY_RUN`                   | unset                 | Set to `1` to run the whole setup but exit after downloading, without flashing                                                                                                                                                  |
 | `SKIP_PACKAGE_INSTALL`      | `0`                   | Internal test-runner override. Set to `1` only after dependencies have already been installed by the test container                                                                                                             |
+
+### Customizing config.txt
+
+`CONFIG_TXT` replaces the UEFI `config.txt` on the resulting drive. The GUI starts with a model-specific default, including the settings needed for UEFI and serial diagnostics. Keep those settings unless you know why they need to change. Refer to the official [Raspberry Pi config.txt documentation](https://www.raspberrypi.com/documentation/computers/config_txt.html) for supported options.
+
+An unstable overclock can prevent the Pi from booting. Power it off, put the drive back in a Linux host, then reduce or remove the overclock entries from its `config.txt`. The GPU is not used by Windows on Raspberry Pi, so GPU overclocking has no meaningful benefit.
+
+These Pi 4 examples are starting points, not guarantees. Board cooling, power supply quality, and silicon variation determine the stable limit. Add only the lines from one example below to the generated Pi 4 configuration.
+
+```ini
+# Conservative Pi 4 overclock: 2.147 GHz CPU
+over_voltage=6
+arm_freq=2147
+gpu_freq=300
+```
+
+```ini
+# Higher Pi 4 overclock: 2.3 GHz CPU
+arm_freq=2300
+gpu_freq=300
+over_voltage=14
+force_turbo=1
+```
+
+Do not treat extreme settings as a general recommendation. Start conservatively, test for stability, and ensure adequate cooling before raising voltage or frequency.
 
 #### Advanced tuning variables
 
@@ -679,7 +704,7 @@ CAN_INSTALL_ON_SAME_DRIVE=1
 This repository is looking for a maintainer, so contributions are genuinely welcome.
 
 > [!IMPORTANT]
-> `install-wor.sh` updates itself on every run. Before it does, it runs `git restore .`, which **discards uncommitted changes to tracked files**. Disable this while you work by setting `NO_UPDATE=1`:
+> `install-wor.sh` updates itself on every run when its checkout is clean. It skips the update when tracked files have uncommitted changes, so your work is preserved. Set `NO_UPDATE=1` to disable update checks while you work:
 >
 > ```bash
 > NO_UPDATE=1 ~/wor-flasher/install-wor.sh
@@ -691,6 +716,7 @@ Useful when testing changes:
 | ------------------------------------ | ----------------------------------------------------------------------------------------------- |
 | `./tests/run-tests.sh`               | Run the automated suite; on non-Linux hosts it uses Docker for Linux integration when available |
 | `./tests/run-linux-integration.sh`   | Run only the privileged Ubuntu-container integration path, useful for debugging Docker setup    |
+| `./tests/run-tests-gui.sh`           | Run the GUI walkthrough test with Linux/display/yad preflight                                   |
 | `./tests/run-tests.sh --walkthrough` | Create fake drives, then step through the terminal interface by hand                            |
 | `./tests/run-tests.sh --gui`         | Same, but launch the graphical interface                                                        |
 | `./tests/run-tests.sh --full`        | Include the real multi-gigabyte Windows image download                                          |
@@ -701,7 +727,9 @@ Useful when testing changes:
 | `USE_CACHE=1 ...`                    | Reuse downloaded components so iterations are fast                                              |
 | `DEBUG=1 ./terminal-run ...`         | Print which terminal emulator was selected                                                      |
 
-The harness needs Linux loop devices and passwordless `sudo` for the integration tests. On Linux, `./tests/run-tests.sh` creates loopback drives directly. On non-Linux hosts, the same command tries Docker and runs the integration suite inside a privileged Ubuntu container; if Docker is missing or unavailable, it reports a skip instead of failing. The container uses `/tmp/wor-flasher-test-workspace`, so loop devices, downloads and caches disappear with the container unless you explicitly pass `--keep` to the inner harness. The harness detects the newest bootable build for each model from the catalog, so no build number is hardcoded.
+The harness needs Linux loop devices and passwordless `sudo` for the integration tests. On Linux, `./tests/run-tests.sh` creates loopback drives directly. On non-Linux hosts, the same command tries Docker and runs the integration suite inside a privileged Ubuntu container; if Docker is missing or unavailable, it reports a skip instead of failing. The container uses `/tmp/wor-flasher-test-workspace`, so loop devices, downloads and caches disappear with the container unless you explicitly pass `--keep` to the inner harness. The GUI walkthrough has its own wrapper, `./tests/run-tests-gui.sh`, which skips cleanly without a Linux desktop display and `yad`. The harness detects the newest bootable build for each model from the catalog, so no build number is hardcoded.
+
+GitHub Actions runs ShellCheck on every shell entrypoint and a focused Ubuntu dry-run integration job with `TEST_MODELS=4`. That keeps pull requests covered without downloading the full Windows image or exercising every Raspberry Pi firmware package on every push.
 
 Both installer scripts are plain Bash with no build step. `install-wor-gui.sh` sources `install-wor.sh` for its functions, so shared installer logic belongs in the latter. Test entrypoints share reporting helpers through `tests/test-lib.sh`.
 
