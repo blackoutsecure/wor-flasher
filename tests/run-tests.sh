@@ -20,10 +20,9 @@ source "$TEST_SCRIPT_DIR/test-lib.sh"
 
 REPO_DIR="$(script_dir "$TEST_SCRIPT_DIR/..")"
 
-#install-wor.sh runs 'git restore .' before self-updating, which would discard local edits.
-#Exporting this here covers every invocation below, including the sourced library functions.
-#The "Self-updater" test further down deliberately overrides this to exercise the real thing,
-#but only against a disposable clone, never against this working tree.
+#Source-checkout updates are opt-in. Export this explicitly for every invocation below,
+#including sourced library functions. The self-updater test further down deliberately opts in
+#against a disposable clone, never against this working tree.
 export NO_UPDATE=1
 
 #Everything this script creates lives here. It is listed in .gitignore.
@@ -93,6 +92,16 @@ static_checks() {
   else
     pass "deprecated updater sentinel file hook is not referenced"
   fi
+
+  grep -qF 'register_mount_cleanup "$PWD/isomount"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'register_mount_cleanup "$mntpnt/bootpart"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'register_mount_cleanup "$mntpnt/winpart"' "$REPO_DIR/install-wor.sh" \
+    && pass "all temporary mounts use the shared cleanup handler" \
+    || fail "a temporary mount bypasses the shared cleanup handler"
+
+  grep -qF 'sources/install.esd' "$REPO_DIR/install-wor.sh" \
+    && pass "ISO import accepts install.esd media" \
+    || fail "ISO import does not accept install.esd media"
 }
 
 make_disk() { #Input: size, name. Output: loop device path

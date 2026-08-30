@@ -3,6 +3,20 @@
 #Written by Botspot
 #This script is an automation for the tutorial that can be found here: https://worproject.com/guides/how-to-install/from-other-os
 
+CLEANUP_MOUNTS=()
+
+cleanup_mounts() {
+  local mountpoint
+  for mountpoint in "${CLEANUP_MOUNTS[@]}" ;do
+    sudo umount -q "$mountpoint" 2>/dev/null
+  done
+}
+
+register_mount_cleanup() { #Input: mountpoint
+  CLEANUP_MOUNTS+=("$1")
+  trap cleanup_mounts EXIT
+}
+
 gui_error_dialog() { #Input: error message
   local plain
   plain="$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
@@ -629,8 +643,8 @@ IFS=$'\n'
 [ -z "$UPDATE_REPO_URL" ] && UPDATE_REPO_URL='https://github.com/Botspot/wor-flasher'
 [ -z "$UPDATE_REF" ] && UPDATE_REF='HEAD' #the branch/ref on UPDATE_REPO_URL to compare against, e.g. HEAD or refs/heads/main
 
-#Set to 1 to skip the self-updater below, e.g. NO_UPDATE=1 ./install-wor.sh
-[ -z "$NO_UPDATE" ] && NO_UPDATE=0
+#Set NO_UPDATE=0 to opt in to source-checkout updates. Packaged releases should use signed release updates instead.
+[ -z "$NO_UPDATE" ] && NO_UPDATE=1
 
 { #check for updates and auto-update unless disabled via NO_UPDATE
 if [ -e "$DIRECTORY" ] && [ "$NO_UPDATE" != 1 ] && command -v git >/dev/null && git -C "$DIRECTORY" rev-parse --git-dir >/dev/null 2>&1 ;then
@@ -1245,7 +1259,7 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
     fi
   fi
   #unmount on exit
-  trap "sudo umount -q '$PWD/isomount' 2>/dev/null" EXIT
+  register_mount_cleanup "$PWD/isomount"
 
   mkdir -p "$PWD"/bootpart
   status "Copying files from ISO file to $PWD:"
@@ -1256,8 +1270,15 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
   mkdir -p "$PWD"/bootpart/sources || error "Failed to make folder: $PWD/bootpart/sources"
   echo "  - boot.wim"
   cp "$PWD/isomount/sources/boot.wim" "$PWD"/bootpart/sources || error "Failed to copy $PWD/isomount/sources/boot.wim to $PWD/bootpart/sources"
-  echo "  - install.wim"
-  cp "$PWD/isomount/sources/install.wim" "$PWD" || error "Failed to copy $PWD/isomount/sources/install.wim to $PWD/winpart"
+  if [ -f "$PWD/isomount/sources/install.wim" ];then
+    install_image="$PWD/isomount/sources/install.wim"
+  elif [ -f "$PWD/isomount/sources/install.esd" ];then
+    install_image="$PWD/isomount/sources/install.esd"
+  else
+    error "The ISO file does not contain sources/install.wim or sources/install.esd. Use an official Windows ARM64 ISO."
+  fi
+  echo "  - $(basename "$install_image")"
+  cp "$install_image" "$PWD/install.wim" || error "Failed to copy $install_image to $PWD/install.wim"
 
   touch "$PWD/alldone" #mark this folder of microsoft stuff as complete
 
@@ -1337,8 +1358,8 @@ if [ $? != 0 ];then
   fi
 fi
 #unmount device partitions on exit
-trap "sudo umount -q '$mntpnt/bootpart' 2>/dev/null" EXIT
-trap "sudo umount -q '$mntpnt/winpart' 2>/dev/null" EXIT
+register_mount_cleanup "$mntpnt/bootpart"
+register_mount_cleanup "$mntpnt/winpart"
 
 status "Copying files to $DEVICE:"
 echo "  - Startup environment"

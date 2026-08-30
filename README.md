@@ -285,7 +285,9 @@ chmod +x install-wor.sh
 >
 > **Do not pipe either script into bash.** `curl ... | bash` fails, because the script needs to know its own directory and exits with _"Failed to determine the directory that contains this script"_. It also means nobody reads the code before it runs `parted`, `mkfs` and `dd` on a drive.
 
-The script normally keeps itself up to date with `git pull`. A single-file copy has no git repository, so that step is skipped silently and you are responsible for re-downloading it.
+When importing an ISO, use an official Windows ARM64 image. The script accepts media containing either `sources/install.wim` or `sources/install.esd`; customized Windows images are not supported.
+
+Automatic source-checkout updates are disabled by default so a run always uses the revision you reviewed. To opt in for a clean Git checkout, run it with `NO_UPDATE=0`; otherwise update deliberately with `git pull`. A single-file copy has no Git repository, so re-download it when you want a newer version.
 
 ### Graphical interface
 
@@ -704,10 +706,10 @@ CAN_INSTALL_ON_SAME_DRIVE=1
 This repository is looking for a maintainer, so contributions are genuinely welcome.
 
 > [!IMPORTANT]
-> `install-wor.sh` updates itself on every run when its checkout is clean. It skips the update when tracked files have uncommitted changes, so your work is preserved. Set `NO_UPDATE=1` to disable update checks while you work:
+> `install-wor.sh` does not update its source checkout automatically. For a clean Git checkout only, you can opt in to the updater with `NO_UPDATE=0`; it skips the update when tracked files have uncommitted changes:
 >
 > ```bash
-> NO_UPDATE=1 ~/wor-flasher/install-wor.sh
+> NO_UPDATE=0 ~/wor-flasher/install-wor.sh
 > ```
 
 Useful when testing changes:
