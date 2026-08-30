@@ -255,6 +255,7 @@ if [ -z "$DEVICE" ];then
     IFS=$'\n'
     DEV_LIST=''
     for device in $(lsblk -I 8,179,259 -dno PATH | grep -v loop | grep -vx "$ROOT_DEV") ;do
+      [ "$(get_size_raw "$device")" -le 0 ] && continue
       DEV_LIST="FALSE
 ${device}
 <b>${device}</b>
