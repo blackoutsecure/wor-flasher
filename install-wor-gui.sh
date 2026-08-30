@@ -625,13 +625,18 @@ echo -e "CONFIG_TXT: ⤵\n$(echo "$CONFIG_TXT" | sed 's/^/  > /g')\nCONFIG_TXT: 
 
 echo "Launching install-wor.sh in a separate terminal"
 
-#the terminal inherits these, so they never have to be interpolated into the command string
-export DIRECTORY cli_script
-export DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE
+#Terminals like lxterminal and gnome-terminal reuse an existing process, so an exported
+#environment does not reach the new window. Write the values to a file instead and source
+#it there. declare -p quotes everything correctly, so no value can break out of the string.
+export DIRECTORY cli_script DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE
 export RUN_MODE=gui
+env_file="$(mktemp)" || error "Failed to create a temporary file"
+trap 'rm -f "$env_file"' EXIT
+declare -p DIRECTORY cli_script DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE RUN_MODE > "$env_file"
 
 #run the install-wor.sh script in a terminal. If it succeeds, the "Next steps" window opens. If it fails, the terminal stays open forever until you close it.
-"$DIRECTORY/terminal-run" '
+"$DIRECTORY/terminal-run" 'source "'"$env_file"'"
+rm -f "'"$env_file"'"
 "$cli_script"
 exitcode=$?
 
