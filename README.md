@@ -437,6 +437,7 @@ Setting `BID`, `WIN_LANG`, `RPI_MODEL`, `DEVICE` or `CAN_INSTALL_ON_SAME_DRIVE` 
 | `RUN_MODE`                  | `cli`                 | Set to `gui` to display graphical error messages                                                                                                                                                                                |
 | `USE_CACHE`                 | `0`                   | Controls reuse of downloaded components. `0` deletes them and downloads again every run, `1` reuses them only while they are still the newest version, `2` reuses them without checking for updates                             |
 | `DRY_RUN`                   | unset                 | Set to `1` to run the whole setup but exit after downloading, without flashing                                                                                                                                                  |
+| `SKIP_PACKAGE_INSTALL`      | `0`                   | Internal test-runner override. Set to `1` only after dependencies have already been installed by the test container                                                                                                             |
 
 #### Advanced tuning variables
 
@@ -686,19 +687,20 @@ This repository is looking for a maintainer, so contributions are genuinely welc
 
 Useful when testing changes:
 
-| Command                              | Purpose                                                                          |
-| ------------------------------------ | -------------------------------------------------------------------------------- |
-| `./tests/run-tests.sh`               | Run the automated suite against loopback drives, so nothing touches real storage |
-| `./tests/run-tests.sh --walkthrough` | Create fake drives, then step through the terminal interface by hand             |
-| `./tests/run-tests.sh --gui`         | Same, but launch the graphical interface                                         |
-| `./tests/run-tests.sh --full`        | Include the real multi-gigabyte Windows image download                           |
-| `./tests/run-tests.sh --clean`       | Remove the test workspace and detach its loop devices                            |
-| `bash -n install-wor.sh`             | Check syntax without running anything                                            |
-| `DRY_RUN=1 ...`                      | Run the whole flow but stop before touching the drive                            |
-| `USE_CACHE=1 ...`                    | Reuse downloaded components so iterations are fast                               |
-| `DEBUG=1 ./terminal-run ...`         | Print which terminal emulator was selected                                       |
+| Command                              | Purpose                                                                                         |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `./tests/run-tests.sh`               | Run the automated suite; on non-Linux hosts it uses Docker for Linux integration when available |
+| `./tests/run-linux-integration.sh`   | Run only the privileged Ubuntu-container integration path, useful for debugging Docker setup    |
+| `./tests/run-tests.sh --walkthrough` | Create fake drives, then step through the terminal interface by hand                            |
+| `./tests/run-tests.sh --gui`         | Same, but launch the graphical interface                                                        |
+| `./tests/run-tests.sh --full`        | Include the real multi-gigabyte Windows image download                                          |
+| `./tests/run-tests.sh --clean`       | Remove the test workspace and detach its loop devices                                           |
+| `bash -n install-wor.sh`             | Check syntax without running anything                                                           |
+| `DRY_RUN=1 ...`                      | Run the whole flow but stop before touching the drive                                           |
+| `USE_CACHE=1 ...`                    | Reuse downloaded components so iterations are fast                                              |
+| `DEBUG=1 ./terminal-run ...`         | Print which terminal emulator was selected                                                      |
 
-The harness needs Linux loop devices and passwordless `sudo` for the integration tests. On non-Linux hosts it still runs static checks, then skips the loop-device suite. It detects the newest bootable build for each model from the catalog, so no build number is hardcoded, and it writes everything to `.test-workspace/`, which git ignores and which is removed afterwards unless you pass `--keep`.
+The harness needs Linux loop devices and passwordless `sudo` for the integration tests. On Linux, `./tests/run-tests.sh` creates loopback drives directly. On non-Linux hosts, the same command tries Docker and runs the integration suite inside a privileged Ubuntu container; if Docker is missing or unavailable, it reports a skip instead of failing. The container uses `/tmp/wor-flasher-test-workspace`, so loop devices, downloads and caches disappear with the container unless you explicitly pass `--keep` to the inner harness. The harness detects the newest bootable build for each model from the catalog, so no build number is hardcoded.
 
 Both scripts are plain Bash with no build step. `install-wor-gui.sh` sources `install-wor.sh` for its functions, so shared logic belongs in the latter.
 

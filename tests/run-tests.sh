@@ -4,7 +4,7 @@
 #so nothing can be written to physical storage. Every run is a fresh download.
 #
 #Usage:
-#  ./tests/run-tests.sh               run the automated suite
+#  ./tests/run-tests.sh               run the automated suite; uses Docker for Linux integration on non-Linux hosts when available
 #  ./tests/run-tests.sh --walkthrough create fake drives, then run the CLI interactively
 #  ./tests/run-tests.sh --gui         create fake drives, then launch the GUI (needs a display)
 #  ./tests/run-tests.sh --full        also download the real Windows image (several GB)
@@ -150,21 +150,57 @@ seed_winfiles() { #Input: build id. Makes install-wor.sh skip the multi-gigabyte
 }
 
 run_flasher() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
-  LAST_OUT="$(env DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
+  LAST_OUT="$(env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
   LAST_CODE=$?
 }
 
 run_flasher_with_input() { #Input: stdin text, then VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
   local input="$1"
   shift
-  LAST_OUT="$(printf '%b' "$input" | env DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
+  LAST_OUT="$(printf '%b' "$input" | env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
   LAST_CODE=$?
 }
 
-expect_ok()   { [ "$LAST_CODE" == 0 ] && pass "$1" || fail "$1 (exit $LAST_CODE)"; }
-expect_fail() { [ "$LAST_CODE" != 0 ] && pass "$1" || fail "$1 (unexpectedly succeeded)"; }
-expect_output()    { grep -qF "$2" <<<"$LAST_OUT" && pass "$1" || fail "$1 (did not find: $2)"; }
-expect_no_output() { grep -qF "$2" <<<"$LAST_OUT" && fail "$1 (unexpectedly found: $2)" || pass "$1"; }
+show_last_out() {
+  printf '    last output:\n' 1>&2
+  sed 's/^/      /' <<<"$LAST_OUT" | tail -n 40 1>&2
+}
+
+expect_ok() {
+  if [ "$LAST_CODE" == 0 ];then
+    pass "$1"
+  else
+    fail "$1 (exit $LAST_CODE)"
+    show_last_out
+  fi
+}
+
+expect_fail() {
+  if [ "$LAST_CODE" != 0 ];then
+    pass "$1"
+  else
+    fail "$1 (unexpectedly succeeded)"
+    show_last_out
+  fi
+}
+
+expect_output() {
+  if grep -qF "$2" <<<"$LAST_OUT" ;then
+    pass "$1"
+  else
+    fail "$1 (did not find: $2)"
+    show_last_out
+  fi
+}
+
+expect_no_output() {
+  if grep -qF "$2" <<<"$LAST_OUT" ;then
+    fail "$1 (unexpectedly found: $2)"
+    show_last_out
+  else
+    pass "$1"
+  fi
+}
 
 ######## Argument parsing
 
@@ -190,7 +226,16 @@ fi
 static_checks
 
 if [ "$(uname -s)" != Linux ];then
-  skip "integration tests require Linux loop devices"
+  if [ "$MODE" == suite ] && [ -z "${WOR_FLASHER_CONTAINER_TEST:-}" ] && [ -x "$REPO_DIR/tests/run-linux-integration.sh" ];then
+    if command -v docker >/dev/null && docker info >/dev/null 2>&1 ;then
+      info "== Linux integration via Docker =="
+      "$REPO_DIR/tests/run-linux-integration.sh" "$@"
+      exit $?
+    fi
+    skip "integration tests require Linux loop devices; Docker is unavailable"
+  else
+    skip "integration tests require Linux loop devices"
+  fi
   summary
 fi
 
@@ -358,6 +403,8 @@ fi
 info "== Self-updater =="
 if ! command -v git >/dev/null || ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
   skip "self-updater tests need a git checkout"
+elif ! git -C "$REPO_DIR" diff --quiet || ! git -C "$REPO_DIR" diff --cached --quiet ;then
+  skip "self-updater tests need a clean working tree"
 else
   branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
   if [ "$branch" == HEAD ];then
@@ -370,7 +417,7 @@ else
       fail "could not clone $REPO_DIR (branch $branch) to test the self-updater"
     else
       #point the clone's self-updater at this same repo/branch, so it dynamically pulls whatever is actually being worked on
-      update_env=(UPDATE_REPO_URL="$REPO_DIR" UPDATE_REF="$branch" NO_UPDATE=0 DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2)
+      update_env=(UPDATE_REPO_URL="$REPO_DIR" UPDATE_REF="$branch" NO_UPDATE=0 ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2)
 
       LAST_OUT="$(env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
       LAST_CODE=$?

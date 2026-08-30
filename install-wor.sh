@@ -541,16 +541,19 @@ If this error persists, contact Botspot - the WoR-flasher developer."
   fi
 
   #install dependencies
-  install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc parted dosfstools unzip git' || exit 1
+  if [ "$SKIP_PACKAGE_INSTALL" != 1 ];then
+    install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc parted dosfstools unzip git' || exit 1
 
-  #install exfat partition manipulation utility. exfatprogs replaces exfat-utils, but they cannot both be installed at once.
-  if package_available exfatprogs && ! package_installed exfat-utils ;then
-    install_packages exfatprogs || exit 1
-  else
-    install_packages exfat-utils || exit 1
+    #install exfat partition manipulation utility. exfatprogs replaces exfat-utils, but they cannot both be installed at once.
+    if package_available exfatprogs && ! package_installed exfat-utils ;then
+      install_packages exfatprogs || exit 1
+    else
+      install_packages exfat-utils || exit 1
+    fi
   fi
 
   [ -z "$ROOT_DEV" ] && detect_root_dev
+  return 0
 }
 
 #
