@@ -4,6 +4,9 @@ cache/
 # Disables the self-updater while developing. See Contributing in README.md
 no-update
 
+# Working directory for tests/run-tests.sh: loopback disk images and downloads
+.test-workspace/
+
 # Downloaded components, if DL_DIR is pointed inside the repo
 peinstaller/
 driverpackage/

@@ -36,6 +36,7 @@ Now, using the new WoR-flasher, it's a _piece of cake_.
   - [Choosing a drive](#choosing-a-drive)
   - [Install from Pi-Apps](#install-from-pi-apps)
   - [Install manually](#install-manually)
+  - [Download a single script](#download-a-single-script)
   - [Graphical interface](#graphical-interface)
   - [Terminal interface](#terminal-interface)
 - [Troubleshooting](#troubleshooting)
@@ -82,9 +83,24 @@ Now, using the new WoR-flasher, it's a _piece of cake_.
 
 ## Requirements
 
-- A Debian-based Linux machine, ARM or x86, to run the flasher. Only Raspberry Pi OS has been tested.
-- A storage device of at least 8 GB. See [Choosing a drive](#choosing-a-drive) for the size tiers.
-- A Raspberry Pi 2 v1.2, 3, 4, 400, or 5 to run Windows on.
+WoR-flasher runs on a Linux machine and flashes a drive that you then move to a Raspberry Pi. The table below is about the **computer running the flasher**, not the Pi.
+
+| Host operating system | Supported | Notes |
+| --- | --- | --- |
+| Raspberry Pi OS (32 or 64-bit) | Yes | The only system upstream tests against |
+| Debian, Ubuntu, Linux Mint and other Debian-based distros | Yes | ARM or x86_64 |
+| Fedora, Arch, openSUSE and other non-Debian Linux | No | Dependencies are installed with `apt`, and installed packages are detected by reading the dpkg database |
+| macOS | No | Requires `lsblk`, `parted` and the Linux `/dev` layout |
+| Windows | No | Same reason |
+| Windows with WSL2 | Untested | WSL2 does not expose removable drives by default, so assume it does not work |
+
+You also need:
+
+- **`sudo` access**, for partitioning and mounting the target drive
+- **About 10 GB of free space** in the download directory, for the Windows image and the files extracted from it
+- **A target drive of at least 8 GB.** See [Choosing a drive](#choosing-a-drive)
+- **A desktop session** if you want the graphical interface, since it needs `yad` and a terminal emulator. The terminal interface works over SSH
+- **A Raspberry Pi 2 v1.2, 3, 4, 400, or 5** to run Windows on
 
 > [!WARNING]
 > Flashing erases the target drive completely. Botspot (the developer of this tool) cannot be held responsible for data loss.
@@ -240,6 +256,24 @@ git clone https://github.com/Botspot/wor-flasher
 
 This will download the scripts to a new directory named `wor-flasher`.  
 **Dependencies:** No need to install packages manually. Running the script will automatically install these: `yad` `aria2` `cabextract` `wimtools` `chntpw` `genisoimage` `exfat-fuse` `exfat-utils` `wget` `udftools` `bc`
+
+### Download a single script
+
+`install-wor.sh` is self-contained, so you can fetch just that file and run it:
+
+```bash
+mkdir -p ~/wor-flasher && cd ~/wor-flasher
+wget https://raw.githubusercontent.com/Botspot/wor-flasher/main/install-wor.sh
+chmod +x install-wor.sh
+./install-wor.sh
+```
+
+> [!IMPORTANT]
+> This only works for the terminal interface. **`install-wor-gui.sh` cannot be downloaded on its own** - it needs `install-wor.sh`, `terminal-run`, `config_txt_tips` and several images beside it, and exits with *"No script found named install-wor.sh"* if they are missing. Use `git clone` for the graphical interface.
+>
+> **Do not pipe either script into bash.** `curl ... | bash` fails, because the script needs to know its own directory and exits with *"Failed to determine the directory that contains this script"*. It also means nobody reads the code before it runs `parted`, `mkfs` and `dd` on a drive.
+
+The script normally keeps itself up to date with `git pull`. A single-file copy has no git repository, so that step is skipped silently and you are responsible for re-downloading it.
 
 ### Graphical interface
 
