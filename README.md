@@ -695,6 +695,7 @@ Useful when testing changes:
 | `./tests/run-tests.sh --gui`         | Same, but launch the graphical interface                                                        |
 | `./tests/run-tests.sh --full`        | Include the real multi-gigabyte Windows image download                                          |
 | `./tests/run-tests.sh --clean`       | Remove the test workspace and detach its loop devices                                           |
+| `tests/test-lib.sh`                  | Shared test output helpers used by the test entrypoints                                         |
 | `bash -n install-wor.sh`             | Check syntax without running anything                                                           |
 | `DRY_RUN=1 ...`                      | Run the whole flow but stop before touching the drive                                           |
 | `USE_CACHE=1 ...`                    | Reuse downloaded components so iterations are fast                                              |
@@ -702,7 +703,7 @@ Useful when testing changes:
 
 The harness needs Linux loop devices and passwordless `sudo` for the integration tests. On Linux, `./tests/run-tests.sh` creates loopback drives directly. On non-Linux hosts, the same command tries Docker and runs the integration suite inside a privileged Ubuntu container; if Docker is missing or unavailable, it reports a skip instead of failing. The container uses `/tmp/wor-flasher-test-workspace`, so loop devices, downloads and caches disappear with the container unless you explicitly pass `--keep` to the inner harness. The harness detects the newest bootable build for each model from the catalog, so no build number is hardcoded.
 
-Both scripts are plain Bash with no build step. `install-wor-gui.sh` sources `install-wor.sh` for its functions, so shared logic belongs in the latter.
+Both installer scripts are plain Bash with no build step. `install-wor-gui.sh` sources `install-wor.sh` for its functions, so shared installer logic belongs in the latter. Test entrypoints share reporting helpers through `tests/test-lib.sh`.
 
 ## Is this legal?
 

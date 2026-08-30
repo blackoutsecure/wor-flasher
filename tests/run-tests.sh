@@ -13,15 +13,11 @@
 
 ######## Defaults. Every one can be overridden from the environment.
 
-script_dir() {
-  if command -v realpath >/dev/null ;then
-    realpath "$1"
-  else
-    (cd "$1" && pwd -P)
-  fi
-}
+TEST_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+#shellcheck disable=SC1091
+source "$TEST_SCRIPT_DIR/test-lib.sh"
 
-REPO_DIR="$(script_dir "$(dirname "$0")/..")"
+REPO_DIR="$(script_dir "$TEST_SCRIPT_DIR/..")"
 
 #install-wor.sh runs 'git restore .' before self-updating, which would discard local edits.
 #Exporting this here covers every invocation below, including the sourced library functions.
@@ -47,21 +43,12 @@ export NO_UPDATE=1
 
 ######## End of defaults
 
-PASSED=0
-FAILED=0
-SKIPPED=0
 LOOP_DEVICES=()
 LAST_OUT=''
 LAST_CODE=0
 KEEP=0
 MODE=suite
 SKIP_ESD=1
-
-pass() { printf '  \e[92mPASS\e[0m  %s\n' "$1"; PASSED=$((PASSED+1)); }
-fail() { printf '  \e[91mFAIL\e[0m  %s\n' "$1"; FAILED=$((FAILED+1)); }
-skip() { printf '  \e[93mSKIP\e[0m  %s\n' "$1"; SKIPPED=$((SKIPPED+1)); }
-info() { printf '\e[96m%s\e[0m\n' "$1"; }
-die()  { printf '\e[91m%s\e[0m\n' "$1" 1>&2; exit 1; }
 
 detach_all() {
   command -v losetup >/dev/null || return 0
@@ -105,13 +92,6 @@ static_checks() {
   else
     pass "deprecated updater sentinel file hook is not referenced"
   fi
-}
-
-summary() {
-  echo
-  printf 'passed %s, failed %s, skipped %s\n' "$PASSED" "$FAILED" "$SKIPPED"
-  [ "$FAILED" -gt 0 ] && exit 1
-  exit 0
 }
 
 make_disk() { #Input: size, name. Output: loop device path

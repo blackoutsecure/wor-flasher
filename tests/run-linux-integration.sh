@@ -5,35 +5,15 @@
 
 set -euo pipefail
 
-script_dir() {
-  if command -v realpath >/dev/null ;then
-    realpath "$1"
-  else
-    (cd "$1" && pwd -P)
-  fi
-}
+TEST_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+#shellcheck disable=SC1091
+source "$TEST_SCRIPT_DIR/test-lib.sh"
 
-REPO_DIR="$(script_dir "$(dirname "$0")/..")"
+REPO_DIR="$(script_dir "$TEST_SCRIPT_DIR/..")"
 IMAGE="${LINUX_TEST_IMAGE:-ubuntu:24.04}"
 TEST_UID="${LINUX_TEST_UID:-$(id -u)}"
 TEST_GID="${LINUX_TEST_GID:-$(id -g)}"
 CONTAINER_TEST_DIR="${LINUX_TEST_DIR:-/tmp/wor-flasher-test-workspace}"
-
-PASSED=0
-FAILED=0
-SKIPPED=0
-
-pass() { printf '  \e[92mPASS\e[0m  %s\n' "$1"; PASSED=$((PASSED+1)); }
-fail() { printf '  \e[91mFAIL\e[0m  %s\n' "$1"; FAILED=$((FAILED+1)); }
-skip() { printf '  \e[93mSKIP\e[0m  %s\n' "$1"; SKIPPED=$((SKIPPED+1)); }
-info() { printf '\e[96m%s\e[0m\n' "$1"; }
-
-summary() {
-  echo
-  printf 'passed %s, failed %s, skipped %s\n' "$PASSED" "$FAILED" "$SKIPPED"
-  [ "$FAILED" -gt 0 ] && exit 1
-  exit 0
-}
 
 info "== Docker preflight =="
 
