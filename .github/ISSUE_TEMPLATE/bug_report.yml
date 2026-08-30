@@ -1,0 +1,103 @@
+name: Bug report
+description: WoR-flasher failed, or Windows will not boot on your Raspberry Pi
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report.
+
+        Please check these first, since they cover the most common problems:
+
+        - [The ARMv8.1 limitation](https://github.com/Botspot/wor-flasher#the-armv81-limitation) - Windows 11 builds newer than 25163 cannot boot on a Pi 3 or Pi 4
+        - [Troubleshooting](https://github.com/Botspot/wor-flasher#troubleshooting) - rainbow screen, freezing at the UEFI splash, dead keyboard
+        - [Driver support](https://github.com/Botspot/wor-flasher#supported-devices) - Wi-Fi and GPU acceleration do not work on any model
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where does it fail?
+      options:
+        - WoR-flasher exits with an error before finishing
+        - Rainbow screen, the Pi never reaches the UEFI splash
+        - UEFI splash appears, then it freezes
+        - Windows setup starts but fails
+        - Windows is installed, but something does not work
+    validations:
+      required: true
+
+  - type: dropdown
+    id: model
+    attributes:
+      label: Raspberry Pi model
+      options:
+        - Pi 4
+        - Pi 400
+        - Pi 5
+        - Pi 3 B
+        - Pi 3 B+
+        - Pi 2 v1.2
+        - Compute Module
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: build
+    attributes:
+      label: Windows build number
+      description: Printed as `BID:` in the flash output, or shown in the `winfiles_*` folder name inside your download directory.
+      placeholder: "22631.2861"
+    validations:
+      required: true
+
+  - type: input
+    id: uefi
+    attributes:
+      label: UEFI firmware version
+      description: Printed as `Downloading Pi4 UEFI firmware:` in the flash output. Say "unknown" if the flash did not get that far.
+      placeholder: "v1.52"
+    validations:
+      required: true
+
+  - type: input
+    id: host
+    attributes:
+      label: Linux system running WoR-flasher
+      placeholder: "Raspberry Pi OS Bookworm on a Pi 4"
+    validations:
+      required: true
+
+  - type: input
+    id: drive
+    attributes:
+      label: Drive being flashed
+      description: Make, model and size. Slow SD cards are a common cause of failures.
+      placeholder: "SanDisk Extreme 64GB microSD, A2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, step by step, and what did you expect instead? Include enough detail that someone else could reproduce it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Terminal output
+      description: Paste the output of the script, especially any red error text. This is automatically formatted as code.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I am not using a Windows 11 build newer than 25163 on a Pi 3 or Pi 4
+          required: true
+        - label: I re-ran the flasher with `USE_CACHE=0` to rule out stale cached components
+          required: false

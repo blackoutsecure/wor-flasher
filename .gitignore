@@ -1,0 +1,18 @@
+# install-wor.sh creates this next to the scripts to cache worproject.com responses
+cache/
+
+# Disables the self-updater while developing. See Contributing in README.md
+no-update
+
+# Downloaded components, if DL_DIR is pointed inside the repo
+peinstaller/
+driverpackage/
+pi[345]-uefipackage/
+winfiles_*/
+*.zip
+*.esd
+*.wim
+
+# OS clutter
+.DS_Store
+Thumbs.db

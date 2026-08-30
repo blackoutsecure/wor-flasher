@@ -1,0 +1,13 @@
+# Shell scripts must keep LF endings; CRLF makes them fail with "bad interpreter"
+* text=auto eol=lf
+
+*.sh text eol=lf
+terminal-run text eol=lf
+config_txt_tips text eol=lf
+*.md text eol=lf
+
+# Binary assets
+*.png binary
+
+# Large generated SVGs produce unreadable diffs
+*.svg -diff

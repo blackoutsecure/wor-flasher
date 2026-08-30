@@ -13,7 +13,7 @@ loading_dialog() { #display a dialog to say something is loading
   (echo '# ' ; sleep infinity) | yad "${yadflags[@]}" --height=0 \
     --progress --pulsate --title="$1" --text="$1" --no-buttons &
   trap "kill $! 2>/dev/null" EXIT
-  
+
   sleep infinity
 }
 
@@ -66,29 +66,29 @@ if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
     --button='<b>Next</b>':0)"
   button=$?
   [ $button != 0 ] && exit 0
-  
+
   WINDOWS_VER="$(echo "$output" | sed -n 1p)"
   RPI_MODEL="$(echo "$output" | sed -n 2p | sed 's+Pi5+5+g' | sed 's+Pi4/Pi400+4+g' | sed 's+Pi3/Pi2_v1.2+3+g')"
-  
+
   case "$WINDOWS_VER" in
     'Windows 11' | 'Windows 10')
       loading_dialog "Finding best $WINDOWS_VER image version..." &
       loader_pid=$!
       trap "kill $loader_pid 2>/dev/null" EXIT
-      
+
       list_bids 10 >/dev/null #set $versions globally so it is not downloaded twice
       if [ "$WINDOWS_VER" == 'Windows 11' ];then
         BID="$(get_bid 11)" || exit 1
       elif [ "$WINDOWS_VER" == 'Windows 10' ];then
         BID="$(get_bid 10)" || exit 1
       fi
-      
+
       kill $loader_pid 2>/dev/null
       ;;
-      
+
     'More options')
       #display more options for OS choice to user: enter exact version, use ISO, use pre-extracted ISO
-      
+
       BID=''
       while [ -z "$BID" ];do
         reply="$(echo -e "FALSE\nChoose an exact Windows version to download\nenter exact
@@ -99,7 +99,7 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
           --button='<b>Next</b>':0)"
         button=$?
         [ $button != 0 ] && exit 0
-        
+
         case "$reply" in
           'enter exact')
             list_bids 10 >/dev/null #set $versions globally so it is not downloaded twice
@@ -111,7 +111,7 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
                 --button='<b>Next</b>':0)"
               button=$?
               [ $button != 0 ] && exit 0
-              
+
               #Isolate build number from selection
               BID="$(echo "$BID" | awk '{print $3}')"
             done
@@ -122,10 +122,10 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
               --file --file-filter "ISO disk images | *.ISO *.iso" \
               --text=$'<big><b>Import ISO file</b></big>\nMust be an ARM64 version of Windows from <a href="https://uupdump.net">uupdump.net</a>' \
               --button="<b>Cancel</b>":1 --button="<b>OK</b>":0)"
-            
+
             #verify ISO file
             if [ -z "$SOURCE_FILE" ];then
-              break #exit ISO file menu 
+              break #exit ISO file menu
             elif [ ! -f "$SOURCE_FILE" ];then
               yad "${yadflags[@]}" --text="This file does not exist. Check spelling and try again."
               SOURCE_FILE=''
@@ -162,35 +162,35 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
           'use cached')
             #Discover past extracted ISO files in this DL_DIR so user does not need to keep ISO
             #folders in DL_DIR named winfiles_from_iso_<BID>_<WIN_LANG>
-            while true;do 
+            while true;do
               list=''
               existing_winfiles="$(find "$DL_DIR" -maxdepth 2 -type f -name 'alldone' | grep -o "/winfiles_from_iso.*/\|/winfiles.*/" | tr -d / | sort -r -n)"
-              
+
               echo "$existing_winfiles"
-              
+
               for folder in $existing_winfiles ;do
                 BID="$(echo "$folder" | sed 's/^winfiles_from_iso_//g' | sed 's/^winfiles_//g' | awk -F_ '{print $1}')"
                 WIN_LANG="$(echo "$folder" | sed 's/^winfiles_from_iso_//g' | sed 's/^winfiles_//g' | awk -F_ '{print $2}')"
-                
+
                 list+="FALSE\n$(get_os_name "$BID") $WIN_LANG\n${folder}\n"
                 num_opts=$((num_opts+1))
               done
               unset BID WIN_LANG #Avoid leaving these variables set from the loop
-              
+
               folder="$(echo -ne "$list" | yad "${yadflags[@]}" --height=320 \
                 --list --radiolist --column=chk:CHK --column=human --column=script:HD --no-headers --print-column=3 --no-selection \
                 --text=$'<big><b>Choose cached version</b></big>\nIf the list is empty, please use the same working directory (DL_DIR) you used last time.\nDL_DIR: <b><u>'"$DL_DIR"'</u></b>' \
                 --button='<b>Change DL<u>  </u>DIR</b>':2 \
                 --button='<b>Next</b>':0)"
               button=$?
-              
+
               case $button in
                 0) #Next
                   if [ ! -z "$folder" ];then
                     #A cached version of windows (winfiles folder) was selected; infer BID and WIN_LANG from it
                     BID="$(echo "$folder" | sed 's/^winfiles_from_iso_//g' | sed 's/^winfiles_//g' | awk -F_ '{print $1}')"
                     WIN_LANG="$(echo "$folder" | sed 's/^winfiles_from_iso_//g' | sed 's/^winfiles_//g' | awk -F_ '{print $2}')"
-                    
+
                     #DL_DIR cannot be changed later on - it is being relied upon for winfiles
                     break
                   else
@@ -226,12 +226,12 @@ RPI_MODEL: $RPI_MODEL"
 
 { #choose language
 if [ -z "$WIN_LANG" ];then
-  
+
   #move 'en-*' languages to top of list, and of those put en-us at the very top and make it preselected
   LANG_LIST="$(list_langs | grep '^en-us'
 list_langs | grep '^en-*' | grep -v '^en-us'
 list_langs | grep -v '^en-')"
-  
+
   while true; do
     WIN_LANG="$(echo "$LANG_LIST" | sed 's/^/FALSE:/g' | tr ':' '\n' | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" \
       --list --radiolist --column=chk:CHK --column=short --column=long --no-headers --print-column=2 --no-selection \
@@ -239,7 +239,7 @@ list_langs | grep -v '^en-')"
       --button='<b>Next</b>':0)"
     button=$?
     [ $button != 0 ] && exit 1
-    
+
     if echo "$LANG_LIST" | grep -q "^$WIN_LANG": ;then
       #if selected language matches line in language list
       break
@@ -263,7 +263,7 @@ $(lsblk -dno SIZE "$device")B
 $(get_device_name "$device")
 $DEV_LIST"
     done
-    
+
     DEVICE="$(echo -n "$DEV_LIST" | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" --text='Choose device to flash:' --width=420 \
       --list --radiolist --no-selection --no-headers --column=chk:CHK --column=echoname:HD --column=name --column=size --column=pretty-name \
       --print-column=2 --tooltip-column=3 \
@@ -287,17 +287,18 @@ echo "DEVICE: $DEVICE"
 }
 
 { #choose if device is large enough to install windows on itself
-if [ "$(get_size_raw "$DEVICE")" -lt $((8*1024*1024*1024)) ];then
-  #matches the minimum enforced by install-wor.sh
-  error "Drive $DEVICE is smaller than 8GB and cannot be used."
-elif [ "$(get_size_raw "$DEVICE")" -lt $((25*1024*1024*1024)) ];then
-  #if less than 25gb
-  echo "Drive $DEVICE is too small to install windows on itself. Using recovery-disk mode to install Windows on other larger devices."
-  CAN_INSTALL_ON_SAME_DRIVE=0
-else
-  #larger than 25gb
-  CAN_INSTALL_ON_SAME_DRIVE=1
-fi
+case "$(drive_capability "$DEVICE")" in
+  too-small)
+    error "Drive $DEVICE is smaller than 8GB and cannot be used."
+    ;;
+  recovery)
+    echo "Drive $DEVICE is too small to install windows on itself. Using recovery-disk mode to install Windows on other larger devices."
+    CAN_INSTALL_ON_SAME_DRIVE=0
+    ;;
+  install)
+    CAN_INSTALL_ON_SAME_DRIVE=1
+    ;;
+esac
 echo "CAN_INSTALL_ON_SAME_DRIVE: $CAN_INSTALL_ON_SAME_DRIVE"
 }
 
@@ -316,7 +317,7 @@ if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ ! -f "
       else
         tooltip='Will setup a RAM-compression tool from Pi-Apps and then set DL_DIR to the new ramdisk at <u>/zram</u>. Please note that Pi-Apps itself will not be installed.'
       fi
-      
+
       yad "${yadflags[@]}" --width=500 --form --field="About 4.2GB of files need to be downloaded to system storage before flashing can begin.
 But your system has $(echo "scale=1 ; $( awk '/MemTotal/ {print $2}' /proc/meminfo ) / 1048576 " | bc )GB of RAM. Everything can be downloaded to RAM if you prefer.
 Choose this if:
@@ -327,21 +328,21 @@ Choose this if:
         --button="Use ${DL_DIR}":2 \
         --button="<b>Use RAM</b>!!${tooltip}":0
       button=$?
-      
+
       if [ "$button" == 0 ];then
         status "User chose to download everything to RAM."
         echo "For best results, please close all other programs. (especially web browsers and games)"
         yad "${yadflags[@]}" --width=500 --image="$DIRECTORY/ram.png" --image-on-top \
           --form --field="OK! Will download everything to RAM. For best results, please close all other programs. (especially web browsers and games):LBL" \
           --button='<b>OK</b>':0 >/dev/null
-        
+
         #install zram if necessary
         if [ ! -f /usr/bin/zram.sh ];then
           #install More RAM
           loading_dialog "Setting up RAM..." &
           loader_pid=$!
           trap "kill $loader_pid 2>/dev/null" EXIT
-          
+
           if [ -f "$HOME/pi-apps/manage" ];then
             #if Pi-Apps installed to default location, install More RAM from there
             "$HOME/pi-apps/manage" install 'More RAM'
@@ -362,7 +363,7 @@ Choose this if:
           fi
           #installation complete, so close pulsating progress bar dialog
           kill $loader_pid 2>/dev/null
-          
+
           #edge case: if user had installed More RAM before and disabled the /zram folder, enable it now
           if [ "$exitcode" == 0 ] && [ ! -d /zram ];then
             sudo zram.sh storage-on
@@ -371,7 +372,7 @@ Choose this if:
               exitcode=1
             fi
           fi
-          
+
           #display warning dialog if installing More RAM failed
           if [ "$exitcode" == 0 ];then
             DL_DIR='/zram'
@@ -400,7 +401,7 @@ fi
 #if no user-supplied CONFIG_TXT variable, set it to initial value for yad to change later
 if [ -z "$CONFIG_TXT" ];then
   if [ "$RPI_MODEL" == 3 ];then
-    
+
     CONFIG_TXT="
 
 # don't change anything below this point #
@@ -414,7 +415,7 @@ device_tree_address=0x1f0000
 device_tree_end=0x200000
 # Uncomment if you have trouble with the UART console during boot
 #core_freq=250"
-  
+
   elif [ "$RPI_MODEL" == 4 ];then
     CONFIG_TXT="
 
@@ -431,7 +432,7 @@ device_tree_address=0x1f0000
 device_tree_end=0x200000
 dtoverlay=miniuart-bt
 dtoverlay=upstream-pi4"
-    
+
   elif [ "$RPI_MODEL" == 5 ];then
     CONFIG_TXT="
 
@@ -458,7 +459,7 @@ window_text="- Target drive: <b>$DEVICE</b> ($(lsblk -dno SIZE "$DEVICE" | tr -d
 rm_img=FALSE
 
 while true;do #repeat the Installation Overview window until Flash button clicked
-  
+
   if [ "$DRY_RUN" == 1 ];then
     deletion_warning="DRY_RUN=1, so the target drive will not be modified."
     deletion_warning_2="$deletion_warning"
@@ -466,7 +467,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
     deletion_warning="<b>Warning!</b> All data on the target drive will be deleted!"
     deletion_warning_2="$deletion_warning Backup any files before it's too late!"
   fi
-  
+
   output="$(yad "${yadflags[@]}" --width=500 --height=400 --image="$DIRECTORY/overview.png" --image-on-top \
     --form --field="$window_text":LBL '' \
     "${existing_img_chk[@]}" \
@@ -476,20 +477,20 @@ while true;do #repeat the Installation Overview window until Flash button clicke
     --button='<b>Flash</b>'!!"$deletion_warning_2":0
   )"
   button=$?
-  
+
   #remove first line from yad output - remove newline from label field
   output="$(echo -e "$output" | tail -n +2)"
-  
+
   CONFIG_TXT="$output"
-  
+
   if [ $button == 0 ];then
     #button: Flash
     break
   elif [ $button == 2 ];then
     #button: Advanced options
-    
+
     refresh_prompt=() #this variable is populated if the Advanced Options window is repeated, to let the user know why
-    
+
     while true;do #repeat the advanced options window until the DL_DIR is not changed, or until Cancel is clicked
       fields=()
       #make entry to change DL_DIR
@@ -499,7 +500,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       else
         fields+=("--field=Working directory: (DL<u>  </u>DIR):DIR" "$DL_DIR")
       fi
-      
+
       #make entry for peinstaller
       if [ -d "$DL_DIR/peinstaller" ];then
         fields+=("--field=Check this box to re-download PE Installer":CHK 'FALSE')
@@ -507,7 +508,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         fields+=("--field=Will download PE Installer":LBL '')
       fi
       fields+=("--field=            <u>$DL_DIR/peinstaller</u>":LBL '')
-      
+
       #make entry for driverpackage
       if [ -d "$DL_DIR/driverpackage" ];then
         fields+=("--field=Check this box to re-download RPi Drivers":CHK 'FALSE')
@@ -515,7 +516,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         fields+=("--field=Will download RPi Drivers":LBL '')
       fi
       fields+=("--field=            <u>$DL_DIR/driverpackage</u>":LBL '')
-      
+
       #make entry for uefipackage
       if [ -d "$DL_DIR/pi${RPI_MODEL}-uefipackage" ];then
         fields+=("--field=Check this box to re-download UEFI package":CHK 'FALSE')
@@ -523,7 +524,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         fields+=("--field=Will download UEFI package":LBL '')
       fi
       fields+=("--field=            <u>$DL_DIR/pi${RPI_MODEL}-uefipackage</u>":LBL '')
-      
+
       #display status of winfiles - if they will be downloaded or are ready to use
       if [ -f "${DL_DIR}/winfiles_${BID}_${WIN_LANG}/alldone" ];then
         #already extracted
@@ -542,10 +543,10 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         fields+=("--field=Windows files: Will download and extract Windows ESD image":LBL '')
         fields+=("--field=            <small><u>${DL_DIR}/winfiles_${BID}_${WIN_LANG}</u></small>":LBL '')
       fi
-      
+
       #make entry for dry run
       fields+=("--field=Skip flashing the device (DRY_RUN)":CHK "$(echo "$DRY_RUN" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
-      
+
       output="$(yad "${yadflags[@]}" --width=500 --height=400 --image-on-top \
         "${refresh_prompt[@]}" \
         --form \
@@ -553,18 +554,18 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         --button="<b>Cancel</b>":1 --button="<b>OK</b>":0
       )"
       button=$?
-      
+
       if [ "$button" == 0 ];then #everything in this if statement is skipped if Cancel is clicked
         if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ "$DL_DIR" != "$(echo "$output" | sed -n 1p)" ];then
           #DL_DIR was changed - only honor the value if it is allowed to be changed
           DL_DIR="$(echo "$output" | sed -n 1p)"
           echo "In the Advanced Options window, user changed DL_DIR to $DL_DIR"
-          
+
           #explain to user why the Advanced Options window was refreshed when they clicked OK
           refresh_prompt=("--text=<b>Note:</b> As you changed the working directory, this window has refreshed."$'\n'"Any previous checkbox values have been ignored.")
-          
+
           #skipping the 'break' command to repeat the Advanced Options window
-          
+
         else #if DL_DIR was not changed, then review the subsequent check-box values
           #peinstaller
           if [ "$(echo "$output" | sed -n 2p)" == TRUE ];then
@@ -596,20 +597,20 @@ while true;do #repeat the Installation Overview window until Flash button clicke
             DRY_RUN=0
           fi
           #end of parsing check-box values for advanced options window
-          
+
           break #as the DL_DIR value was not changed, go back to the Installation Overview window
         fi
-        
+
       else #button != OK
         break #Don't save and go back to Installation Overview
       fi
     done #end of repeating the advanced options window
-    
+
   else
     #User exited when reviewing information and customizing config.txt
     exit 1
   fi
-  
+
 done #end of repeating the Installation Overview window
 
 #if user checked the box to rebuild the image, delete the image now
@@ -624,34 +625,28 @@ echo -e "CONFIG_TXT: ⤵\n$(echo "$CONFIG_TXT" | sed 's/^/  > /g')\nCONFIG_TXT: 
 
 echo "Launching install-wor.sh in a separate terminal"
 
-#run the install-wor.sh script in a terminal. If it succeeds, the "Next steps" window opens. If it fails, the terminal stays open forever until you close it.
-"$DIRECTORY/terminal-run" "set -a
-DL_DIR="\""$DL_DIR"\""
-BID="\""$BID"\""
-WIN_LANG="\""$WIN_LANG"\""
-RPI_MODEL="\""$RPI_MODEL"\""
-DEVICE="\""$DEVICE"\""
-CAN_INSTALL_ON_SAME_DRIVE="\""$CAN_INSTALL_ON_SAME_DRIVE"\""
-CONFIG_TXT="\""$CONFIG_TXT"\""
-RUN_MODE=gui
-DRY_RUN="\""$DRY_RUN"\""
-SOURCE_FILE="\""$SOURCE_FILE"\""
+#the terminal inherits these, so they never have to be interpolated into the command string
+export DIRECTORY cli_script
+export DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE
+export RUN_MODE=gui
 
-$cli_script
-exitcode="\$"?
+#run the install-wor.sh script in a terminal. If it succeeds, the "Next steps" window opens. If it fails, the terminal stays open forever until you close it.
+"$DIRECTORY/terminal-run" '
+"$cli_script"
+exitcode=$?
 
 #clear zram - avoid leaving files occupying space in /zram
-if [ "\"\$"DL_DIR"\"" == /zram ];then
+if [ "$DL_DIR" == /zram ];then
   sudo zram.sh &>/dev/null
 fi
 
-if [ "\"\$"exitcode"\"" == 0 ];then
-  #display 'next steps' window
-  yad --center --window-icon="\""$DIRECTORY/logo.png"\"" --title='Windows on Raspberry' \
-    --image="\""${DIRECTORY}/next-steps.png"\"" --button=Close:0
+if [ "$exitcode" == 0 ];then
+  #display "next steps" window
+  yad --center --window-icon="$DIRECTORY/logo.png" --title="Windows on Raspberry" \
+    --image="$DIRECTORY/next-steps.png" --button=Close:0
 else
   sleep infinity
-fi" "Running $(basename "$cli_script")"
+fi' "Running $(basename "$cli_script")"
 
 echo "The terminal running install-wor.sh has been closed."
 

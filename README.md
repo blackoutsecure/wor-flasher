@@ -17,6 +17,69 @@ In 2020, this was flat-out impossible.
 In 2021, this required following [a complicated tutorial](https://worproject.com/guides/how-to-install/from-other-os).  
 Now, using the new WoR-flasher, it's a _piece of cake_.
 
+**[Get started](#getting-started)** · **[Find your Pi](#supported-devices)** · **[Troubleshooting](#troubleshooting)** · **[Get help](#getting-help)**
+
+## Table of contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Windows compatibility](#windows-compatibility)
+  - [The ARMv8.1 limitation](#the-armv81-limitation)
+  - [End of support](#end-of-support)
+  - [Preinstalled apps](#preinstalled-apps)
+- [Supported devices](#supported-devices)
+  - [Raspberry Pi 3 / Pi 2 v1.2](#raspberry-pi-3--pi-2-v12)
+  - [Raspberry Pi 4 / Pi 400](#raspberry-pi-4--pi-400)
+  - [Raspberry Pi 5](#raspberry-pi-5)
+  - [If you need Wi-Fi or graphics acceleration](#if-you-need-wi-fi-or-graphics-acceleration)
+- [Getting started](#getting-started)
+  - [Choosing a drive](#choosing-a-drive)
+  - [Install from Pi-Apps](#install-from-pi-apps)
+  - [Install manually](#install-manually)
+  - [Graphical interface](#graphical-interface)
+  - [Terminal interface](#terminal-interface)
+- [Troubleshooting](#troubleshooting)
+- [Scripting reference](#scripting-reference)
+  - [Environment variable options](#environment-variable-options)
+  - [Advanced tuning variables](#advanced-tuning-variables)
+  - [Functions](#functions)
+- [Contributing](#contributing)
+- [Is this legal?](#is-this-legal)
+- [License](#license)
+- [Getting help](#getting-help)
+- [Credits](#credits)
+- [Sources](#sources)
+
+## Features
+
+**Windows images**
+
+- Downloads Windows 10 and Windows 11 ARM64 directly from Microsoft's update servers, so no copyrighted files are redistributed. See [Is this legal?](#is-this-legal).
+- Pick the newest release automatically, or choose an exact build number.
+- Supports [37 languages](https://worproject.com/), selectable at flash time.
+- Import your own ARM64 ISO instead, via the `SOURCE_FILE` variable.
+- Extracted images are cached per build and language, so repeat flashes skip the lengthy download and image-generation step.
+
+**Hardware awareness**
+
+- Detects which Windows builds the target Pi can actually boot and hides the rest. See [The ARMv8.1 limitation](#the-armv81-limitation).
+- Downloads the matching [UEFI firmware](https://github.com/pftf/RPi4/releases) and [ARM64 drivers](https://github.com/worproject/RPi-Windows-Drivers/releases) for the chosen model, newest release by default with pinned fallbacks.
+- Injects the drivers into the Windows PE boot image automatically.
+- Verifies every download against an upstream SHA1 or SHA256 hash.
+
+**Flashing**
+
+- Creates either an installation drive that installs Windows onto itself, or a recovery drive that installs onto other disks. See [Choosing a drive](#choosing-a-drive).
+- Customizes `config.txt` for overclocking or display tweaks via the `CONFIG_TXT` variable.
+- Optionally downloads everything to a RAM disk to spare your SD card, using [More RAM](https://pi-apps.io/install-app/install-more-ram-on-raspberry-pi/) from Pi-Apps.
+
+**Interfaces**
+
+- Graphical wizard (`install-wor-gui.sh`) and terminal interface (`install-wor.sh`).
+- Fully scriptable through [environment variables](#environment-variable-options), including a `DRY_RUN` mode.
+- Sourceable as a library of [shell functions](#functions) for use in larger scripts.
+- Self-updates from GitHub on each run, unless a `no-update` file is present.
+
 ## Requirements
 
 - A Debian-based Linux machine, ARM or x86, to run the flasher. Only Raspberry Pi OS has been tested.
@@ -26,13 +89,15 @@ Now, using the new WoR-flasher, it's a _piece of cake_.
 > [!WARNING]
 > Flashing erases the target drive completely. Botspot (the developer of this tool) cannot be held responsible for data loss.
 
-## Compatibility
+## Windows compatibility
 
-| Pi model               | CPU        | Architecture | Newest Windows 11 that boots | End of support                                                                                    | Notes                          |
-| ---------------------- | ---------- | ------------ | ---------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------ |
-| Pi 2 v1.2 / Pi 3 / CM3 | Cortex-A53 | ARMv8.0      | 23H2 (`22631.x`)             | [November 11, 2025](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) | Windows 10 recommended         |
-| Pi 4 / Pi 400          | Cortex-A72 | ARMv8.0      | 23H2 (`22631.x`)             | [November 11, 2025](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) | RAM limited to 3 GB by default |
-| Pi 5                   | Cortex-A76 | ARMv8.2      | 25H2 and newer               | [October 12, 2027](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro)  | No Windows drivers yet         |
+| Pi model               | CPU        | Architecture | Newest Windows 11 that boots | End of support                                                                                    | Notes                                                 |
+| ---------------------- | ---------- | ------------ | ---------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Pi 2 v1.2 / Pi 3 / CM3 | Cortex-A53 | ARMv8.0      | 23H2 (`22631.x`)             | [November 11, 2025](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) | Windows 10 recommended                                |
+| Pi 4 / Pi 400          | Cortex-A72 | ARMv8.0      | 23H2 (`22631.x`)             | [November 11, 2025](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) | [RAM limited to 3 GB](#the-3-gb-ram-limit) by default |
+| Pi 5                   | Cortex-A76 | ARMv8.2      | 25H2 and newer               | [October 12, 2027](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro)  | No Windows drivers yet                                |
+
+CPU and architecture data from the [Raspberry Pi processor documentation](https://www.raspberrypi.com/documentation/computers/processors.html). Support dates from [Microsoft Lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro).
 
 ### The ARMv8.1 limitation
 
@@ -43,18 +108,78 @@ The symptom is distinctive: the Pi reaches the UEFI splash screen normally, then
 
 WoR-flasher enforces this automatically. When the target is a Pi 3 or Pi 4, incompatible builds are hidden from the version menus, `get_bid` returns the newest build that will actually boot, and flashing aborts with an explanation if an incompatible build is supplied via the `BID` variable. The cutoff is controlled by the [`ARMV80_MAX_BUILD`](#advanced-tuning-variables) variable.
 
+Source: [Windows on Raspberry FAQ](https://worproject.com/faq), "Does Windows 11 work?" - build 25163 is documented there as the last one that boots on the Pi 4 and older.
+
 ### End of support
 
 End-of-support dates in the table are for the newest bootable build, Home and Pro editions. Enterprise and Education editions are supported longer. If you run Windows 10 instead, its support ended [October 14, 2025](https://learn.microsoft.com/en-us/lifecycle/products/windows-10-home-and-pro).
 
+Source: [Windows 11](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) and [Windows 10](https://learn.microsoft.com/en-us/lifecycle/products/windows-10-home-and-pro) lifecycle pages, and the [Enterprise and Education](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-enterprise-and-education-version-21h2) equivalent.
+
 > [!WARNING]
 > Every Windows version a Pi 3 or Pi 4 can run is now past end of support and no longer receives security updates. This is fine for an experimental or offline machine, but worth knowing before putting one on a network you care about.
 
-## Hardware limitations
+### Preinstalled apps
 
-### Raspberry Pi 4: 3 GB RAM limit
+WoR-Flasher cannot debloat the OS. Performance is about the same either way, but there will be extra preinstalled apps you must remove manually if you want them gone.
+
+## Supported devices
+
+Windows on a Raspberry Pi relies on a community driver package rather than vendor drivers, so a fair amount of hardware is unavailable or degraded. Find your model below.
+
+> [!NOTE]
+> The [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers) project was archived in February 2025 and is read-only. Version 0.17 is the final release, so these tables are final too. See the [status page](https://github.com/worproject/RPi-Windows-Drivers#status) for the full per-device breakdown.
+
+### Raspberry Pi 3 / Pi 2 v1.2
+
+**Cortex-A53, ARMv8.0.** Newest bootable Windows: 23H2 (`22631.x`), though Windows 10 is recommended on this hardware.
+
+| Hardware                  | Status      | Notes                                                                                       |
+| ------------------------- | ----------- | ------------------------------------------------------------------------------------------- |
+| Onboard Ethernet          | Working     | LAN9514 on the Pi 3 B, LAN7515 on the Pi 3 B+                                               |
+| Wi-Fi                     | Not working | No driver exists for the CYW43438 or CYW43455 chips                                         |
+| Bluetooth                 | Partial     | Bus speed is limited because hardware flow control is not exposed, and the driver may crash |
+| USB 2.0                   | Working     |                                                                                             |
+| SD card                   | Working     |                                                                                             |
+| Display                   | Working     | Basic frame buffer only, no acceleration                                                    |
+| GPU / 3D acceleration     | Not working | The driver loads but is unfinished, so 3D and WebGL do not work                             |
+| HDMI audio                | Not working | No driver available                                                                         |
+| Analog audio jack         | Working     |                                                                                             |
+| GPIO, SPI, I2C, PWM, UART | Working     |                                                                                             |
+| CSI camera module         | Not working | No driver available                                                                         |
+| 7-inch DSI touch screen   | Partial     | The display works but the resolution may be wrong, and touch input does not                 |
+| 3-pin case fan            | Partial     | The UEFI can switch it on, but it never switches off                                        |
+
+Source: [RPi-Windows-Drivers status page](https://github.com/worproject/RPi-Windows-Drivers#status), Raspberry Pi 3 (ARM64) section.
+
+### Raspberry Pi 4 / Pi 400
+
+**Cortex-A72, ARMv8.0.** Newest bootable Windows: 23H2 (`22631.x`).
+
+| Hardware                  | Status      | Notes                                                                                    |
+| ------------------------- | ----------- | ---------------------------------------------------------------------------------------- |
+| Onboard Ethernet          | Working     | Broadcom GENET gigabit controller                                                        |
+| Wi-Fi                     | Not working | No driver exists for the CYW43455 chip                                                   |
+| Bluetooth                 | Working     |                                                                                          |
+| USB 2.0                   | Partial     | The OTG controller requires RAM limited to 1 GB                                          |
+| USB 3.0                   | Partial     | UASP is disabled so USB 3.0 drives can boot, which significantly reduces transfer speeds |
+| SD card                   | Partial     | The eMMC2 controller lacks DMA, HS200/HS400 and UHS-I                                    |
+| Display                   | Working     | Basic frame buffer only, no acceleration                                                 |
+| GPU / 3D acceleration     | Not working | The driver loads but is unfinished, so 3D and WebGL do not work                          |
+| HDMI audio                | Partial     | The HDMI0 port only, which is the one next to the USB-C connector                        |
+| Analog audio jack         | Working     |                                                                                          |
+| GPIO, SPI, I2C, PWM, UART | Working     |                                                                                          |
+| CSI camera module         | Not working | No driver available                                                                      |
+| 7-inch DSI touch screen   | Partial     | The display works but the resolution may be wrong, and touch input does not              |
+| 3-pin case fan            | Partial     | The UEFI can switch it on, but it never switches off                                     |
+
+Source: [RPi-Windows-Drivers status page](https://github.com/worproject/RPi-Windows-Drivers#status), Raspberry Pi 4 / 400 (ARM64) section. Firmware from [pftf/RPi4](https://github.com/pftf/RPi4).
+
+#### The 3 GB RAM limit
 
 The UEFI firmware limits the Pi 4 to 3 GB of usable RAM by default, regardless of whether your board has 4 GB or 8 GB. This is a conservative default, not a permanent restriction.
+
+You can change it whenever you like - before installing Windows, or at any point after setup has finished. The setting lives in the UEFI firmware rather than in Windows, so it persists across reboots and changing it never requires reinstalling.
 
 To use the full amount of RAM:
 
@@ -63,35 +188,33 @@ To use the full amount of RAM:
 3. Change `Limit RAM to 3 GB` to `Disabled`.
 4. Press <kbd>ESC</kbd> several times to go back, then <kbd>Y</kbd> to save when prompted, and reboot.
 
-See the [Windows on Raspberry FAQ](https://worproject.com/faq) for details.
+See the [Windows on Raspberry FAQ](https://worproject.com/faq) for details, under "Only 3 GB of RAM are available. How can I fix this?".
 
 > [!NOTE]
 > On the Compute Module 4, USB support requires a RAM limit, so leave this setting enabled there.
 
-### Wi-Fi and Bluetooth
-
-Onboard Wi-Fi is not supported. The necessary drivers simply do not exist yet. Use a wired Ethernet connection instead. See the [RPi-Windows-Drivers status page](https://github.com/worproject/RPi-Windows-Drivers#status) for current hardware support.
-
 ### Raspberry Pi 5
 
-Raspberry Pi 5 support is here and it runs fast, but there are no drivers. SD card boot seems more reliable, and for internet you need a USB to Ethernet adapter.
+**Cortex-A76, ARMv8.2.** The only model that can run Windows 11 24H2 and newer.
 
-### Preinstalled apps
+There are **no drivers at all**. WoR-flasher injects a placeholder file purely so the installer will boot, so assume nothing in the tables above applies.
 
-WoR-Flasher cannot debloat the OS. Performance is about the same either way, but there will be extra preinstalled apps you must remove manually if you want them gone.
+| Hardware                | Status      | Notes                                    |
+| ----------------------- | ----------- | ---------------------------------------- |
+| Everything              | Not working | No driver package exists for the Pi 5    |
+| USB to Ethernet adapter | Working     | The only practical way to get networking |
 
-## Legal
+SD card boot seems more reliable than USB on this model. The WoR developers have [stated](https://worproject.com/faq) they no longer offer support for Raspberry Pi boards, so this is unlikely to change.
 
-This tool is **100% legal**. All proprietary Windows components are downloaded straight from Microsoft's update servers using [uupdump](https://uupdump.net). Consider reading [this debate](https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=318599) that took place on the Raspberry Pi Forums. At the conclusion of the thread, Raspberry Pi **employees** [confirm](https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=318599#p1907313) that WoR is completely legal. The OS is unlicenced just like a regular Windows ISO, which can be activated via an activation key or by logging in with a pre-licensed Microsoft account.
+Source: [worproject/rpi5-uefi](https://github.com/worproject/rpi5-uefi), which provides the Pi 5 firmware, and the [Windows on Raspberry FAQ](https://worproject.com/faq).
 
-## Getting help
+### If you need Wi-Fi or graphics acceleration
 
-| Problem with                         | Where to go                                                                                                                                |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| The WoR-flasher tool                 | [Open an issue](https://github.com/Botspot/wor-flasher/issues/new/choose) or the [Botspot Software Discord](https://discord.gg/RXSTvaUvuu) |
-| Windows on Raspberry (the OS itself) | [Email the WoR developers](https://worproject.com/contact) or [join their Discord](https://discord.gg/jQCpfVK)                             |
+Neither works on any model and neither is coming. [BVM](https://github.com/Botspot/bvm) runs Windows in a VM where the Linux host owns the hardware, so Wi-Fi, audio and USB are passed through and work normally.
 
-## WoR-flasher walkthrough
+Source: [BVM](https://github.com/Botspot/bvm). Note that BVM pins the Pi 4 to build `22631.2861` for the same CPU reason described above, so it does not raise the Windows version ceiling.
+
+## Getting started
 
 ### Choosing a drive
 
@@ -103,24 +226,24 @@ The size of the drive you flash determines what it can do:
 | 8 GB to 25 GB   | Recovery drive - can only install Windows onto **other drives larger than 16 GB** |
 | Under 8 GB      | Too small to be usable                                                            |
 
-### Install WoR-flasher
+### Install from Pi-Apps
 
 The fastest way to get WoR-flasher running on a RPi is by using the [Pi-Apps app store for Raspberry Pi](https://github.com/Botspot/pi-apps):  
 [![badge](https://github.com/Botspot/pi-apps/blob/master/icons/badge.png?raw=true)](https://github.com/Botspot/pi-apps)  
 Installing WoR-flasher from Pi-Apps has several advantages: it creates a convenient button in the Start menu, uninstalling takes one click, and updates are handled seamlessly.
 
-### To manually download WoR-flasher
+### Install manually
 
-```
+```bash
 git clone https://github.com/Botspot/wor-flasher
 ```
 
 This will download the scripts to a new directory named `wor-flasher`.  
 **Dependencies:** No need to install packages manually. Running the script will automatically install these: `yad` `aria2` `cabextract` `wimtools` `chntpw` `genisoimage` `exfat-fuse` `exfat-utils` `wget` `udftools` `bc`
 
-### To run WoR-flasher using the graphical interface
+### Graphical interface
 
-```
+```bash
 ~/wor-flasher/install-wor-gui.sh
 ```
 
@@ -139,15 +262,15 @@ This will download the scripts to a new directory named `wor-flasher`.
 - If all goes well, the terminal will close and you will be told what to do next.  
   ![next steps](https://user-images.githubusercontent.com/54716352/131228409-f84ede9b-a1fc-43f9-a79c-5b1853513960.png)
 
-### To run WoR-flasher using the terminal interface
+### Terminal interface
 
-```
+```bash
 ~/wor-flasher/install-wor.sh
 ```
 
 <details><summary>Example terminal walkthrough (click to expand)</summary>
 
-```
+```console
 $ ~/wor-flasher/install-wor.sh
 Choose Windows version:
 1) Windows 11
@@ -218,7 +341,7 @@ If it genuinely does not respond, use a wired keyboard plugged directly into a U
 
 ### Only 3 GB of RAM is available
 
-Expected on a Pi 4. See [Raspberry Pi 4: 3 GB RAM limit](#raspberry-pi-4-3-gb-ram-limit).
+Expected on a Pi 4. See [The 3 GB RAM limit](#the-3-gb-ram-limit).
 
 ### Getting more detail
 
@@ -230,40 +353,47 @@ The generated `config.txt` already sets `enable_uart=1` and `uart_2ndstage=1`, s
 
 The `install-wor.sh` script is designed to be used within other, larger bash scripts. For automation and customization, `install-wor.sh` will detect and obey certain environment variables.
 
-Setting any of the first four suppresses the corresponding interactive prompt.
+Setting `BID`, `WIN_LANG`, `RPI_MODEL`, `DEVICE` or `CAN_INSTALL_ON_SAME_DRIVE` suppresses the matching interactive prompt, which is what makes unattended runs possible.
 
-| Variable                    | Description                                                                                                                                                                             |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BID`                       | An exact Windows version ID. Example: `22631.2861`                                                                                                                                      |
-| `WIN_LANG`                  | Language for the Windows image. Example: `en-us`                                                                                                                                        |
-| `RPI_MODEL`                 | Target Raspberry Pi model. Allowed values: `3`, `4`, `5`                                                                                                                                |
-| `DEVICE`                    | The device to flash. Example: `/dev/sda`                                                                                                                                                |
-| `DL_DIR`                    | Download location. Defaults to `~/wor-flasher-files`                                                                                                                                    |
-| `CAN_INSTALL_ON_SAME_DRIVE` | `1` if the device is larger than 25 GB and should install Windows onto itself, otherwise `0`                                                                                            |
-| `CONFIG_TXT`                | Customizes the `/boot/config.txt` of the resulting drive, commonly for overclocking or HDMI settings. [This is the default value.](https://github.com/pftf/RPi4/blob/master/config.txt) |
-| `SOURCE_FILE`               | Path to an existing Windows ARM64 ISO to use instead of downloading one. Must be at least 3 GB and end in `.iso`                                                                        |
-| `RUN_MODE`                  | Set to `gui` to display graphical error messages                                                                                                                                        |
-| `DRY_RUN`                   | Set to `1` to run the whole setup but exit after downloading, without flashing                                                                                                          |
+| Variable                    | Default               | Description                                                                                                                                                                                                                     |
+| --------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BID`                       | _prompts_             | An exact Windows version ID. Example: `22631.2861`                                                                                                                                                                              |
+| `WIN_LANG`                  | _prompts_             | Language for the Windows image. Example: `en-us`                                                                                                                                                                                |
+| `RPI_MODEL`                 | _prompts_             | Target Raspberry Pi model. Allowed values: `3`, `4`, `5`                                                                                                                                                                        |
+| `DEVICE`                    | _prompts_             | The device to flash. Example: `/dev/sda`                                                                                                                                                                                        |
+| `CAN_INSTALL_ON_SAME_DRIVE` | _prompts_             | `1` if the device is larger than 25 GB and should install Windows onto itself, otherwise `0`                                                                                                                                    |
+| `DL_DIR`                    | `~/wor-flasher-files` | Where components and Windows images are downloaded                                                                                                                                                                              |
+| `SOURCE_FILE`               | none                  | Path to an existing Windows ARM64 ISO to use instead of downloading one. Must be at least 3 GB and end in `.iso`                                                                                                                |
+| `CONFIG_TXT`                | firmware default      | Replaces `config.txt` on the resulting drive, commonly for overclocking or HDMI settings. [This is the firmware's own default.](https://github.com/pftf/RPi4/blob/master/config.txt) The GUI supplies its own per-model version |
+| `RUN_MODE`                  | `cli`                 | Set to `gui` to display graphical error messages                                                                                                                                                                                |
+| `USE_CACHE`                 | `0`                   | Controls reuse of downloaded components. `0` deletes them and downloads again every run, `1` reuses them only while they are still the newest version, `2` reuses them without checking for updates                             |
+| `DRY_RUN`                   | unset                 | Set to `1` to run the whole setup but exit after downloading, without flashing                                                                                                                                                  |
 
 #### Advanced tuning variables
 
 These have working defaults and rarely need changing.
 
-| Variable             | Default      | Description                                                                                                                                                                             |
-| -------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `UEFI_USE_LATEST`    | `1`          | Download the newest UEFI firmware release from GitHub. Set to `0` to use the pinned version instead. Pre-releases are never selected, since upstream uses them to mark known-bad builds |
-| `UEFI_VER_PI3`       | `v1.39`      | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                             |
-| `UEFI_VER_PI4`       | `v1.52`      | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                             |
-| `UEFI_VER_PI5`       | `v0.3`       | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                             |
-| `ARMV80_MAX_BUILD`   | `25163`      | The last Windows build that boots on an ARMv8.0 Pi. Higher builds are hidden and rejected for the Pi 3 and Pi 4                                                                         |
-| `ARMV80_SAFE_BID`    | `22631.2861` | The build suggested when a user picks an incompatible one for a Pi 3 or Pi 4                                                                                                            |
-| `WIN11_MIN_BUILD`    | `22000`      | The build number at which a release counts as Windows 11 rather than Windows 10                                                                                                         |
-| `WIN10_OLDEST_BUILD` | `17134.112`  | Marks the end of the Windows 10 section of worproject.com's version list                                                                                                                |
-| `EXAMPLE_BID`        | `22621.525`  | The example build number shown in prompts                                                                                                                                               |
+| Variable              | Default      | Description                                                                                                                                                                             |
+| --------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UEFI_USE_LATEST`     | `1`          | Download the newest UEFI firmware release from GitHub. Set to `0` to use the pinned version instead. Pre-releases are never selected, since upstream uses them to mark known-bad builds |
+| `UEFI_VER_PI3`        | `v1.39`      | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                             |
+| `UEFI_VER_PI4`        | `v1.52`      | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                             |
+| `UEFI_VER_PI5`        | `v0.3`       | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                             |
+| `DRIVERS_USE_LATEST`  | `1`          | Download the newest ARM64 driver release from GitHub. Set to `0` to use the pinned version instead                                                                                      |
+| `DRIVER_VER`          | `v0.17`      | Pinned driver package version, used when `DRIVERS_USE_LATEST=0` or GitHub is unreachable. The upstream project is archived, so this is the final release                                |
+| `PE_USE_LATEST`       | `1`          | Download the newest WoR PE-based installer from worproject.com. Set to `0` to use the pinned package instead                                                                            |
+| `PE_INSTALLER_URL`    | v1.1.0 asset | Pinned PE installer URL, used when `PE_USE_LATEST=0` or worproject.com is unreachable                                                                                                   |
+| `PE_INSTALLER_SHA256` | v1.1.0 hash  | Expected SHA256 of the pinned PE installer. The download is always verified, either against this value or against the live hash when using the latest package                           |
+| `ARMV80_MAX_BUILD`    | `25163`      | The last Windows build that boots on an ARMv8.0 Pi. Higher builds are hidden and rejected for the Pi 3 and Pi 4                                                                         |
+| `ARMV80_SAFE_BID`     | `22631.2861` | The build suggested when a user picks an incompatible one for a Pi 3 or Pi 4                                                                                                            |
+| `WIN11_MIN_BUILD`     | `22000`      | The build number at which a release counts as Windows 11 rather than Windows 10                                                                                                         |
+| `WIN10_OLDEST_BUILD`  | `17134.112`  | Marks the end of the Windows 10 section of worproject.com's version list                                                                                                                |
+| `EXAMPLE_BID`         | `22621.525`  | The example build number shown in prompts                                                                                                                                               |
+| `VERIFY_TLS`          | `1`          | Verify TLS certificates when downloading. Set to `0` only if your system has an outdated CA bundle and downloads fail with certificate errors                                           |
 
 Example usage:
 
-```
+```bash
 DL_DIR=/media/pi/my-big-flash-drive DEVICE=/dev/sdg DRY_RUN=1 BID=22631.2861 RPI_MODEL=4 WIN_LANG=en-us ~/wor-flasher/install-wor-gui.sh
 ```
 
@@ -272,18 +402,38 @@ DL_DIR=/media/pi/my-big-flash-drive DEVICE=/dev/sdg DRY_RUN=1 BID=22631.2861 RPI
 The `install-wor.sh` script is designed to be used within other, larger bash scripts. For improved integration, `install-wor.sh` is equipped with a variety of useful functions that frontend scripts like `install-wor-gui.sh` can use.  
 **To source the script** so the functions are available:
 
-```
+```bash
 source ~/wor-flasher/install-wor.sh source
 ```
 
 Question: why does that command say "`source`" twice? Answer: The first "`source`" is a command, and the second "`source`" is a command-line flag that is passed to the script to let it know you are sourcing it.
-Once the script is sourced, these new commands (also known as functions) become available:
+
+Once the script is sourced, these functions become available:
+
+| Function                           | Purpose                                                           |
+| ---------------------------------- | ----------------------------------------------------------------- |
+| `error`                            | Print an error message and exit with code 1                       |
+| `status`, `echo_green`, `echo_red` | Print colored progress, success and failure messages              |
+| `package_available`                | Test whether an apt package exists in the repositories            |
+| `install_packages`                 | Install a space-separated list of apt packages                    |
+| `download_from_gdrive`             | Download a large publicly shared file from Google Drive           |
+| `get_partition`                    | Resolve a partition device node from a drive and partition number |
+| `get_device_name`                  | Human-readable manufacturer and model for a drive                 |
+| `get_size_raw`                     | Drive size in bytes                                               |
+| `get_space_free`                   | Free space in a folder, in bytes                                  |
+| `list_devs`                        | Colored list of drives that can be flashed                        |
+| `get_bid`                          | Newest Windows build ID the target Pi can actually boot           |
+| `cpu_supports_bid`                 | Whether the target Pi's CPU can run a given build                 |
+| `list_bids_supported`              | Build list filtered to what the target Pi can boot                |
+| `get_os_name`                      | Human-readable OS name from a build ID                            |
+
+Each is documented in detail below.
 
 - `error` - a simple function that Botspot uses in bash scripts to warn the user that something failed and to exit the script with a failure code. (1)  
   Input: string containing the error message  
   Usage:
 
-```
+```bash
 command-that-downloads-windows || error "Windows failed to download! Check your internet connection and try again."
 ```
 
@@ -291,7 +441,7 @@ command-that-downloads-windows || error "Windows failed to download! Check your 
   Input: string containing message  
   Usage:
 
-```
+```bash
 status "Now, downloading windows... please wait"
 echo_green "Done"
 echo_red "That did not work, but it is not fatal"
@@ -301,7 +451,7 @@ echo_red "That did not work, but it is not fatal"
   Input: one name of a package
   Usage:
 
-```
+```bash
 if package_available yad ;then
   echo "yad can be installed"
 fi
@@ -311,7 +461,7 @@ fi
   Input: string containing a space-separated list of packages  
   Usage:
 
-```
+```bash
 install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse exfat-utils wget'
 ```
 
@@ -319,7 +469,7 @@ install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse ex
   Inputs: File ID, output filename  
   Usage:
 
-```
+```bash
 download_from_gdrive 1WHyHFYjM4WPAAGH2PICGEhT4R5TlxlJC WoR-PE_Package.zip
 ```
 
@@ -327,7 +477,7 @@ download_from_gdrive 1WHyHFYjM4WPAAGH2PICGEhT4R5TlxlJC WoR-PE_Package.zip
   Input: block device of drive, partition number  
   Usage:
 
-```
+```bash
 get_partition /dev/sda 2
 #Assuming partition 2 exists, the above command returns "/dev/sda2"
 
@@ -342,7 +492,7 @@ get_partition /dev/mmcblk0 all
   Input: block device of drive  
   Usage:
 
-```
+```bash
 get_device_name /dev/sda
 ```
 
@@ -350,14 +500,14 @@ get_device_name /dev/sda
   Input: block device of drive  
   Usage:
 
-```
+```bash
 get_size_raw /dev/sda
 ```
 
 - `list_devs` - list available storage drives in a human-readable, colored format.  
   Usage:
 
-```
+```bash
 list_devs
 ```
 
@@ -365,7 +515,7 @@ list_devs
   Input: "`10`" or "`11`"
   Usage:  
 
-```
+```bash
 get_bid 11
 ```
 
@@ -373,7 +523,7 @@ get_bid 11
   Input: build ID  
   Usage:
 
-```
+```bash
 if cpu_supports_bid 26100.1742 ;then
   echo "this build will boot"
 fi
@@ -383,21 +533,17 @@ fi
   Input: "`10`" or "`11`"  
   Usage:
 
-```
+```bash
 list_bids_supported 11
 ```
 
-```
-
-- `get_os_name` - Get human-readable name of operating system.
-  Input: valid Windows build ID
+- `get_os_name` - Get human-readable name of operating system.  
+  Input: valid Windows build ID  
   Usage:
 
-```
-
+```bash
 get_os_name 22631.2861
-
-````
+```
 
 ### Example function and variable usage
 
@@ -443,14 +589,85 @@ dtoverlay=miniuart-bt"
 CAN_INSTALL_ON_SAME_DRIVE=1
 
 ~/wor-flasher/install-wor.sh
-````
+```
+
+## Contributing
+
+This repository is looking for a maintainer, so contributions are genuinely welcome.
+
+> [!IMPORTANT]
+> `install-wor.sh` updates itself on every run. Before it does, it runs `git restore .`, which **discards uncommitted changes to tracked files**. Create a file named `no-update` next to the scripts to disable this while you work:
+>
+> ```bash
+> touch ~/wor-flasher/no-update
+> ```
+
+Useful when testing changes:
+
+| Command                      | Purpose                                               |
+| ---------------------------- | ----------------------------------------------------- |
+| `bash -n install-wor.sh`     | Check syntax without running anything                 |
+| `DRY_RUN=1 ...`              | Run the whole flow but stop before touching the drive |
+| `USE_CACHE=1 ...`            | Reuse downloaded components so iterations are fast    |
+| `DEBUG=1 ./terminal-run ...` | Print which terminal emulator was selected            |
+
+Both scripts are plain Bash with no build step. `install-wor-gui.sh` sources `install-wor.sh` for its functions, so shared logic belongs in the latter.
+
+## Is this legal?
+
+Yes. All proprietary Windows components are downloaded straight from Microsoft's update servers using [uupdump](https://uupdump.net). Consider reading [this debate](https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=318599) that took place on the Raspberry Pi Forums. At the conclusion of the thread, Raspberry Pi **employees** [confirm](https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=318599#p1907313) that WoR is completely legal. The OS is unlicenced just like a regular Windows ISO, which can be activated via an activation key or by logging in with a pre-licensed Microsoft account.
+
+## License
+
+This repository does not currently contain a `LICENSE` or `COPYING` file, which means the code defaults to exclusive copyright. Botspot's related projects, [Pi-Apps](https://github.com/Botspot/pi-apps) and [BVM](https://github.com/Botspot/bvm), are both GPL-3.0. Adding a license here is a decision for the copyright holder.
+
+## Getting help
+
+| Problem with                         | Where to go                                                                                                                                |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| The WoR-flasher tool                 | [Open an issue](https://github.com/Botspot/wor-flasher/issues/new/choose) or the [Botspot Software Discord](https://discord.gg/RXSTvaUvuu) |
+| Windows on Raspberry (the OS itself) | [Email the WoR developers](https://worproject.com/contact) or [join their Discord](https://discord.gg/jQCpfVK)                             |
+
+## Credits
+
+WoR-flasher automates a process built by other people. It would not exist without:
+
+| Project                                                                                              | By                                    |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| [Windows on Raspberry](https://worproject.com/) and its PE-based installer                           | Mario Bălănică and contributors       |
+| [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers)                             | worproject                            |
+| [UEFI firmware for the Pi 3 and Pi 4](https://github.com/pftf/RPi4)                                  | Pete Batard and the pftf project      |
+| [UEFI firmware for the Pi 5](https://github.com/worproject/rpi5-uefi)                                | worproject                            |
+| [uupdump](https://uupdump.net)                                                                       | The UUP dump team                     |
+| WoR-flasher, [Pi-Apps](https://github.com/Botspot/pi-apps) and [BVM](https://github.com/Botspot/bvm) | [Botspot](https://github.com/Botspot) |
 
 ## Sources
 
-- [Windows 11 Home and Pro lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) - Microsoft Lifecycle
-- [Windows 10 Home and Pro lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-10-home-and-pro) - Microsoft Lifecycle
-- [Windows 11 Enterprise and Education lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-enterprise-and-education-version-21h2) - Microsoft Lifecycle
-- [Windows Processor Requirements](https://learn.microsoft.com/en-us/windows-hardware/design/minimum/windows-processor-requirements) - Microsoft Learn
-- [Windows on Raspberry FAQ](https://worproject.com/faq) - the ARMv8.1 build cutoff and the 3 GB RAM limit
-- [pftf/RPi4 releases](https://github.com/pftf/RPi4/releases) - UEFI firmware for the Pi 4
-- [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers#status) - current hardware driver status
+Everything WoR-flasher downloads at runtime, and every external fact stated in this README, comes from the following.
+
+**Components downloaded during a flash**
+
+| Source                                                                                             | Used for                                                               |
+| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| [worproject.com ESD catalog](https://worproject.com/)                                              | Windows 10 and 11 ARM64 images, served from Microsoft's update servers |
+| [WoR PE-based installer](https://worproject.com/downloads#windows-on-raspberry-pe-based-installer) | The installer environment injected into `boot.wim`                     |
+| [pftf/RPi4](https://github.com/pftf/RPi4/releases)                                                 | UEFI firmware for the Pi 4 and Pi 400                                  |
+| [pftf/RPi3](https://github.com/pftf/RPi3/releases)                                                 | UEFI firmware for the Pi 3 and Pi 2 v1.2                               |
+| [worproject/rpi5-uefi](https://github.com/worproject/rpi5-uefi/releases)                           | UEFI firmware for the Pi 5                                             |
+| [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers/releases)                  | ARM64 device drivers, archived at v0.17                                |
+
+**Reference material**
+
+| Source                                                                                                                                                 | Used for                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| [Windows on Raspberry FAQ](https://worproject.com/faq)                                                                                                 | The ARMv8.1 build cutoff, the 3 GB RAM limit, Pi 5 support status        |
+| [RPi-Windows-Drivers status page](https://github.com/worproject/RPi-Windows-Drivers#status)                                                            | Every per-model driver table                                             |
+| [Windows 11 Home and Pro lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro)                                      | Windows 11 end-of-support dates                                          |
+| [Windows 10 Home and Pro lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-10-home-and-pro)                                      | Windows 10 end-of-support date                                           |
+| [Windows 11 Enterprise and Education lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-enterprise-and-education-version-21h2) | Extended support dates                                                   |
+| [Windows Processor Requirements](https://learn.microsoft.com/en-us/windows-hardware/design/minimum/windows-processor-requirements)                     | Supported processor lists per Windows release                            |
+| [Raspberry Pi processors](https://www.raspberrypi.com/documentation/computers/processors.html)                                                         | CPU cores and architecture per model                                     |
+| [Raspberry Pi config.txt](https://www.raspberrypi.com/documentation/computers/config_txt.html)                                                         | `config.txt` option reference                                            |
+| [uupdump](https://uupdump.net)                                                                                                                         | Windows image generation, referenced in [Is this legal?](#is-this-legal) |
+| [Pi-Apps](https://github.com/Botspot/pi-apps)                                                                                                          | Recommended install method and the More RAM add-on                       |
+| [BVM](https://github.com/Botspot/bvm)                                                                                                                  | The recommended alternative for Wi-Fi and graphics acceleration          |

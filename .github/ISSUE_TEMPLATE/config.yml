@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Botspot Software Discord
+    url: https://discord.gg/RXSTvaUvuu
+    about: Questions and help with WoR-flasher itself
+  - name: Windows on Raspberry support
+    url: https://worproject.com/contact
+    about: Problems with Windows, the drivers, or the UEFI firmware rather than the flasher
+  - name: Windows on Raspberry FAQ
+    url: https://worproject.com/faq
+    about: Covers the 3 GB RAM limit, supported Windows versions, and driver status
