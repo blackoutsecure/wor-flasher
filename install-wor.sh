@@ -368,27 +368,38 @@ list_bids() { #input: '10' or '11', Output: build IDs for ESD releases. Format: 
     echo "$versions" | sed -n '/version number="11"/,/version number="10"/p' | grep 'release build' | sed 's/^<release build="//g' | sed 's/"><date>/ (/g' | sed 's/<\/date>.*/)/g' | sed 's/.....$/-&/' | sed 's/...$/-&/'
   elif [ "$1" == 10 ];then
     #List Windows 10 versions
-    echo "$versions" | sed -n '/version number="10"/,/release build="17134.112"/p' | grep 'release build' | sed 's/^<release build="//g' | sed 's/"><date>/ (/g' | sed 's/<\/date>.*/)/g' | sed 's/.....$/-&/' | sed 's/...$/-&/'
+    echo "$versions" | sed -n '/version number="10"/,/release build="'"$WIN10_OLDEST_BUILD"'"/p' | grep 'release build' | sed 's/^<release build="//g' | sed 's/"><date>/ (/g' | sed 's/<\/date>.*/)/g' | sed 's/.....$/-&/' | sed 's/...$/-&/'
   else
     error "list_bids(): unrecognized OS version. Expected '10' or '11'."
   fi
 }
 
-get_bid() { #input: '10' or '11', Output: latest build ID
-  if [ "$1" == 11 ];then
-    list_bids 11 | awk '{print $1}' | head -n1
-  elif [ "$1" == 10 ];then
-    list_bids 10 | awk '{print $1}' | head -n1
-  else
-    error "get_bid(): unrecognized OS version. Expected '10' or '11'."
+cpu_supports_bid() { #input: build id. Exit 0 if the target Pi's CPU can run this Windows build.
+  #Pi3 (Cortex-A53) and Pi4 (Cortex-A72) are ARMv8.0. Builds past ARMV80_MAX_BUILD need ARMv8.1 atomics.
+  local major="$(echo "$1" | awk -F. '{print $1}')"
+  [ -z "$major" ] && return 0
+  if [ "$RPI_MODEL" == 3 ] || [ "$RPI_MODEL" == 4 ];then
+    [ "$major" -gt "$ARMV80_MAX_BUILD" ] && return 1
   fi
+  return 0
+}
+
+list_bids_supported() { #input: '10' or '11', Output: same as list_bids, minus builds the target Pi cannot run
+  local line
+  for line in $(list_bids "$1") ;do
+    cpu_supports_bid "$(echo "$line" | awk '{print $1}')" && echo "$line"
+  done
+}
+
+get_bid() { #input: '10' or '11', Output: newest build ID the target Pi's CPU can run
+  list_bids_supported "$1" | awk '{print $1}' | head -n1
 }
 
 get_os_name() { #input: build id, Output: either "Windows 10 build $BID" or "Windows 11 build $BID"
   local BID="$1"
-  if [ "$(echo "$BID" | awk -F. '{print $1}')" -ge 22000 ];then
+  if [ "$(echo "$BID" | awk -F. '{print $1}')" -ge "$WIN11_MIN_BUILD" ];then
     echo "Windows 11 build $BID"
-  elif [ "$(echo "$BID" | awk -F. '{print $1}')" -lt 22000 ];then
+  elif [ "$(echo "$BID" | awk -F. '{print $1}')" -lt "$WIN11_MIN_BUILD" ];then
     echo "Windows 10 build $BID"
   fi
 }
@@ -442,6 +453,25 @@ If this error persists, contact Botspot - the WoR-flasher developer."
 
 #Determine the directory to download windows component files to
 [ -z "$DL_DIR" ] && DL_DIR="$HOME/wor-flasher-files"
+
+#UEFI firmware selection.
+#Set UEFI_USE_LATEST=0 to use the pinned versions below instead of querying GitHub for the newest release.
+[ -z "$UEFI_USE_LATEST" ] && UEFI_USE_LATEST=1
+
+#Pinned versions. Used when UEFI_USE_LATEST=0, or as a fallback when the GitHub API is unreachable.
+[ -z "$UEFI_VER_PI3" ] && UEFI_VER_PI3='v1.39'
+[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.52'
+[ -z "$UEFI_VER_PI5" ] && UEFI_VER_PI5='v0.3'
+
+#Last Windows build that boots on the ARMv8.0 Pi3/Pi4; newer ones use ARMv8.1 atomics.
+#Source: https://worproject.com/faq "Does Windows 11 work?"
+[ -z "$ARMV80_MAX_BUILD" ] && ARMV80_MAX_BUILD=25163
+
+#Windows build reference points.
+[ -z "$WIN11_MIN_BUILD" ] && WIN11_MIN_BUILD=22000        #builds at or above this are Windows 11, below are Windows 10
+[ -z "$WIN10_OLDEST_BUILD" ] && WIN10_OLDEST_BUILD='17134.112' #marks the end of the Windows 10 section of worproject.com's version list
+[ -z "$EXAMPLE_BID" ] && EXAMPLE_BID='22621.525'          #shown to the user as an example of the expected build-number format
+[ -z "$ARMV80_SAFE_BID" ] && ARMV80_SAFE_BID='22631.2861' #newest Windows 11 build suggested for the ARMv8.0 Pi3/Pi4
 
 #Determine the directory that contains this script
 [ -z "$DIRECTORY" ] && DIRECTORY="$(readlink -f "$(dirname "$0")")"
@@ -563,14 +593,14 @@ $([ $num_opts == 3 ] && echo 'Enter \e[96m1\e[0m, \e[96m2\e[0m or \e[96m3\e[0m: 
               
               #versions=''
               list_bids 10 >/dev/null #set $versions globally so it is not downloaded twice
-              list_bids 11 | sed 's/ /'$(echo -e '\e[0m')' /g' | sed 's/^/Windows 11 '$(echo -e '\e[96m')'/g'
-              list_bids 10 | sed 's/ /'$(echo -e '\e[0m')' /g' | sed 's/^/Windows 10 '$(echo -e '\e[96m')'/g'
+              list_bids_supported 11 | sed 's/ /'$(echo -e '\e[0m')' /g' | sed 's/^/Windows 11 '$(echo -e '\e[96m')'/g'
+              list_bids_supported 10 | sed 's/ /'$(echo -e '\e[0m')' /g' | sed 's/^/Windows 10 '$(echo -e '\e[96m')'/g'
               
               read -p $'\nFrom the list above, enter a Windows version number: ' BID
-              if (list_bids 11 ; list_bids 10) | awk '{print $1}' | grep -qFx "$BID" ;then
+              if (list_bids_supported 11 ; list_bids_supported 10) | awk '{print $1}' | grep -qFx "$BID" ;then
                 break #exit the while loop
               else
-                echo_red "Invalid answer. Expected to see something like '22621.525'. Try again."
+                echo_red "Invalid answer. Expected to see something like '${EXAMPLE_BID}'. Try again."
               fi
               ;;
               
@@ -592,7 +622,7 @@ $([ $num_opts == 3 ] && echo 'Enter \e[96m1\e[0m, \e[96m2\e[0m or \e[96m3\e[0m: 
                   #Infer Build ID based on filename of ISO
                   BID="$(basename "$SOURCE_FILE" | tr '_ -' '\n' | grep -E -m 1 '^[0-9]{5}')"
                   if [ -z "$BID" ];then
-                    read -p $'\nTo store files from this ISO, this script needs to know the Windows build number of this ISO.\nPlease enter it now: (example: 22621.525) ' BID
+                    read -p $'\nTo store files from this ISO, this script needs to know the Windows build number of this ISO.\nPlease enter it now: (example: '"$EXAMPLE_BID"') ' BID
                     [ -z "$BID" ] && error "Cannot proceed without a build number for your ISO file."
                   fi
                   #Infer language based on filename of ISO
@@ -707,6 +737,15 @@ Enter \e[96m1\e[0m, \e[96m2\e[0m, or \e[96m3\e[0m: "
   done
 elif [ "$RPI_MODEL" != 3 ] && [ "$RPI_MODEL" != 4 ] && [ "$RPI_MODEL" != 5 ];then
   error "Unknown value for RPI_MODEL. Expected '3' or '4' or '5'."
+fi
+}
+
+{ #make sure the chosen Windows build can run on the chosen Raspberry Pi
+if ! cpu_supports_bid "$BID" ;then
+  error "$(get_os_name "$BID") cannot run on a Raspberry Pi ${RPI_MODEL}.
+Builds newer than ${ARMV80_MAX_BUILD} require an ARMv8.1 CPU, but the Pi 3 and Pi 4 are ARMv8.0.
+Those builds hang immediately after the bootloader hands off to Windows.
+Choose Windows 10, or a Windows 11 build such as ${ARMV80_SAFE_BID}."
 fi
 }
 
@@ -869,27 +908,33 @@ if [ ! -d "$PWD/pi${RPI_MODEL}-uefipackage" ];then
   #from: https://github.com/pftf/RPi4/releases
   #example download URL (will be outdated) https://github.com/pftf/RPi4/releases/download/v1.29/RPi4_UEFI_Firmware_v1.29.zip
   
-  # Attempt to query latest release URL via GitHub API
-  if [ "$RPI_MODEL" == "4" ] || [ "$RPI_MODEL" == "3" ]; then
-    URL="$(wget -qO- "https://api.github.com/repos/pftf/RPi${RPI_MODEL}/releases/latest" 2>/dev/null | grep '"browser_download_url":' | grep -o 'https://[^"]*RPi[34]_UEFI_Firmware_[^"]*\.zip' | head -n1)"
-  elif [ "$RPI_MODEL" == "5" ]; then
-    URL="$(wget -qO- "https://api.github.com/repos/worproject/rpi5-uefi/releases/latest" 2>/dev/null | grep '"browser_download_url":' | grep -o 'https://[^"]*\.zip' | head -n1)"
+  case "$RPI_MODEL" in
+    5)
+      UEFI_REPO='worproject/rpi5-uefi'
+      UEFI_VER="$UEFI_VER_PI5"
+      PINNED_URL="https://github.com/${UEFI_REPO}/releases/download/${UEFI_VER}/RPi5_UEFI_Release_${UEFI_VER}.zip"
+      ;;
+    4)
+      UEFI_REPO='pftf/RPi4'
+      UEFI_VER="$UEFI_VER_PI4"
+      PINNED_URL="https://github.com/${UEFI_REPO}/releases/download/${UEFI_VER}/RPi4_UEFI_Firmware_${UEFI_VER}.zip"
+      ;;
+    3)
+      UEFI_REPO='pftf/RPi3'
+      UEFI_VER="$UEFI_VER_PI3"
+      PINNED_URL="https://github.com/${UEFI_REPO}/releases/download/${UEFI_VER}/RPi3_UEFI_Firmware_${UEFI_VER}.zip"
+      ;;
+  esac
+  
+  URL=''
+  if [ "$UEFI_USE_LATEST" == 1 ];then
+    #the 'latest' endpoint skips pre-releases, which upstream uses to mark known-bad builds
+    URL="$(wget -qO- "https://api.github.com/repos/${UEFI_REPO}/releases/latest" 2>/dev/null | grep '"browser_download_url":' | grep -o 'https://[^"]*\.zip' | head -n1)"
+    [ -z "$URL" ] && echo_red "Failed to query the latest UEFI release for ${UEFI_REPO}. Falling back to pinned version ${UEFI_VER}."
   fi
-
-  # Fallback to known working releases if API lookup returned empty
-  if [ -z "$URL" ]; then
-    case "$RPI_MODEL" in
-      5)
-        URL='https://github.com/worproject/rpi5-uefi/releases/download/v0.3/RPi5_UEFI_Release_v0.3.zip'
-        ;;
-      4)
-        URL='https://github.com/pftf/RPi4/releases/download/v1.35/RPi4_UEFI_Firmware_v1.35.zip'
-        ;;
-      3)
-        URL='https://github.com/pftf/RPi3/releases/download/v1.39/RPi3_UEFI_Firmware_v1.39.zip'
-        ;;
-    esac
-  fi
+  [ -z "$URL" ] && URL="$PINNED_URL"
+  
+  status "Using UEFI firmware: $URL"
   
   wget -O "$PWD/RPi${RPI_MODEL}_UEFI_Firmware.zip" "$URL" || error "Failed to download UEFI package"
   

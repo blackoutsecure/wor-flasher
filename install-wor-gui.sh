@@ -104,8 +104,8 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
           'enter exact')
             list_bids 10 >/dev/null #set $versions globally so it is not downloaded twice
             while [ -z "$BID" ];do
-              BID="$(echo -n "$(list_bids 11 | sed 's/^/Windows 11 /g'
-              list_bids 10 | sed 's/^/Windows 10 /g')" | sed 's/^/FALSE\n/g' | yad "${yadflags[@]}" --width=420 \
+              BID="$(echo -n "$(list_bids_supported 11 | sed 's/^/Windows 11 /g'
+              list_bids_supported 10 | sed 's/^/Windows 10 /g')" | sed 's/^/FALSE\n/g' | yad "${yadflags[@]}" --width=420 \
                 --list --radiolist --column=chk:CHK --column=human --no-headers --print-column=2 --no-selection \
                 --text=$'Choose version of Windows:' \
                 --button='<b>Next</b>':0)"
@@ -140,7 +140,7 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
               BID="$(basename "$SOURCE_FILE" | tr '_ -' '\n' | grep -E -m 1 '^[0-9]{5}')"
               if [ -z "$BID" ];then
                 BID="$(yad --form --field= '' "${yadflags[@]}" \
-                  --text='To store files from this ISO, this script needs to know the Windows build number of this ISO.\nPlease enter it now: (example: 22621.525)' \
+                  --text='To store files from this ISO, this script needs to know the Windows build number of this ISO.\nPlease enter it now: (example: '"$EXAMPLE_BID"')' \
                   --button="<b>OK</b>":0)"
                 [ -z "$BID" ] && error "Cannot proceed without a build number for your ISO file."
               fi
@@ -287,12 +287,12 @@ echo "DEVICE: $DEVICE"
 }
 
 { #choose if device is large enough to install windows on itself
-if [ "$(get_size_raw "$DEVICE")" -lt $((7*1024*1024*1024)) ];then
-  #if less than 7gb
-  error "Drive $DEVICE is smaller than 7GB and cannot be used."
+if [ "$(get_size_raw "$DEVICE")" -lt $((8*1024*1024*1024)) ];then
+  #matches the minimum enforced by install-wor.sh
+  error "Drive $DEVICE is smaller than 8GB and cannot be used."
 elif [ "$(get_size_raw "$DEVICE")" -lt $((25*1024*1024*1024)) ];then
   #if less than 25gb
-  echo "Drive $device is too small to install windows on itself. Using recovery-disk mode to install Windows on other larger devices."
+  echo "Drive $DEVICE is too small to install windows on itself. Using recovery-disk mode to install Windows on other larger devices."
   CAN_INSTALL_ON_SAME_DRIVE=0
 else
   #larger than 25gb
