@@ -19,22 +19,45 @@ TEST_UID="${LINUX_TEST_UID:-$(id -u)}"
 TEST_GID="${LINUX_TEST_GID:-$(id -g)}"
 CONTAINER_TEST_DIR="${LINUX_TEST_DIR:-/tmp/wor-flasher-test-workspace}"
 
-if ! command -v docker >/dev/null ;then
-  echo "SKIP: Docker is not installed, so Linux loop-device integration tests cannot run on this host."
+PASSED=0
+FAILED=0
+SKIPPED=0
+
+pass() { printf '  \e[92mPASS\e[0m  %s\n' "$1"; PASSED=$((PASSED+1)); }
+fail() { printf '  \e[91mFAIL\e[0m  %s\n' "$1"; FAILED=$((FAILED+1)); }
+skip() { printf '  \e[93mSKIP\e[0m  %s\n' "$1"; SKIPPED=$((SKIPPED+1)); }
+info() { printf '\e[96m%s\e[0m\n' "$1"; }
+
+summary() {
+  echo
+  printf 'passed %s, failed %s, skipped %s\n' "$PASSED" "$FAILED" "$SKIPPED"
+  [ "$FAILED" -gt 0 ] && exit 1
   exit 0
+}
+
+info "== Docker preflight =="
+
+if ! command -v docker >/dev/null ;then
+  skip "Docker is not installed; Linux loop-device integration tests cannot run on this host"
+  summary
 fi
+pass "Docker command is available"
 
 if ! docker info >/dev/null 2>&1 ;then
-  echo "SKIP: Docker is installed but not available, so Linux loop-device integration tests cannot run on this host."
-  exit 0
+  skip "Docker is installed but not available; Linux loop-device integration tests cannot run on this host"
+  summary
 fi
+pass "Docker daemon is available"
 
 if ! docker run --rm "$IMAGE" true >/dev/null 2>&1 ;then
-  echo "SKIP: Docker cannot start the $IMAGE container, so Linux loop-device integration tests cannot run on this host."
-  exit 0
+  skip "Docker cannot start the $IMAGE container; Linux loop-device integration tests cannot run on this host"
+  summary
 fi
+pass "Docker can start $IMAGE"
 
-docker run --rm --privileged \
+info "== Linux integration container =="
+
+if docker run --rm --privileged \
   -v "$REPO_DIR:/work" \
   -w /work \
   -e NO_UPDATE=1 \
@@ -61,4 +84,10 @@ docker run --rm --privileged \
     chown -R "$TEST_UID:$TEST_GID" "$CONTAINER_TEST_DIR" 2>/dev/null || true
     cd /work
     sudo -E -H -u "$user_name" env WOR_FLASHER_CONTAINER_TEST=1 SKIP_PACKAGE_INSTALL=1 TEST_DIR="$CONTAINER_TEST_DIR" ./tests/run-tests.sh "$@"
-  ' bash "$@"
+  ' bash "$@" ;then
+  pass "Linux integration container completed"
+else
+  fail "Linux integration container failed"
+fi
+
+summary
