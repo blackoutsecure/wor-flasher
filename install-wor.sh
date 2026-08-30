@@ -239,7 +239,11 @@ package_available() { #determine if the specified package-name exists in a repos
   local package="$1"
   [ -z "$package" ] && error "package_available(): no package name specified!"
   #using grep to do this is nearly instantaneous, rather than apt-cache which takes several seconds
-  grep -rqx "Package: $package" /var/lib/apt/lists --exclude="lock" --exclude-dir="partial" 2>/dev/null
+  grep -rqx "Package: $package" /var/lib/apt/lists --exclude="lock" --exclude-dir="partial" 2>/dev/null && return 0
+  #the grep above cannot read compressed indexes, which apt uses when Acquire::GzipIndexes is set
+  local candidate
+  candidate="$(apt-cache policy "$package" 2>/dev/null | awk '/Candidate:/{print $2}')"
+  [ ! -z "$candidate" ] && [ "$candidate" != '(none)' ]
 }
 
 package_installed() { #exit 0 if $1 package is installed, otherwise exit 1
