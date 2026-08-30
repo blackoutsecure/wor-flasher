@@ -15,6 +15,7 @@ script_dir() {
 pass() { printf '  \e[92mPASS\e[0m  %s\n' "$1"; PASSED=$((PASSED+1)); }
 fail() { printf '  \e[91mFAIL\e[0m  %s\n' "$1"; FAILED=$((FAILED+1)); }
 skip() { printf '  \e[93mSKIP\e[0m  %s\n' "$1"; SKIPPED=$((SKIPPED+1)); }
+progress() { printf '  ... %s\n' "$1"; }
 info() { printf '\e[96m%s\e[0m\n' "$1"; }
 die()  { printf '\e[91m%s\e[0m\n' "$1" 1>&2; exit 1; }
 

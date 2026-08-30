@@ -663,7 +663,7 @@ if [ -e "$DIRECTORY" ] && [ "$NO_UPDATE" != 1 ] && command -v git >/dev/null && 
 
       if git fetch --quiet "$UPDATE_REPO_URL" "$UPDATE_REF" && git merge --ff-only FETCH_HEAD ;then
         status "Update finished. Reloading script..."
-        "$0" "$@"
+        NO_UPDATE=1 "$0" "$@"
         exit $?
       else
         warning "Automatic update failed. Continuing..."

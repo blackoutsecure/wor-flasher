@@ -36,6 +36,8 @@ fi
 pass "Docker can start $IMAGE"
 
 info "== Linux integration container =="
+progress "launching privileged $IMAGE container"
+progress "container will install test dependencies, then run ./tests/run-tests.sh"
 
 if docker run --rm --privileged \
   -v "$REPO_DIR:/work" \
@@ -49,9 +51,12 @@ if docker run --rm --privileged \
   bash -lc '
     set -euo pipefail
     export DEBIAN_FRONTEND=noninteractive
+    printf "  ... container: updating apt metadata\n"
     apt-get update -qq
+    printf "  ... container: installing test dependencies\n"
     apt-get install -y -qq --no-install-recommends \
       aria2 bc cabextract ca-certificates chntpw coreutils dosfstools exfat-fuse exfatprogs findutils gawk genisoimage git grep passwd parted sed shellcheck sudo udftools unzip util-linux wget wimtools yad
+    printf "  ... container: preparing test user %s:%s\n" "$TEST_UID" "$TEST_GID"
     if ! getent group "$TEST_GID" >/dev/null; then
       groupadd -g "$TEST_GID" wor-test
     fi
@@ -63,6 +68,7 @@ if docker run --rm --privileged \
     chmod 0440 /etc/sudoers.d/wor-test
     chown -R "$TEST_UID:$TEST_GID" "$CONTAINER_TEST_DIR" 2>/dev/null || true
     cd /work
+    printf "  ... container: starting nested run-tests.sh\n"
     sudo -E -H -u "$user_name" env WOR_FLASHER_CONTAINER_TEST=1 SKIP_PACKAGE_INSTALL=1 TEST_DIR="$CONTAINER_TEST_DIR" ./tests/run-tests.sh "$@"
   ' bash "$@" ;then
   pass "Linux integration container completed"
