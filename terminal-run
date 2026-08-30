@@ -16,6 +16,16 @@ error() {
   exit 1
 }
 
+resolve_path() {
+  if command -v realpath >/dev/null ;then
+    realpath "$1"
+  elif readlink -f "$1" >/dev/null 2>&1 ;then
+    readlink -f "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 #a private directory keeps the pid file path unpredictable to other local users
 temp_pid_dir="$(mktemp -d)" || error "terminal-run: failed to create a temporary directory."
 temp_pid_file="$temp_pid_dir/pid"
@@ -59,7 +69,7 @@ elif command -v qterminal >/dev/null ;then
   [ $DEBUG == 1 ] && echo qterminal
 
 elif command -v x-terminal-emulator >/dev/null ;then
-  "$(readlink -f "$(command -v x-terminal-emulator)")" -e bash -c "$commands" &
+  "$(resolve_path "$(command -v x-terminal-emulator)")" -e bash -c "$commands" &
   [ $DEBUG == 1 ] && echo x-terminal-emulator
 
 else

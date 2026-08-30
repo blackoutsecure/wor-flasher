@@ -3,10 +3,32 @@
 #Written by Botspot
 #This script is a GUI front-end for the install-wor.sh script
 
+gui_error_dialog() { #Input: error message
+  local plain
+  plain="$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
+  if command -v zenity >/dev/null ;then
+    zenity --error --title "$(basename "$0")" --width 360 --text "$plain"
+  elif command -v osascript >/dev/null ;then
+    osascript -e 'on run argv' -e 'display alert (item 1 of argv) message (item 2 of argv) as critical' -e 'end run' "$(basename "$0")" "$plain" >/dev/null
+  fi
+}
+
 error() { #Input: error message
   echo -e "\\e[91m$1\\e[39m"
-  zenity --error --title "$(basename "$0")" --width 360 --text "$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
+  gui_error_dialog "$1"
   exit 1
+}
+
+open_url() { #Input: url
+  if command -v x-www-browser >/dev/null ;then
+    x-www-browser "$1" &
+  elif command -v xdg-open >/dev/null ;then
+    xdg-open "$1" &
+  elif command -v open >/dev/null ;then
+    open "$1" &
+  else
+    error "Failed to locate a browser opener for $1"
+  fi
 }
 
 loading_dialog() { #display a dialog to say something is loading
@@ -20,7 +42,7 @@ loading_dialog() { #display a dialog to say something is loading
 RUN_MODE=gui #this variable is detected by install-wor.sh to display gui error messages
 
 #Determine the directory that contains this script
-[ -z "$DIRECTORY" ] && DIRECTORY="$(readlink -f "$(dirname "$0")")"
+[ -z "$DIRECTORY" ] && DIRECTORY="$(cd "$(dirname "$0")" && pwd -P)"
 [ ! -e "$DIRECTORY" ] && error "install-wor-gui.sh: Failed to determine the directory that contains this script. Try running this script with full paths."
 echo "DIRECTORY: $DIRECTORY"
 
@@ -52,7 +74,7 @@ yad "${yadflags[@]}" --buttons-layout=spread \
     --button='<b>Proceed with WoR-Flasher</b>':1 \
     --button='<b>Check out the BVM project</b>':0
 if [ "$?" == 0 ];then
-  x-www-browser 'https://github.com/Botspot/bvm' &
+  open_url 'https://github.com/Botspot/bvm'
   exit 0
 fi
 
@@ -132,7 +154,7 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
             elif [[ "$SOURCE_FILE" != *'.ISO' ]] && [[ "$SOURCE_FILE" != *'.iso' ]];then
               yad "${yadflags[@]}" --text="This file does not have a .ISO file extension."
               SOURCE_FILE=''
-            elif [ "$(du -b "$SOURCE_FILE" | awk '{print $1}')" -lt $((3*1024*1024*1024)) ];then
+            elif [ "$(get_file_size "$SOURCE_FILE")" -lt $((3*1024*1024*1024)) ];then
               yad "${yadflags[@]}" --text="This file is smaller than 3GB and is probably incomplete."
               SOURCE_FILE=''
             else #ISO file looks good
@@ -286,19 +308,48 @@ fi
 echo "DEVICE: $DEVICE"
 }
 
-{ #choose if device is large enough to install windows on itself
-case "$(drive_capability "$DEVICE")" in
+{ #choose installation mode from the detected drive capacity
+device_capability="$(drive_capability "$DEVICE")"
+case "$device_capability" in
   too-small)
     error "Drive $DEVICE is smaller than 8GB and cannot be used."
     ;;
-  recovery)
-    echo "Drive $DEVICE is too small to install windows on itself. Using recovery-disk mode to install Windows on other larger devices."
-    CAN_INSTALL_ON_SAME_DRIVE=0
+  recovery|install)
+    true
     ;;
-  install)
-    CAN_INSTALL_ON_SAME_DRIVE=1
+  *)
+    error "Unexpected drive capability '$device_capability' for $DEVICE"
     ;;
 esac
+
+if [ ! -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
+  if [ "$CAN_INSTALL_ON_SAME_DRIVE" != 0 ] && [ "$CAN_INSTALL_ON_SAME_DRIVE" != 1 ];then
+    error "Unknown value for CAN_INSTALL_ON_SAME_DRIVE. Expected '0' or '1'."
+  elif [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && [ "$device_capability" != install ];then
+    error "Drive $DEVICE is smaller than 25GB and cannot be used for self-installation.\nPlease set CAN_INSTALL_ON_SAME_DRIVE=0"
+  fi
+elif [ "$device_capability" == recovery ];then
+  echo "Drive $DEVICE is too small to install Windows to itself. Using recovery-drive mode to install Windows on another larger device."
+  CAN_INSTALL_ON_SAME_DRIVE=0
+else
+  while [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];do
+    install_mode="$(echo -e "TRUE\ninstall\nInstallation drive\nInstall Windows onto this 25 GB+ drive\nFALSE\nrecovery\nRecovery drive\nInstall Windows onto another >16 GB drive" | yad "${yadflags[@]}" --width=520 \
+      --list --radiolist --column=chk:CHK --column=value:HD --column=Mode --column=Description --no-headers --print-column=2 --no-selection \
+      --text=$'<big><b>Installation mode</b></big>\nThis drive is large enough for either mode. Choose what you want it to do:' \
+      --button='<b>Next</b>':0)"
+    button=$?
+    [ $button != 0 ] && exit 1
+
+    case "$install_mode" in
+      install)
+        CAN_INSTALL_ON_SAME_DRIVE=1
+        ;;
+      recovery)
+        CAN_INSTALL_ON_SAME_DRIVE=0
+        ;;
+    esac
+  done
+fi
 echo "CAN_INSTALL_ON_SAME_DRIVE: $CAN_INSTALL_ON_SAME_DRIVE"
 }
 
@@ -451,7 +502,7 @@ fi
 { #confirmation dialog and edit config.txt
 
 window_text="- Target drive: <b>$DEVICE</b> ($(lsblk -dno SIZE "$DEVICE" | tr -d ' ')B $(get_device_name "$DEVICE"))
-- $(echo "$CAN_INSTALL_ON_SAME_DRIVE" | sed 's/1/Drive is larger than 25 GB - can install Windows on itself/g' | sed 's/0/Drive is smaller than 25 GB - can install Windows on other drives/g')
+- Installation mode: <b>$(echo "$CAN_INSTALL_ON_SAME_DRIVE" | sed 's/1/Install Windows onto this drive/g' | sed 's/0/Recovery drive for another >16 GB drive/g')</b>
 - Target hardware: <b>Raspberry Pi $RPI_MODEL</b>
 - Operating system: <b>$(get_os_name "$BID" | sed "s/ build / ($WIN_LANG) arm64 build /g")</b>"
 

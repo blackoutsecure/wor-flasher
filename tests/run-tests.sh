@@ -13,7 +13,21 @@
 
 ######## Defaults. Every one can be overridden from the environment.
 
-REPO_DIR="$(readlink -f "$(dirname "$0")/..")"
+script_dir() {
+  if command -v realpath >/dev/null ;then
+    realpath "$1"
+  else
+    (cd "$1" && pwd -P)
+  fi
+}
+
+REPO_DIR="$(script_dir "$(dirname "$0")/..")"
+
+#install-wor.sh runs 'git restore .' before self-updating, which would discard local edits.
+#Exporting this here covers every invocation below, including the sourced library functions.
+#The "Self-updater" test further down deliberately overrides this to exercise the real thing,
+#but only against a disposable clone, never against this working tree.
+export NO_UPDATE=1
 
 #Everything this script creates lives here. It is listed in .gitignore.
 [ -z "$TEST_DIR" ] && TEST_DIR="$REPO_DIR/.test-workspace"
@@ -42,7 +56,6 @@ LAST_CODE=0
 KEEP=0
 MODE=suite
 SKIP_ESD=1
-CREATED_NO_UPDATE=0
 
 pass() { printf '  \e[92mPASS\e[0m  %s\n' "$1"; PASSED=$((PASSED+1)); }
 fail() { printf '  \e[91mFAIL\e[0m  %s\n' "$1"; FAILED=$((FAILED+1)); }
@@ -51,6 +64,7 @@ info() { printf '\e[96m%s\e[0m\n' "$1"; }
 die()  { printf '\e[91m%s\e[0m\n' "$1" 1>&2; exit 1; }
 
 detach_all() {
+  command -v losetup >/dev/null || return 0
   local dev
   for dev in "${LOOP_DEVICES[@]}" ;do
     sudo losetup -d "$dev" 2>/dev/null
@@ -70,7 +84,34 @@ cleanup() {
   rm -rf "$TEST_DIR"
   #install-wor.sh writes this beside itself whenever it is sourced or run
   rm -rf "$REPO_DIR/cache"
-  [ "$CREATED_NO_UPDATE" == 1 ] && rm -f "$REPO_DIR/no-update"
+}
+
+static_checks() {
+  info "== Static checks =="
+  for f in install-wor.sh install-wor-gui.sh terminal-run ;do
+    bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
+  done
+
+  if command -v shellcheck >/dev/null ;then
+    shellcheck --severity=error "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/terminal-run >/dev/null 2>&1 \
+      && pass "shellcheck reports no errors" || fail "shellcheck reports errors"
+  else
+    skip "shellcheck is not installed"
+  fi
+
+  deprecated_update_file='no-''update'
+  if grep -RIn --exclude-dir=.git --exclude-dir=.test-workspace --exclude='*.svg' "$deprecated_update_file" "$REPO_DIR" >/dev/null 2>&1 ;then
+    fail "deprecated updater sentinel file hook is not referenced"
+  else
+    pass "deprecated updater sentinel file hook is not referenced"
+  fi
+}
+
+summary() {
+  echo
+  printf 'passed %s, failed %s, skipped %s\n' "$PASSED" "$FAILED" "$SKIPPED"
+  [ "$FAILED" -gt 0 ] && exit 1
+  exit 0
 }
 
 make_disk() { #Input: size, name. Output: loop device path
@@ -95,14 +136,6 @@ require_tools() {
   [ -e /dev/loop-control ] || die "No /dev/loop-control, so loopback devices cannot be created here."
 }
 
-guard_self_update() {
-  #install-wor.sh runs 'git restore .' before updating itself, which would discard local edits
-  if [ ! -f "$REPO_DIR/no-update" ];then
-    touch "$REPO_DIR/no-update"
-    CREATED_NO_UPDATE=1
-  fi
-}
-
 stub_kernel_modules() {
   #containers have no /lib/modules, which install-wor.sh treats as a pending reboot
   local moddir="/lib/modules/$(uname -r)"
@@ -118,6 +151,13 @@ seed_winfiles() { #Input: build id. Makes install-wor.sh skip the multi-gigabyte
 
 run_flasher() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
   LAST_OUT="$(env DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
+  LAST_CODE=$?
+}
+
+run_flasher_with_input() { #Input: stdin text, then VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
+  local input="$1"
+  shift
+  LAST_OUT="$(printf '%b' "$input" | env DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
   LAST_CODE=$?
 }
 
@@ -147,9 +187,15 @@ if [ "$MODE" == clean ];then
   exit 0
 fi
 
+static_checks
+
+if [ "$(uname -s)" != Linux ];then
+  skip "integration tests require Linux loop devices"
+  summary
+fi
+
 trap cleanup EXIT
 require_tools
-guard_self_update
 stub_kernel_modules
 mkdir -p "$TEST_DL_DIR"
 
@@ -179,18 +225,6 @@ if [ "$MODE" == walkthrough ] || [ "$MODE" == gui ];then
 fi
 
 ######## Automated suite
-
-info "== Static checks =="
-for f in install-wor.sh install-wor-gui.sh terminal-run ;do
-  bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
-done
-
-if command -v shellcheck >/dev/null ;then
-  shellcheck --severity=error "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/terminal-run >/dev/null 2>&1 \
-    && pass "shellcheck reports no errors" || fail "shellcheck reports errors"
-else
-  skip "shellcheck is not installed"
-fi
 
 info "== Library functions =="
 #install-wor.sh derives DIRECTORY from $0, which is this harness, so point it at the repo first
@@ -285,6 +319,15 @@ expect_fail "a drive under 8GB is refused"
 run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_RECOVERY" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
 expect_fail "self-install is refused on a recovery-sized drive"
 
+run_flasher_with_input '' BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_RECOVERY" USE_CACHE=2
+expect_ok "recovery-sized drive automatically uses recovery mode"
+expect_output "automatic recovery mode is recorded" "CAN_INSTALL_ON_SAME_DRIVE: 0"
+expect_no_output "recovery-sized drive does not ask for install mode" "Choose the installation mode"
+
+run_flasher_with_input '2\n' BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" USE_CACHE=2
+expect_ok "large drive can be used as a recovery drive"
+expect_output "large-drive recovery choice is recorded" "CAN_INSTALL_ON_SAME_DRIVE: 0"
+
 run_flasher BID="$GOOD_BID" RPI_MODEL=9 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
 expect_fail "an unknown RPI_MODEL is rejected"
 
@@ -312,6 +355,43 @@ else
   pass "CONFIG_TXT is not executed as code"
 fi
 
+info "== Self-updater =="
+if ! command -v git >/dev/null || ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
+  skip "self-updater tests need a git checkout"
+else
+  branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
+  if [ "$branch" == HEAD ];then
+    skip "self-updater tests need a checked-out branch, not a detached HEAD"
+  else
+    #a disposable clone of the branch actually being worked on - never runs against $REPO_DIR itself
+    clone_dir="$TEST_DIR/self-update-clone"
+    rm -rf "$clone_dir"
+    if ! git clone -q --branch "$branch" "$REPO_DIR" "$clone_dir" 2>/dev/null ;then
+      fail "could not clone $REPO_DIR (branch $branch) to test the self-updater"
+    else
+      #point the clone's self-updater at this same repo/branch, so it dynamically pulls whatever is actually being worked on
+      update_env=(UPDATE_REPO_URL="$REPO_DIR" UPDATE_REF="$branch" NO_UPDATE=0 DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2)
+
+      LAST_OUT="$(env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
+      LAST_CODE=$?
+      expect_no_output "already level with $branch: self-updater stays quiet" "Auto-updating wor-flasher"
+
+      #fall one commit behind $REPO_DIR's $branch, so the clone actually has something to pull
+      if git -C "$clone_dir" reset -q --hard HEAD~1 2>/dev/null ;then
+        LAST_OUT="$(env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
+        LAST_CODE=$?
+        expect_output "behind $branch: self-updater detects the update" "Auto-updating wor-flasher"
+        expect_output "behind $branch: self-updater pulls and reloads" "Reloading script"
+        [ "$(git -C "$clone_dir" rev-parse HEAD)" == "$(git -C "$REPO_DIR" rev-parse "$branch")" ] \
+          && pass "self-updater fast-forwarded the clone to $branch" \
+          || fail "self-updater did not fast-forward the clone to $branch"
+      else
+        skip "$branch has no earlier commit to fall behind"
+      fi
+    fi
+  fi
+fi
+
 info "== terminal-run =="
 if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ];then
   skip "terminal-run needs a display"
@@ -323,6 +403,4 @@ fi
 ######## Summary
 
 echo
-printf 'passed %s, failed %s, skipped %s\n' "$PASSED" "$FAILED" "$SKIPPED"
-[ "$FAILED" -gt 0 ] && exit 1
-exit 0
+summary

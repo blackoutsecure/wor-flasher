@@ -1,9 +1,6 @@
 # install-wor.sh creates this next to the scripts to cache worproject.com responses
 cache/
 
-# Disables the self-updater while developing. See Contributing in README.md
-no-update
-
 # Working directory for tests/run-tests.sh: loopback disk images and downloads
 .test-workspace/
 
@@ -13,9 +10,14 @@ driverpackage/
 pi[345]-uefipackage/
 winfiles_*/
 *.zip
+*.iso
+*.ISO
 *.esd
+*.ESD
 *.wim
+*.WIM
 
 # OS clutter
 .DS_Store
+._*
 Thumbs.db

@@ -3,9 +3,19 @@
 #Written by Botspot
 #This script is an automation for the tutorial that can be found here: https://worproject.com/guides/how-to-install/from-other-os
 
+gui_error_dialog() { #Input: error message
+  local plain
+  plain="$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
+  if command -v zenity >/dev/null ;then
+    zenity --error --title "$(basename "$0")" --width 360 --text "$plain"
+  elif command -v osascript >/dev/null ;then
+    osascript -e 'on run argv' -e 'display alert (item 1 of argv) message (item 2 of argv) as critical' -e 'end run' "$(basename "$0")" "$plain" >/dev/null
+  fi
+}
+
 error() { #Input: error message
   echo -e "\e[91m$1\e[0m" 1>&2
-  [ "$RUN_MODE" == gui ] && zenity --error --title "$(basename "$0")" --width 360 --text "$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
+  [ "$RUN_MODE" == gui ] && gui_error_dialog "$1"
   exit 1
 }
 
@@ -25,6 +35,52 @@ echo_green() { #announce the success of a major action
 
 echo_red() { #announce the failure of a nonfatal action
   echo -e "\e[91m$1\e[0m" 1>&2
+}
+
+resolve_path() { #Input: path. Output: absolute path, using GNU or BSD tools when available
+  [ -z "$1" ] && return 1
+  if command -v realpath >/dev/null ;then
+    realpath "$1" && return 0
+  fi
+  if readlink -f "$1" >/dev/null 2>&1 ;then
+    readlink -f "$1" && return 0
+  fi
+  if [ -d "$1" ];then
+    (cd "$1" && pwd -P)
+  else
+    local dir
+    local base
+    dir="$(dirname "$1")"
+    base="$(basename "$1")"
+    printf '%s/%s\n' "$(cd "$dir" && pwd -P)" "$base"
+  fi
+}
+
+require_linux_host() {
+  [ "$(uname -s)" == Linux ] && return 0
+  error "WoR-Flasher currently supports Linux hosts only.
+This host is $(uname -s). The flashing path needs Linux block-device and filesystem tools such as lsblk, findmnt, parted, mkfs.fat, mkfs.exfat, mount.exfat-fuse, modprobe and the /sys device tree.
+On macOS, use a Linux VM or Raspberry Pi OS/Debian/Ubuntu host with USB drive passthrough."
+}
+
+get_file_size() { #Input: file. Output: size in bytes, portable across GNU and BSD userlands
+  wc -c < "$1" | tr -d ' '
+}
+
+sha1_file() { #Input: file. Output: SHA1 hash
+  if command -v sha1sum >/dev/null ;then
+    sha1sum "$1" | awk '{print $1}'
+  else
+    shasum -a 1 "$1" | awk '{print $1}'
+  fi
+}
+
+sha256_file() { #Input: file. Output: SHA256 hash
+  if command -v sha256sum >/dev/null ;then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
 }
 
 wget() { #Intercept all wget commands. When possible, uses aria2c.
@@ -285,6 +341,7 @@ get_partition() { #Input: device & partition number. Output: partition /dev entr
   [ -z "$1" ] && error "get_partition(): no /dev device specified as"' $1'
   [ -z "$2" ] && error "get_partition(): no partition number specified as"' $2'
   [ ! -b "$1" ] && error "get_partition(): $1 is not a valid block device!"
+  command -v lsblk >/dev/null || error "get_partition(): lsblk is required. WoR-Flasher's flashing path currently supports Linux hosts only."
 
   if [ "$2" == 'all' ];then
     #special mode: return every partition if $2 is 'all'
@@ -329,6 +386,7 @@ get_device_name() { #get human-readable name of storage device: manufacturer and
 }
 
 get_size_raw() { #Input: device. Output: total size of device in bytes
+  command -v lsblk >/dev/null || error "get_size_raw(): lsblk is required. WoR-Flasher's flashing path currently supports Linux hosts only."
   lsblk -b --output SIZE -n -d "$1"
 }
 
@@ -346,7 +404,11 @@ drive_capability() { #Input: block device. Output: 'too-small', 'recovery' or 'i
 }
 
 get_space_free() { #Input: folder to check. Output: show many bytes can fit before the disk is full
-  df -B 1 "$1" --output=avail | tail -1 | tr -d ' '
+  if df -B 1 "$1" --output=avail >/dev/null 2>&1 ;then
+    df -B 1 "$1" --output=avail | tail -1 | tr -d ' '
+  else
+    df -Pk "$1" | awk 'NR==2 {print $4 * 1024}'
+  fi
 }
 
 cache_is_current() { #Input: folder, version token. Exit 0 if the cached folder can be reused.
@@ -363,6 +425,7 @@ mark_cache() { #Input: folder, version token. Records what was downloaded so cac
 }
 
 list_devs() { #Output: human-readable, colorized list of valid block devices to write to. Omits /dev/loop* and the root device. Returns code 1 if no drives found
+  [ -z "$ROOT_DEV" ] && detect_root_dev
   local IFS=$'\n'
   local exitcode=1
   for device in $(lsblk -I 8,179,259 -dno NAME | sed 's+^+/dev/+g' | grep -v loop | grep -vx "$ROOT_DEV") ;do
@@ -372,6 +435,17 @@ list_devs() { #Output: human-readable, colorized list of valid block devices to 
     fi
   done
   return $exitcode
+}
+
+detect_root_dev() { #Set ROOT_DEV to the Linux block device backing /
+  command -v findmnt >/dev/null || error "findmnt is required to detect the current boot drive. WoR-Flasher's flashing path currently supports Linux hosts only."
+  command -v lsblk >/dev/null || error "lsblk is required to detect the current boot drive. WoR-Flasher's flashing path currently supports Linux hosts only."
+  local root_source
+  local root_parent
+  root_source="$(findmnt -n -o SOURCE /)"
+  root_parent="$(lsblk -no pkname "$root_source")"
+  [ -z "$root_parent" ] && error "Failed to determine the current boot drive from $root_source."
+  ROOT_DEV="/dev/$root_parent"
 }
 
 list_langs() { #Output: colon-delimited list of languages. Format is <lang-code>:<lang-name>
@@ -433,6 +507,8 @@ get_os_name() { #input: build id, Output: either "Windows 10 build $BID" or "Win
 }
 
 setup() { #run safety checks and install packages
+  require_linux_host
+
   #check for internet connection
   echo -n "Checking for internet connection... "
   local errors
@@ -465,7 +541,7 @@ If this error persists, contact Botspot - the WoR-flasher developer."
   fi
 
   #install dependencies
-  install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc' || exit 1
+  install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc parted dosfstools unzip git' || exit 1
 
   #install exfat partition manipulation utility. exfatprogs replaces exfat-utils, but they cannot both be installed at once.
   if package_available exfatprogs && ! package_installed exfat-utils ;then
@@ -473,6 +549,8 @@ If this error persists, contact Botspot - the WoR-flasher developer."
   else
     install_packages exfat-utils || exit 1
   fi
+
+  [ -z "$ROOT_DEV" ] && detect_root_dev
 }
 
 #
@@ -517,25 +595,29 @@ If this error persists, contact Botspot - the WoR-flasher developer."
 [ -z "$ARMV80_SAFE_BID" ] && ARMV80_SAFE_BID='22631.2861' #newest Windows 11 build suggested for the ARMv8.0 Pi3/Pi4
 
 #Determine the directory that contains this script
-[ -z "$DIRECTORY" ] && DIRECTORY="$(readlink -f "$(dirname "$0")")"
+[ -z "$DIRECTORY" ] && DIRECTORY="$(resolve_path "$(dirname "$0")")"
 
 #clear the variable storing path to this script, if the folder does not contain a file named 'install-wor.sh'
 [ ! -f "${DIRECTORY}/install-wor.sh" ] && DIRECTORY=''
-
-#Determine what /dev/ block-device is the system's rootfs device. This drive is exempted from the list of available flashing options.
-ROOT_DEV="/dev/$(lsblk -no pkname "$(findmnt -n -o SOURCE /)")"
 IFS=$'\n'
 
-{ #check for updates and auto-update if the no-update files does not exist
-if [ -e "$DIRECTORY" ] && [ ! -f "${DIRECTORY}/no-update" ];then
+#Self-updater target: which repo/ref this script compares its local git commit against, and pulls from.
+[ -z "$UPDATE_REPO_URL" ] && UPDATE_REPO_URL='https://github.com/Botspot/wor-flasher'
+[ -z "$UPDATE_REF" ] && UPDATE_REF='HEAD' #the branch/ref on UPDATE_REPO_URL to compare against, e.g. HEAD or refs/heads/main
+
+#Set to 1 to skip the self-updater below, e.g. NO_UPDATE=1 ./install-wor.sh
+[ -z "$NO_UPDATE" ] && NO_UPDATE=0
+
+{ #check for updates and auto-update unless disabled via NO_UPDATE
+if [ -e "$DIRECTORY" ] && [ "$NO_UPDATE" != 1 ] && command -v git >/dev/null && git -C "$DIRECTORY" rev-parse --git-dir >/dev/null 2>&1 ;then
   prepwd="$PWD"
   cd "$DIRECTORY"
-  localhash="$(git rev-parse HEAD)"
-  latesthash="$(git ls-remote https://github.com/Botspot/wor-flasher HEAD | awk '{print $1}')"
+  local_commit="$(git rev-parse HEAD)" #commit this local checkout at $DIRECTORY is on
+  remote_commit="$(git ls-remote "$UPDATE_REPO_URL" "$UPDATE_REF" | awk '{print $1}')" #latest commit on UPDATE_REPO_URL/UPDATE_REF
 
-  if [ "$localhash" != "$latesthash" ] && [ ! -z "$latesthash" ] && [ ! -z "$localhash" ];then
+  if [ "$local_commit" != "$remote_commit" ] && [ ! -z "$remote_commit" ] && [ ! -z "$local_commit" ];then
     status "Auto-updating wor-flasher for the latest features and improvements..."
-    status "To disable this next time, create a file at ${DIRECTORY}/no-update"
+    status "To disable this next time, set NO_UPDATE=1"
     sleep 1
 
     (cd "$DIRECTORY"
@@ -559,6 +641,8 @@ mkdir -p "${DIRECTORY}/cache"
 
 [ "$1" == 'source' ] && return 0 #If being sourced, exit here at this point in the script
 #past this point, this script is being run, not sourced.
+
+require_linux_host
 
 #Ensure this script's parent directory is valid
 [ ! -e "$DIRECTORY" ] && error "$(basename "$0"): Failed to determine the directory that contains this script. Try running this script with full paths."
@@ -671,7 +755,7 @@ $([ $num_opts == 3 ] && echo 'Enter \e[96m1\e[0m, \e[96m2\e[0m or \e[96m3\e[0m: 
                 elif [[ "$SOURCE_FILE" != *'.ISO' ]] && [[ "$SOURCE_FILE" != *'.iso' ]];then
                   echo_red "This file does not have a .ISO file extension."
                   SOURCE_FILE=''
-                elif [ "$(du -b "$SOURCE_FILE" | awk '{print $1}')" -lt $((3*1024*1024*1024)) ];then
+                elif [ "$(get_file_size "$SOURCE_FILE")" -lt $((3*1024*1024*1024)) ];then
                   echo_red "This file is smaller than 3GB and is probably incomplete."
                   SOURCE_FILE=''
                 else #ISO file looks good
@@ -731,7 +815,7 @@ else
       error "Specified ISO file '$SOURCE_FILE' does not exist."
     elif [[ "$SOURCE_FILE" != *'.ISO' ]] && [[ "$SOURCE_FILE" != *'.iso' ]];then
       error "Specified ISO file '$SOURCE_FILE' does not have a .ISO file extension."
-    elif [ "$(du -b "$SOURCE_FILE" | awk '{print $1}')" -lt $((3*1024*1024*1024)) ];then
+    elif [ "$(get_file_size "$SOURCE_FILE")" -lt $((3*1024*1024*1024)) ];then
       error "Specified ISO file '$SOURCE_FILE' is smaller than 3GB and is probably incomplete."
     fi
 
@@ -831,11 +915,12 @@ fi
 }
 
 { #CAN_INSTALL_ON_SAME_DRIVE
-if [ "$(drive_capability "$DEVICE")" == too-small ];then
+device_capability="$(drive_capability "$DEVICE")"
+if [ "$device_capability" == too-small ];then
   error "Drive $DEVICE is smaller than 8GB and cannot be used."
 fi
 
-if [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ] && [ "$(drive_capability "$DEVICE")" == install ];then
+if [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ] && [ "$device_capability" == install ];then
   #Drive is >=25GB, so present the user with the option to make this a recovery drive or a full installation
 
   while true; do
@@ -859,31 +944,15 @@ Choose the installation mode (\e[96m1\e[0m or \e[96m2\e[0m): "
 
 elif [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
   #Drive is <25GB, so user's only choice is to make this a recovery drive
-
-  while true; do
-    echo -ne "\nDrive $DEVICE is too small to install Windows to itself. (25 GB is necessary)
-Would you like to:\n\e[96m1\e[0m) Exit
-\e[96m2\e[0m) Create a recovery drive to install Windows on other >16 GB drives
-Choose the installation mode (\e[96m1\e[0m or \e[96m2\e[0m): "
-    read reply
-    case $reply in
-      1)
-        error "exited"
-        ;;
-      2)
-        CAN_INSTALL_ON_SAME_DRIVE=0
-        break
-        ;;
-      *) echo_red "Invalid option ${reply}. Expected '1' or '2'.";;
-    esac
-  done
+  status "Drive $DEVICE is too small to install Windows to itself. Using recovery-drive mode to install Windows on another larger device."
+  CAN_INSTALL_ON_SAME_DRIVE=0
 
 elif [ "$CAN_INSTALL_ON_SAME_DRIVE" != 0 ] && [ "$CAN_INSTALL_ON_SAME_DRIVE" != 1 ];then
   error "Unknown value for CAN_INSTALL_ON_SAME_DRIVE. Expected '0' or '1'."
 
 elif [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ];then
   #Variable pre-populated, so if it is 1 make sure the drive is 25GB or larger
-  if [ "$(drive_capability "$DEVICE")" != install ];then
+  if [ "$device_capability" != install ];then
     error "Drive $DEVICE is smaller than 25GB and cannot be used for self-installation.\nPlease set CAN_INSTALL_ON_SAME_DRIVE=0"
   fi
   #no need to check if drive is >8GB, because it was already done earlier
@@ -932,7 +1001,7 @@ else
     status "Downloading WoR PE-based installer: $URL"
     wget "$URL" -O "$PWD/WoR-PE_Package.zip" || error "Failed to download the WoR PE-based installer.\nURL: $URL"
 
-    if [ "$EXPECTED_SHA256" != "$(sha256sum "$PWD/WoR-PE_Package.zip" | awk '{print $1}' | tr '[a-z]' '[A-Z]')" ];then
+    if [ "$EXPECTED_SHA256" != "$(sha256_file "$PWD/WoR-PE_Package.zip" | tr '[a-z]' '[A-Z]')" ];then
       error "Downloaded PE-based installer does not match expected file"
     fi
 
@@ -1082,22 +1151,22 @@ else #Download and extract ESD
     error "One of URL, SIZE, or SHA1/SHA256 variables is empty!\nURL: $URL\nSIZE: $SIZE\nSHA1: $SHA1\nSHA256: $SHA256\nHere's the full catalog output: '$catalog'"
   fi
 
-  if [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA1" ] && [ "$SHA1" == "$(echo "  - Checking validity of already downloaded image.esd" 1>&2 ; sha1sum "$SOURCE_FILE" | awk '{print $1}')" ];then
+  if [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA1" ] && [ "$SHA1" == "$(echo "  - Checking validity of already downloaded image.esd" 1>&2 ; sha1_file "$SOURCE_FILE")" ];then
     echo "Not downloading $SOURCE_FILE - file exists"
-  elif [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA256" ] && [ "$SHA256" == "$(echo "  - Checking validity of already downloaded image.esd" 1>&2 ; sha256sum "$SOURCE_FILE" | awk '{print $1}')" ];then
+  elif [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA256" ] && [ "$SHA256" == "$(echo "  - Checking validity of already downloaded image.esd" 1>&2 ; sha256_file "$SOURCE_FILE")" ];then
     echo "Not downloading $SOURCE_FILE - file exists"
   else
     status "Downloading Windows ESD image"
     wget "$URL" -O "$PWD/$winfiles/image.esd" || error "Failed to download ESD image"
     status -n "Verifying download... "
     if [ ! -z "$SHA1" ];then
-      LOCAL_SHA1="$(sha1sum "$SOURCE_FILE" | awk '{print $1}')"
+      LOCAL_SHA1="$(sha1_file "$SOURCE_FILE")"
       if [ "$SHA1" != "$LOCAL_SHA1" ];then
         rm -f "$SOURCE_FILE"
         error "\nSuccessfully downloaded ESD image $SOURCE_FILE, but it appears to be corrupted. Please run this script again.\n(Expected SHA1 hash is $SHA1, but downloaded file has SHA1 hash $LOCAL_SHA1"
       fi
     elif [ ! -z "$SHA256" ];then
-      LOCAL_SHA256="$(sha256sum "$SOURCE_FILE" | awk '{print $1}')"
+      LOCAL_SHA256="$(sha256_file "$SOURCE_FILE")"
       if [ "$SHA256" != "$LOCAL_SHA256" ];then
         rm -f "$SOURCE_FILE"
         error "\nSuccessfully downloaded ESD image $SOURCE_FILE, but it appears to be corrupted. Please run this script again.\n(Expected SHA256 hash is $SHA256, but downloaded file has SHA256 hash $LOCAL_SHA256"
