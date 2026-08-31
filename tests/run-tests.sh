@@ -151,18 +151,27 @@ run_with_timeout() {
 }
 
 run_flasher() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
+  local output_file
   progress "running install-wor.sh with $(printf '%s ' "$@")"
-  LAST_OUT="$(run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
-  LAST_CODE=$?
+  progress "live installer output follows (timeout: ${TEST_COMMAND_TIMEOUT}s)"
+  output_file="$(mktemp "$TEST_DIR/flasher-output.XXXXXX")"
+  run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1 | tee "$output_file" 1>&2
+  LAST_CODE="${PIPESTATUS[0]}"
+  LAST_OUT="$(<"$output_file")"
+  rm -f "$output_file"
   progress "install-wor.sh finished with exit $LAST_CODE"
 }
 
 run_flasher_with_input() { #Input: stdin text, then VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
-  local input="$1"
+  local input="$1" output_file
   shift
   progress "running install-wor.sh with stdin and $(printf '%s ' "$@")"
-  LAST_OUT="$(printf '%b' "$input" | run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1)"
-  LAST_CODE=$?
+  progress "live installer output follows (timeout: ${TEST_COMMAND_TIMEOUT}s)"
+  output_file="$(mktemp "$TEST_DIR/flasher-output.XXXXXX")"
+  printf '%b' "$input" | run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1 | tee "$output_file" 1>&2
+  LAST_CODE="${PIPESTATUS[1]}"
+  LAST_OUT="$(<"$output_file")"
+  rm -f "$output_file"
   progress "install-wor.sh finished with exit $LAST_CODE"
 }
 
