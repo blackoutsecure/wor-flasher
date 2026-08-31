@@ -14,6 +14,15 @@ on:
       - ".github/workflows/shellcheck.yml"
       - "README.md"
   workflow_dispatch:
+    inputs:
+      test_models:
+        description: "Raspberry Pi models to exercise in the dry-run integration suite"
+        default: "4"
+        required: true
+      test_command_timeout:
+        description: "Per-command timeout in seconds for the dry-run integration suite"
+        default: "120"
+        required: true
 
 permissions:
   contents: read
@@ -47,5 +56,6 @@ jobs:
 
       - name: Run one-model dry-run integration suite
         env:
-          TEST_MODELS: "4"
+          TEST_MODELS: ${{ inputs.test_models || '4' }}
+          TEST_COMMAND_TIMEOUT: ${{ inputs.test_command_timeout || '120' }}
         run: ./tests/run-tests.sh
