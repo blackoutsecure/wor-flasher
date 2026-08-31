@@ -651,7 +651,7 @@ if [ -e "$DIRECTORY" ] && [ "$NO_UPDATE" != 1 ] && command -v git >/dev/null && 
   prepwd="$PWD"
   cd "$DIRECTORY"
   local_commit="$(git rev-parse HEAD)" #commit this local checkout at $DIRECTORY is on
-  remote_commit="$(git ls-remote "$UPDATE_REPO_URL" "$UPDATE_REF" | awk '{print $1}')" #latest commit on UPDATE_REPO_URL/UPDATE_REF
+  remote_commit="$(git ls-remote "$UPDATE_REPO_URL" "$UPDATE_REF" | awk 'NR == 1 {print $1}')" #latest commit on UPDATE_REPO_URL/UPDATE_REF
 
   if [ "$local_commit" != "$remote_commit" ] && [ ! -z "$remote_commit" ] && [ ! -z "$local_commit" ];then
     if ! git diff --quiet || ! git diff --cached --quiet ;then
