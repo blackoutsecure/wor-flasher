@@ -1,5 +1,6 @@
 # install-wor.sh creates this next to the scripts to cache worproject.com responses
 cache/
+wget-log*
 
 # Working directory for tests/run-tests.sh: loopback disk images and downloads
 .test-workspace/

@@ -129,6 +129,15 @@ require_tools() {
   [ -e /dev/loop-control ] || die "No /dev/loop-control, so loopback devices cannot be created here."
 }
 
+ensure_non_root_harness() {
+  [ "$(id -u)" != 0 ] && return 0
+  if [ -z "${WOR_FLASHER_REEXEC_NONROOT:-}" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && id "$SUDO_USER" >/dev/null 2>&1 ;then
+    info "Re-running test harness as $SUDO_USER"
+    exec sudo -E -H -u "$SUDO_USER" env WOR_FLASHER_REEXEC_NONROOT=1 "$0" "$@"
+  fi
+  die "This harness must run as a non-root user with passwordless sudo."
+}
+
 stub_kernel_modules() {
   #containers have no /lib/modules, which install-wor.sh treats as a pending reboot
   local moddir="/lib/modules/$(uname -r)"
@@ -154,11 +163,11 @@ run_flasher() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
   local output_file
   progress "running install-wor.sh with $(printf '%s ' "$@")"
   progress "live installer output follows (timeout: ${TEST_COMMAND_TIMEOUT}s)"
-  output_file="$(mktemp "$TEST_DIR/flasher-output.XXXXXX")"
-  run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1 | tee "$output_file" 1>&2
+  output_file="$TEST_DIR/flasher-output.log"
+  #stdin is closed so an unexpected prompt (e.g. the root-user confirmation) fails fast instead of hanging
+  (cd "$TEST_DIR" && run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" </dev/null) 2>&1 | tee "$output_file" 1>&2
   LAST_CODE="${PIPESTATUS[0]}"
   LAST_OUT="$(<"$output_file")"
-  rm -f "$output_file"
   progress "install-wor.sh finished with exit $LAST_CODE"
 }
 
@@ -167,11 +176,10 @@ run_flasher_with_input() { #Input: stdin text, then VAR=VALUE pairs. Sets LAST_O
   shift
   progress "running install-wor.sh with stdin and $(printf '%s ' "$@")"
   progress "live installer output follows (timeout: ${TEST_COMMAND_TIMEOUT}s)"
-  output_file="$(mktemp "$TEST_DIR/flasher-output.XXXXXX")"
-  printf '%b' "$input" | run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" 2>&1 | tee "$output_file" 1>&2
+  output_file="$TEST_DIR/flasher-output.log"
+  printf '%b' "$input" | (cd "$TEST_DIR" && run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh") 2>&1 | tee "$output_file" 1>&2
   LAST_CODE="${PIPESTATUS[1]}"
   LAST_OUT="$(<"$output_file")"
-  rm -f "$output_file"
   progress "install-wor.sh finished with exit $LAST_CODE"
 }
 
@@ -235,6 +243,10 @@ if [ "$MODE" == clean ];then
   rm -rf "$TEST_DIR" "$REPO_DIR/cache"
   info "Removed $TEST_DIR and detached its loop devices."
   exit 0
+fi
+
+if [ "$(uname -s)" == Linux ];then
+  ensure_non_root_harness "$@"
 fi
 
 static_checks
@@ -403,6 +415,9 @@ armstub=RPI_EFI.fd'
   cli_script="$REPO_DIR/install-wor.sh"
   export CONFIG_TXT cli_script
   env_file="$(mktemp)"
+  # declare -p emits shell-escaped declarations; sourcing that generated file is the
+  # behavior under test, so SC2090's warning about indirect command expansion is a false positive.
+  #shellcheck disable=SC2090
   declare -p CONFIG_TXT cli_script > "$env_file"
   env -i /bin/bash -c "source '$env_file'; printf '%s\n' \"\$cli_script\"; echo \"\$CONFIG_TXT\" | wc -l"
   rm -f "$env_file"
@@ -420,8 +435,6 @@ fi
 info "== Self-updater =="
 if ! command -v git >/dev/null || ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
   skip "self-updater tests need a git checkout"
-elif ! git -C "$REPO_DIR" diff --quiet || ! git -C "$REPO_DIR" diff --cached --quiet ;then
-  skip "self-updater tests need a clean working tree"
 else
   branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
   if [ "$branch" == HEAD ];then
@@ -478,6 +491,8 @@ fi
 info "== terminal-run =="
 if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ];then
   skip "terminal-run needs a display"
+elif ! command -v lxterminal >/dev/null && ! command -v xfce4-terminal >/dev/null && ! command -v mate-terminal >/dev/null && ! command -v xterm >/dev/null && ! command -v konsole >/dev/null && ! command -v terminator >/dev/null && ! command -v gnome-terminal >/dev/null && ! command -v qterminal >/dev/null && ! command -v x-terminal-emulator >/dev/null ;then
+  skip "terminal-run needs a terminal emulator"
 else
   DEBUG=1 timeout 30 "$REPO_DIR/terminal-run" 'true' 'wor-flasher test' >/dev/null 2>&1 \
     && pass "terminal-run launches a terminal" || fail "terminal-run could not launch a terminal"
