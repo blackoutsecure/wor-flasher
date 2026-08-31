@@ -434,20 +434,20 @@ else
       expect_ok "already level with $branch: flasher still runs"
       expect_no_output "already level with $branch: self-updater stays quiet" "Auto-updating wor-flasher"
 
-      printf '\n' >> "$clone_dir/README.md"
-      progress "self-updater: checking dirty clone protection"
-      LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
-      LAST_CODE=$?
-      progress "self-updater dirty-clone check finished with exit $LAST_CODE"
-      expect_ok "dirty checkout: flasher still runs"
-      expect_output "dirty checkout: self-updater preserves local changes" "Skipping automatic update because this checkout has uncommitted changes"
-      git -C "$clone_dir" diff --quiet \
-        && fail "dirty checkout: self-updater discarded local changes" \
-        || pass "dirty checkout: local changes were preserved"
-      git -C "$clone_dir" restore README.md
-
       #fall one commit behind $REPO_DIR's $branch, so the clone actually has something to pull
       if git -C "$clone_dir" reset -q --hard HEAD~1 2>/dev/null ;then
+        printf '\n' >> "$clone_dir/README.md"
+        progress "self-updater: checking dirty clone protection"
+        LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
+        LAST_CODE=$?
+        progress "self-updater dirty-clone check finished with exit $LAST_CODE"
+        expect_ok "dirty behind $branch: flasher still runs"
+        expect_output "dirty behind $branch: self-updater preserves local changes" "Skipping automatic update because this checkout has uncommitted changes"
+        git -C "$clone_dir" diff --quiet \
+          && fail "dirty behind $branch: self-updater discarded local changes" \
+          || pass "dirty behind $branch: local changes were preserved"
+        git -C "$clone_dir" reset -q --hard HEAD
+
         progress "self-updater: checking behind clone fast-forward and reload"
         LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
         LAST_CODE=$?
@@ -459,6 +459,7 @@ else
           && pass "self-updater fast-forwarded the clone to $branch" \
           || fail "self-updater did not fast-forward the clone to $branch"
       else
+        skip "$branch has no earlier commit to test dirty update protection"
         skip "$branch has no earlier commit to fall behind"
       fi
     fi
