@@ -107,13 +107,33 @@ static_checks() {
     && pass "ISO import accepts install.esd media" \
     || fail "ISO import does not accept install.esd media"
 
+  grep -qF "'.DiskSize // .TotalSize // .Size'" "$REPO_DIR/install-wor.sh" \
+    && pass "Darwin drive sizing supports current diskutil metadata" \
+    || fail "Darwin drive sizing does not support current diskutil metadata"
+
   grep -qF 'macos_start_cli()' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'macos_show_announcement()' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'announcement.png' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Proceed with WoR-Flasher' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows version' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "'Windows 11'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Raspberry Pi model' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "'5' Back)" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows language' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'darwin_list_device_paths' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "'en-us' Back)" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'darwin_list_device_choices' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Refresh detected devices' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '[ "$device_choice" == '\''Refresh detected devices'\'' ]' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose installation mode' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "'Install Windows onto this drive' Back)" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'cancel button name backButton' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'buttons {"Back", "Flash"}' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'step=language; continue' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'All data on the target drive will be erased.' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'completion_script="$(mktemp)"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'osascript "$completion_script"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'installer_status=$?' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'tell application \\\"System Events\\\" to keystroke \\\"w\\\" using command down' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'do script (item 1 of argv)' "$REPO_DIR/install-wor-gui.sh" \
     && pass "macOS GUI collects choices and hands off to the Terminal CLI" \
     || fail "macOS GUI handoff is missing"
@@ -340,9 +360,11 @@ if command -v jq >/dev/null ;then
   test_root_dev="$ROOT_DEV"
   HOST_OS=Darwin
   ROOT_DEV=/dev/disk0
-  DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false}'
+  DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false,"DiskSize":64000000000,"MediaName":"USB Drive"}'
   darwin_plist_json() {
-    if [ "$2" == list ];then
+    if [ "$2" == list ] && [ "$4" == /dev/disk2 ];then
+      printf '%s\n' '{"AllDisksAndPartitions":[{"Partitions":[{"VolumeName":"EFI","DeviceIdentifier":"disk2s1"},{"VolumeName":"WOR_BOOT","DeviceIdentifier":"disk2s2"},{"VolumeName":"WOR_INSTALL","DeviceIdentifier":"disk2s3"}]}]}'
+    elif [ "$2" == list ];then
       printf '%s\n' '{"AllDisks":["disk2"]}'
     else
       printf '%s\n' "$DARWIN_DEVICE_INFO"
@@ -351,6 +373,14 @@ if command -v jq >/dev/null ;then
   is_safe_target_device /dev/disk2 && pass "Darwin accepts an external physical writable disk" || fail "Darwin rejected an external physical writable disk"
   is_safe_target_device /dev/disk0 && fail "Darwin accepted the startup disk" || pass "Darwin rejects the startup disk"
   [ "$(darwin_list_device_paths)" == /dev/disk2 ] && pass "Darwin GUI lists safe external disks" || fail "Darwin GUI listed an unexpected disk"
+  [ "$(darwin_list_device_choices)" == $'/dev/disk2\t64000000000\tUSB Drive\tVolumes: EFI, WOR_BOOT, WOR_INSTALL' ] \
+    && pass "Darwin GUI lists detected volumes" || fail "Darwin GUI did not show detected volume details"
+  [ "$(darwin_partition_by_volume_name /dev/disk2 WOR_BOOT)" == /dev/disk2s2 ] \
+    && [ "$(darwin_partition_by_volume_name /dev/disk2 WOR_INSTALL)" == /dev/disk2s3 ] \
+    && pass "Darwin flash partitions ignore the automatic EFI partition" \
+    || fail "Darwin flash partitions were not selected by volume name"
+  DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","WritableMedia":true,"TotalSize":64000000000,"MediaName":"USB Drive"}'
+  is_safe_target_device /dev/disk2 && pass "Darwin accepts current writable-media metadata" || fail "Darwin rejected current writable-media metadata"
   for safety_case in \
     'internal:{"WholeDisk":true,"Internal":true,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false}' \
     'virtual:{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Virtual","ReadOnlyMedia":false}' \
@@ -378,6 +408,13 @@ NEWEST_BID="$(RPI_MODEL=5 get_bid 11)"
 
 RPI_MODEL=4 cpu_supports_bid "$GOOD_BID" && pass "cpu_supports_bid allows $GOOD_BID on a Pi 4" || fail "cpu_supports_bid rejected $GOOD_BID on a Pi 4"
 unset RPI_MODEL
+
+catalog_fixture=$'<LanguageCode>en-gb</LanguageCode>\n<FilePath>https://example.com/en-gb.esd</FilePath>\n<Size>1</Size>\n</File>\n<LanguageCode>en-us</LanguageCode>\n<FilePath>https://example.com/en-us.esd</FilePath>\n<Size>2</Size>\n</File>\n<Languages>'
+catalog_entry="$(get_esd_catalog_entry "$catalog_fixture" en-us)"
+grep -qF 'https://example.com/en-us.esd' <<<"$catalog_entry" \
+  && ! grep -qF 'https://example.com/en-gb.esd' <<<"$catalog_entry" \
+  && pass "ESD catalog parser selects the requested language" \
+  || fail "ESD catalog parser selected the wrong language"
 
 ######## Every model gets a fresh, uncached run
 

@@ -117,7 +117,7 @@ darwin_plist_json() { #Input: a diskutil or hdiutil command. Output: its propert
 darwin_is_safe_device() { #Input: whole disk /dev path. Only external, physical, writable disks can be erased.
   local details
   details="$(darwin_plist_json diskutil info -plist "$1")" || return 1
-  jq -e '.WholeDisk == true and .Internal == false and .VirtualOrPhysical == "Physical" and .ReadOnlyMedia == false' >/dev/null <<<"$details"
+  jq -e '.WholeDisk == true and .Internal == false and .VirtualOrPhysical == "Physical" and (.ReadOnlyMedia == false or .WritableMedia == true)' >/dev/null <<<"$details"
 }
 
 is_safe_target_device() { #Input: target device. Protects the host boot disk and Darwin internal/virtual disks.
@@ -132,6 +132,13 @@ darwin_device_value() { #Input: device, jq filter. Output: a value from diskutil
   darwin_plist_json diskutil info -plist "$1" | jq -er "$2"
 }
 
+darwin_partition_by_volume_name() { #Input: whole disk, volume name. Output: matching partition /dev path.
+  local identifier
+  identifier="$(darwin_plist_json diskutil list -plist "$1" | jq -er --arg name "$2" '.AllDisksAndPartitions[0].Partitions[]? | select(.VolumeName == $name) | .DeviceIdentifier' | head -n1)" || return 1
+  [ -n "$identifier" ] || return 1
+  printf '/dev/%s\n' "$identifier"
+}
+
 darwin_list_devices() { #Output: external physical whole disks from diskutil's plist interface.
   local device
   while read -r device; do
@@ -140,7 +147,7 @@ darwin_list_devices() { #Output: external physical whole disks from diskutil's p
     if darwin_is_safe_device "$device"; then
       printf '\e[1m\e[97m%s\e[0m - \e[92m%sB\e[0m - \e[36m%s\e[0m\n' \
         "$device" \
-        "$(darwin_device_value "$device" '.DiskSize')" \
+        "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')" \
         "$(darwin_device_value "$device" '.MediaName // .DeviceIdentifier')"
     fi
   done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
@@ -151,6 +158,21 @@ darwin_list_device_paths() { #Output: external physical whole-disk paths suitabl
   while read -r device; do
     device="/dev/$device"
     darwin_is_safe_device "$device" && printf '%s\n' "$device"
+  done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
+}
+
+darwin_list_device_choices() { #Output: tab-delimited safe disk path, size, media name, and detected volumes.
+  local device details volume_names
+  while read -r device; do
+    device="/dev/$device"
+    darwin_is_safe_device "$device" || continue
+    details="$(darwin_plist_json diskutil list -plist "$device")" || continue
+    volume_names="$(jq -r '[.AllDisksAndPartitions[0].Partitions[]? | .VolumeName // .DeviceIdentifier] | if length == 0 then "No volumes" else join(", ") end' <<<"$details")"
+    printf '%s\t%s\t%s\tVolumes: %s\n' \
+      "$device" \
+      "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')" \
+      "$(darwin_device_value "$device" '.MediaName // .DeviceIdentifier')" \
+      "$volume_names"
   done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
 }
 
@@ -167,8 +189,8 @@ darwin_flash_device() {
   sudo diskutil unmountDisk force "$DEVICE" || error "Failed to unmount $DEVICE."
   sudo diskutil partitionDisk "$DEVICE" GPTFormat 'MS-DOS FAT32' WOR_BOOT 999M ExFAT WOR_INSTALL R || error "Failed to partition $DEVICE."
 
-  PART1="$(get_partition "$DEVICE" 1)" || error "Failed to find the boot partition on $DEVICE."
-  PART2="$(get_partition "$DEVICE" 2)" || error "Failed to find the installation partition on $DEVICE."
+  PART1="$(darwin_partition_by_volume_name "$DEVICE" WOR_BOOT)" || error "Failed to find the WOR_BOOT partition on $DEVICE."
+  PART2="$(darwin_partition_by_volume_name "$DEVICE" WOR_INSTALL)" || error "Failed to find the WOR_INSTALL partition on $DEVICE."
   sudo diskutil mount "$PART1" >/dev/null || error "Failed to mount $PART1."
   sudo diskutil mount "$PART2" >/dev/null || error "Failed to mount $PART2."
   boot_mount="$(darwin_device_value "$PART1" '.MountPoint')" || error "Failed to determine the boot partition mount point."
@@ -209,6 +231,15 @@ darwin_flash_device() {
 
 get_file_size() { #Input: file. Output: size in bytes, portable across GNU and BSD userlands
   wc -c < "$1" | tr -d ' '
+}
+
+get_esd_catalog_entry() { #Input: catalog text, language. Output: the language's first file entry before the Languages section.
+  awk -v language="$2" '
+    /<Languages>/ { exit }
+    index($0, "<LanguageCode>" language) == 1 { found = 1 }
+    found { print }
+    found && /^<\/File>$/ { exit }
+  ' <<<"$1"
 }
 
 sha1_file() { #Input: file. Output: SHA1 hash
@@ -550,7 +581,7 @@ get_device_name() { #get human-readable name of storage device: manufacturer and
 
 get_size_raw() { #Input: device. Output: total size of device in bytes
   if is_macos ;then
-    darwin_device_value "$1" '.DiskSize'
+    darwin_device_value "$1" '.DiskSize // .TotalSize // .Size'
     return
   fi
   command -v lsblk >/dev/null || error "get_size_raw(): lsblk is required."
@@ -1316,7 +1347,7 @@ else #Download and extract ESD
   fi
 
   #Shorten catalog to only show the ESD for this language
-  catalog="$(echo "$catalog" | sed 's/></>\n</g' | sed -n '/<Languages>/q;p' | sed -n '/^<LanguageCode>'"${WIN_LANG}"'/,${p;/^<\/File>/q}')"
+  catalog="$(get_esd_catalog_entry "$(echo "$catalog" | sed 's/></>\n</g')" "$WIN_LANG")"
 
   #Get download link, size, and SHA1 hash for ESD
   URL="$(echo "$catalog" | grep '<FilePath>' -m 1 | sed 's/<FilePath>//g' | sed 's/<\/FilePath>//g')"

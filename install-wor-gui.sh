@@ -39,56 +39,108 @@ loading_dialog() { #display a dialog to say something is loading
   sleep infinity
 }
 
-macos_choose() { #Input: newline-separated choices, prompt. Output: selected choice.
-  osascript - "$1" "$2" <<'APPLESCRIPT'
+macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label. Output: selected choice.
+  osascript - "$1" "$2" "$3" "${4:-Cancel}" <<'APPLESCRIPT'
 on run argv
-  set choices to paragraphs of item 1 of argv
-  set response to choose from list choices with title "Windows on Raspberry" with prompt (item 2 of argv) default items {item 1 of choices} OK button name "Next" cancel button name "Cancel"
+  set choicesText to item 1 of argv
+  set promptText to item 2 of argv
+  set defaultChoice to item 3 of argv
+  set backButton to item 4 of argv
+  set choices to paragraphs of choicesText
+  set response to choose from list choices with title "Windows on Raspberry" with prompt promptText default items {defaultChoice} OK button name "Next" cancel button name backButton
   if response is false then error number -128
   return item 1 of response
 end run
 APPLESCRIPT
 }
 
-macos_start_cli() {
-  local device_choices device_capability install_mode terminal_command
-
-  WINDOWS_VER="${WINDOWS_VER:-$(macos_choose $'Windows 11\nWindows 10' 'Choose Windows version')}" || exit 0
-  RPI_MODEL="${RPI_MODEL:-$(macos_choose $'5\n4\n3' 'Choose Raspberry Pi model')}" || exit 0
-  if [ -z "$BID" ];then
-    list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
-    [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
-  fi
-  [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
-
-  WIN_LANG="${WIN_LANG:-$(macos_choose "$(list_langs | cut -d: -f1)" 'Choose Windows language')}" || exit 0
-  device_choices="$(darwin_list_device_paths)"
-  [ -n "$device_choices" ] || error "No external, physical, writable drive was found. Connect a removable drive and run WoR-Flasher again."
-  while [ -z "$DEVICE" ];do
-    DEVICE="$(macos_choose "$device_choices" 'Choose the external drive to erase')" || exit 0
-    is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk."
-  done
-
-  device_capability="$(drive_capability "$DEVICE")"
-  validate_install_mode "$device_capability"
-  if [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
-    if [ "$device_capability" == recovery ];then
-      CAN_INSTALL_ON_SAME_DRIVE=0
-    else
-      install_mode="$(macos_choose $'Install Windows onto this drive\nCreate a recovery drive' 'Choose installation mode')" || exit 0
-      [ "$install_mode" == 'Install Windows onto this drive' ] && CAN_INSTALL_ON_SAME_DRIVE=1 || CAN_INSTALL_ON_SAME_DRIVE=0
-    fi
-  fi
-
-  osascript - "$DEVICE" "$RPI_MODEL" "$BID" "$WIN_LANG" "$CAN_INSTALL_ON_SAME_DRIVE" <<'APPLESCRIPT' >/dev/null || exit 0
+macos_show_announcement() { #Output: proceed or bvm.
+  osascript - "$DIRECTORY/announcement.png" <<'APPLESCRIPT'
 on run argv
-  set mode to item 5 of argv
-  if mode is "1" then set mode to "Install Windows onto this drive" else set mode to "Recovery drive"
-  display dialog "Target drive: " & item 1 of argv & return & "Raspberry Pi: " & item 2 of argv & return & "Windows build: " & item 3 of argv & " (" & item 4 of argv & ")" & return & "Mode: " & mode & return & return & "All data on the target drive will be erased." with title "Windows on Raspberry" buttons {"Cancel", "Flash"} default button "Flash" cancel button "Cancel" with icon caution
+  set announcementImage to POSIX file (item 1 of argv) as alias
+  set response to display dialog "Consider BVM for running Windows alongside Linux on Raspberry Pi." with title "Windows on Raspberry" buttons {"Cancel", "Check out BVM", "Proceed with WoR-Flasher"} default button "Proceed with WoR-Flasher" cancel button "Cancel" with icon announcementImage
+  return button returned of response
 end run
 APPLESCRIPT
+}
 
-  printf -v terminal_command 'cd %q && exec env DL_DIR=%q RPI_MODEL=%q BID=%q WIN_LANG=%q DEVICE=%q CAN_INSTALL_ON_SAME_DRIVE=%q DRY_RUN=%q %q' "$DIRECTORY" "$DL_DIR" "$RPI_MODEL" "$BID" "$WIN_LANG" "$DEVICE" "$CAN_INSTALL_ON_SAME_DRIVE" "$DRY_RUN" "$cli_script"
+macos_choose_device() { #Input: newline-separated detected volume rows. Output: selected row or __REFRESH__.
+  if [ -z "$1" ];then
+    osascript <<'APPLESCRIPT'
+display dialog "No external, physical, writable drive was found. Connect a removable drive, then click Refresh." with title "Choose device to flash" buttons {"Back", "Refresh"} default button "Refresh" cancel button "Back"
+return "__REFRESH__"
+APPLESCRIPT
+  else
+    device_choices=$'Refresh detected devices\n'"$1"
+    device_choice="$(macos_choose "$device_choices" 'Choose the external drive and volumes to erase' "$(printf '%s\n' "$1" | head -n1)" Back)" || return 1
+    [ "$device_choice" == 'Refresh detected devices' ] && echo "__REFRESH__" || echo "$device_choice"
+  fi
+}
+
+macos_start_cli() {
+  local device_choices device_capability device_choice install_mode mode_choices pi_choices step terminal_command windows_choices
+
+  windows_choices=$'Windows 11\nWindows 10'
+  pi_choices=$'5\n4\n3'
+  step=windows
+  while true; do
+    case "$step" in
+      windows)
+        WINDOWS_VER="$(macos_choose "$windows_choices" 'Choose Windows version' 'Windows 11')" || exit 0
+        step=pi
+        ;;
+      pi)
+        RPI_MODEL="$(macos_choose "$pi_choices" 'Choose Raspberry Pi model' '5' Back)" || { step=windows; continue; }
+        list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
+        [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
+        [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
+        step=language
+        ;;
+      language)
+        WIN_LANG="$(macos_choose "$(list_langs | cut -d: -f1)" 'Choose Windows language' 'en-us' Back)" || { step=pi; continue; }
+        step=device
+        ;;
+      device)
+        device_choices="$(darwin_list_device_choices)"
+        device_choice="$(macos_choose_device "$device_choices")" || { step=language; continue; }
+        [ "$device_choice" == __REFRESH__ ] && continue
+        DEVICE="${device_choice%%$'\t'*}"
+        is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk."
+        device_capability="$(drive_capability "$DEVICE")"
+        validate_install_mode "$device_capability"
+        step=mode
+        ;;
+      mode)
+        if [ "$device_capability" == recovery ];then
+          CAN_INSTALL_ON_SAME_DRIVE=0
+        else
+          mode_choices=$'Install Windows onto this drive\nCreate a recovery drive'
+          install_mode="$(macos_choose "$mode_choices" 'Choose installation mode' 'Install Windows onto this drive' Back)" || { step=device; continue; }
+          [ "$install_mode" == 'Install Windows onto this drive' ] && CAN_INSTALL_ON_SAME_DRIVE=1 || CAN_INSTALL_ON_SAME_DRIVE=0
+        fi
+        step=confirm
+        ;;
+      confirm)
+        confirmation="$(osascript - "$DEVICE" "$RPI_MODEL" "$BID" "$WIN_LANG" "$CAN_INSTALL_ON_SAME_DRIVE" <<'APPLESCRIPT'
+on run argv
+  set mode to item 5 of argv
+  if mode is "1" then
+    set mode to "Install Windows onto this drive"
+  else
+    set mode to "Recovery drive"
+  end if
+  set response to display dialog "Target drive: " & item 1 of argv & return & "Raspberry Pi: " & item 2 of argv & return & "Windows build: " & item 3 of argv & " (" & item 4 of argv & ")" & return & "Mode: " & mode & return & return & "All data on the target drive will be erased." with title "Windows on Raspberry" buttons {"Back", "Flash"} default button "Flash" cancel button "Back" with icon caution
+  return button returned of response
+end run
+APPLESCRIPT
+        )" || { step=mode; continue; }
+        [ "$confirmation" == Flash ] && break
+        step=mode
+        ;;
+    esac
+  done
+
+  printf -v terminal_command 'cd %q || exit $?; env DL_DIR=%q RPI_MODEL=%q BID=%q WIN_LANG=%q DEVICE=%q CAN_INSTALL_ON_SAME_DRIVE=%q DRY_RUN=%q %q; installer_status=$?; completion_script="$(mktemp)"; printf "%%s\\n" "display dialog \\"Process completed.\\" with title \\"Windows on Raspberry\\" buttons {\\"OK\\"} default button \\"OK\\"" > "$completion_script"; osascript "$completion_script"; rm -f "$completion_script"; (osascript -e "delay 0.5" -e "tell application \\\"Terminal\\\" to activate" -e "tell application \\\"System Events\\\" to keystroke \\\"w\\\" using command down" >/dev/null 2>&1 &) ; exit "$installer_status"' "$DIRECTORY" "$DL_DIR" "$RPI_MODEL" "$BID" "$WIN_LANG" "$DEVICE" "$CAN_INSTALL_ON_SAME_DRIVE" "$DRY_RUN" "$cli_script"
   osascript - "$terminal_command" <<'APPLESCRIPT'
 on run argv
   tell application "Terminal"
@@ -123,6 +175,11 @@ fi
 if [ "$(uname -s)" == Darwin ];then
   source "$cli_script" source
   setup || exit 1
+  announcement_choice="$(macos_show_announcement)" || exit 0
+  if [ "$announcement_choice" == 'Check out BVM' ];then
+    open_url 'https://github.com/Botspot/bvm'
+    exit 0
+  fi
   macos_start_cli
   exit $?
 fi
@@ -531,6 +588,10 @@ enable_gic=1
 armstub=RPI_EFI.fd
 disable_commandline_tags=1
 disable_overscan=1
+hdmi_drive=2
+hdmi_group=2
+hdmi_mode=87
+hdmi_cvt=1920 1200 60 6 0 0 0
 device_tree_address=0x1f0000
 device_tree_end=0x200000
 dtoverlay=miniuart-bt
