@@ -74,7 +74,7 @@ Now, using the new WoR-flasher, it's a _piece of cake_.
 **Hardware awareness**
 
 - Detects which Windows builds the target Pi can actually boot and hides the rest. See [The ARMv8.1 limitation](#the-armv81-limitation).
-- Downloads the matching [UEFI firmware](https://github.com/pftf/RPi4/releases) and [ARM64 drivers](https://github.com/worproject/RPi-Windows-Drivers/releases) for the chosen model, newest release by default with pinned fallbacks.
+- Downloads known-compatible [UEFI firmware](https://github.com/pftf/RPi4/releases) for the chosen model and the latest matching [ARM64 drivers](https://github.com/worproject/RPi-Windows-Drivers/releases). Newest UEFI releases remain available as an explicit opt-in.
 - Injects the drivers into the Windows PE boot image automatically.
 - Verifies every download against an upstream SHA1 or SHA256 hash.
 
@@ -351,7 +351,7 @@ CAN_INSTALL_ON_SAME_DRIVE: 1
 BID: 22631.2861
 WIN_LANG: en-us
 
-Using UEFI firmware: https://github.com/pftf/RPi4/releases/download/v1.52/RPi4_UEFI_Firmware_v1.52.zip
+Using UEFI firmware: https://github.com/pftf/RPi4/releases/download/v1.33/RPi4_UEFI_Firmware_v1.33.zip
 Formatting /dev/sdb
 Generating partitions
 Generating filesystems
@@ -368,7 +368,7 @@ This script is actually what does the flashing: the GUI script is a front-end th
 The GPU firmware never handed off to the UEFI firmware. Usually one of:
 
 - **Mismatched firmware files.** `RPI_EFI.fd`, `start4.elf`, `fixup4.dat`, the `.dtb` files, and the `overlays/` folder must all come from the same UEFI release. Hand-copying only some of them causes this. Re-flash rather than patching files individually.
-- **Outdated firmware.** Newer Pi 4 board revisions need a recent UEFI release. WoR-flasher downloads the latest release by default.
+- **Incompatible firmware.** WoR-flasher uses Pi 4 UEFI v1.33 by default because upstream held that version for Windows boot stability. Set `UEFI_USE_LATEST=1` only when testing a newer firmware release intentionally.
 - **Outdated bootloader EEPROM.** Update it with Raspberry Pi Imager (`Misc Utility Images` → `Bootloader`).
 
 The green ACT LED blink pattern narrows it down: 3 blinks means `start4.elf` was not found, 4 blinks means it failed to launch, and 7 blinks means `RPI_EFI.fd` was not found.
@@ -472,10 +472,10 @@ These have working defaults and rarely need changing.
 
 | Variable              | Default                                  | Description                                                                                                                                                                                |
 | --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `UEFI_USE_LATEST`     | `1`                                      | Download the newest UEFI firmware release from GitHub. Set to `0` to use the pinned version instead. Pre-releases are never selected, since upstream uses them to mark known-bad builds    |
-| `UEFI_VER_PI3`        | `v1.39`                                  | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                                |
-| `UEFI_VER_PI4`        | `v1.52`                                  | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                                |
-| `UEFI_VER_PI5`        | `v0.3`                                   | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                                |
+| `UEFI_USE_LATEST`     | `0`                                      | Use the pinned, known-compatible UEFI version. Set to `1` to query GitHub for the newest stable release                                                                                    |
+| `UEFI_VER_PI3`        | `v1.39`                                  | Pinned UEFI version, used by default or when the GitHub API is unreachable                                                                                                                 |
+| `UEFI_VER_PI4`        | `v1.33`                                  | Pinned UEFI version, retained by the upstream WoR-Flasher project for Windows boot stability                                                                                               |
+| `UEFI_VER_PI5`        | `v0.3`                                   | Pinned UEFI version, used by default or when the GitHub API is unreachable                                                                                                                 |
 | `DRIVERS_USE_LATEST`  | `1`                                      | Download the newest ARM64 driver release from GitHub. Set to `0` to use the pinned version instead                                                                                         |
 | `DRIVER_VER`          | `v0.17`                                  | Pinned driver package version, used when `DRIVERS_USE_LATEST=0` or GitHub is unreachable. The upstream project is archived, so this is the final release                                   |
 | `PE_USE_LATEST`       | `1`                                      | Download the newest WoR PE-based installer from worproject.com. Set to `0` to use the pinned package instead                                                                               |

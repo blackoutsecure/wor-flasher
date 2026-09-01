@@ -795,12 +795,12 @@ If this error persists, contact Botspot - the WoR-flasher developer."
 [ -z "$DL_DIR" ] && DL_DIR="$HOME/wor-flasher-files"
 
 #UEFI firmware selection.
-#Set UEFI_USE_LATEST=0 to use the pinned versions below instead of querying GitHub for the newest release.
-[ -z "$UEFI_USE_LATEST" ] && UEFI_USE_LATEST=1
+#Set UEFI_USE_LATEST=1 to query GitHub for the newest release instead of using the pinned versions below.
+[ -z "$UEFI_USE_LATEST" ] && UEFI_USE_LATEST=0
 
-#Pinned versions. Used when UEFI_USE_LATEST=0, or as a fallback when the GitHub API is unreachable.
+#Pinned versions. Used by default, or as a fallback when the GitHub API is unreachable.
 [ -z "$UEFI_VER_PI3" ] && UEFI_VER_PI3='v1.39'
-[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.52'
+[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.33'
 [ -z "$UEFI_VER_PI5" ] && UEFI_VER_PI5='v0.3'
 
 #Windows driver package. The upstream project is archived, so v0.17 is the final release.
