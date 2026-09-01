@@ -203,7 +203,8 @@ wget() { #Intercept all wget commands. When possible, uses aria2c.
       local exitcode=$?
 
     else #run aria2c without quietness and format download-progress output
-      local terminal_width="$(tput cols || echo 80)"
+      local terminal_width="$(tput cols 2>/dev/null || :)"
+      [[ "$terminal_width" =~ ^[0-9]+$ ]] || terminal_width=80
 
       #run aria2c and reduce its output.
       aria2c "${aria2_flags[@]}" | while read -r line ;do

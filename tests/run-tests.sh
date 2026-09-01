@@ -339,11 +339,12 @@ for model in $(tr ' ' '\n' <<<"$TEST_MODELS") ;do
   echo "  using build $bid"
   seed_winfiles "$bid"
 
-  run_flasher BID="$bid" RPI_MODEL="$model" DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=0
+  run_flasher TERM=unknown BID="$bid" RPI_MODEL="$model" DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=0
   expect_ok "Pi $model dry run completes"
   expect_output "Pi $model downloads the PE installer" "Downloading WoR PE-based installer"
   expect_output "Pi $model downloads UEFI firmware" "UEFI firmware"
   expect_output "Pi $model stops before flashing" "DRY_RUN"
+  expect_no_output "Pi $model suppresses unknown terminal warnings" "unknown terminal"
 
   if [ "$model" == 5 ];then
     expect_no_output "Pi 5 skips the ARM64 drivers" "Downloading ARM64 drivers"
