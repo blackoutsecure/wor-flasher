@@ -46,6 +46,7 @@ if docker run --rm --privileged \
   -e TEST_DIR="$CONTAINER_TEST_DIR" \
   -e TEST_UID="$TEST_UID" \
   -e TEST_GID="$TEST_GID" \
+  -e TEST_MODELS="${TEST_MODELS:-}" \
   -e CONTAINER_TEST_DIR="$CONTAINER_TEST_DIR" \
   "$IMAGE" \
   bash -lc '
@@ -55,7 +56,7 @@ if docker run --rm --privileged \
     apt-get update -qq
     printf "  ... container: installing test dependencies\n"
     apt-get install -y -qq --no-install-recommends \
-      aria2 bc cabextract ca-certificates chntpw coreutils dosfstools exfat-fuse exfatprogs findutils gawk genisoimage git grep passwd parted sed shellcheck sudo udftools unzip util-linux wget wimtools yad
+      aria2 bc cabextract ca-certificates chntpw coreutils dosfstools exfat-fuse exfatprogs findutils gawk genisoimage git grep jq passwd parted sed shellcheck sudo udftools unzip util-linux wget wimtools yad
     printf "  ... container: preparing test user %s:%s\n" "$TEST_UID" "$TEST_GID"
     if ! getent group "$TEST_GID" >/dev/null; then
       groupadd -g "$TEST_GID" wor-test

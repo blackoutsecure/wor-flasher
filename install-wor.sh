@@ -4,16 +4,37 @@
 #This script is an automation for the tutorial that can be found here: https://worproject.com/guides/how-to-install/from-other-os
 
 CLEANUP_MOUNTS=()
+CLEANUP_DEVICES=()
+
+HOST_OS="$(uname -s)"
+
+is_macos() {
+  [ "$HOST_OS" == Darwin ]
+}
 
 cleanup_mounts() {
   local mountpoint
   for mountpoint in "${CLEANUP_MOUNTS[@]}" ;do
-    sudo umount -q "$mountpoint" 2>/dev/null
+    if is_macos ;then
+      sudo diskutil unmount force "$mountpoint" >/dev/null 2>&1
+    else
+      sudo umount -q "$mountpoint" 2>/dev/null
+    fi
+  done
+  for mountpoint in "${CLEANUP_DEVICES[@]}" ;do
+    if is_macos ;then
+      sudo hdiutil detach "$mountpoint" >/dev/null 2>&1
+    fi
   done
 }
 
 register_mount_cleanup() { #Input: mountpoint
   CLEANUP_MOUNTS+=("$1")
+  trap cleanup_mounts EXIT
+}
+
+register_device_cleanup() { #Input: hdiutil device
+  CLEANUP_DEVICES+=("$1")
   trap cleanup_mounts EXIT
 }
 
@@ -71,10 +92,119 @@ resolve_path() { #Input: path. Output: absolute path, using GNU or BSD tools whe
 }
 
 require_linux_host() {
-  [ "$(uname -s)" == Linux ] && return 0
-  error "WoR-Flasher currently supports Linux hosts only.
-This host is $(uname -s). The flashing path needs Linux block-device and filesystem tools such as lsblk, findmnt, parted, mkfs.fat, mkfs.exfat, mount.exfat-fuse, modprobe and the /sys device tree.
-On macOS, use a Linux VM or Raspberry Pi OS/Debian/Ubuntu host with USB drive passthrough."
+  [ "$HOST_OS" == Linux ] || is_macos && return 0
+  error "WoR-Flasher supports Linux and macOS hosts only. This host is $HOST_OS."
+}
+
+require_macos_tools() {
+  if ! command -v brew >/dev/null ;then
+    if [ -x /opt/homebrew/bin/brew ];then
+      PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+    elif [ -x /usr/local/bin/brew ];then
+      PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+    fi
+  fi
+  local tool
+  for tool in diskutil hdiutil plutil jq; do
+    command -v "$tool" >/dev/null || error "macOS support requires '$tool'. Install Homebrew from https://brew.sh, then run this script again so it can install the required packages."
+  done
+}
+
+darwin_plist_json() { #Input: a diskutil or hdiutil command. Output: its property list as JSON.
+  "$@" | plutil -convert json -o - -
+}
+
+darwin_is_safe_device() { #Input: whole disk /dev path. Only external, physical, writable disks can be erased.
+  local details
+  details="$(darwin_plist_json diskutil info -plist "$1")" || return 1
+  jq -e '.WholeDisk == true and .Internal == false and .VirtualOrPhysical == "Physical" and .ReadOnlyMedia == false' >/dev/null <<<"$details"
+}
+
+is_safe_target_device() { #Input: target device. Protects the host boot disk and Darwin internal/virtual disks.
+  if is_macos ;then
+    [ "$1" != "$ROOT_DEV" ] && darwin_is_safe_device "$1"
+  else
+    [ "$1" != "$ROOT_DEV" ]
+  fi
+}
+
+darwin_device_value() { #Input: device, jq filter. Output: a value from diskutil info.
+  darwin_plist_json diskutil info -plist "$1" | jq -er "$2"
+}
+
+darwin_list_devices() { #Output: external physical whole disks from diskutil's plist interface.
+  local device
+  while read -r device; do
+    [ -z "$device" ] && continue
+    device="/dev/$device"
+    if darwin_is_safe_device "$device"; then
+      printf '\e[1m\e[97m%s\e[0m - \e[92m%sB\e[0m - \e[36m%s\e[0m\n' \
+        "$device" \
+        "$(darwin_device_value "$device" '.DiskSize')" \
+        "$(darwin_device_value "$device" '.MediaName // .DeviceIdentifier')"
+    fi
+  done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
+}
+
+darwin_list_device_paths() { #Output: external physical whole-disk paths suitable for a GUI choice list.
+  local device
+  while read -r device; do
+    device="/dev/$device"
+    darwin_is_safe_device "$device" && printf '%s\n' "$device"
+  done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
+}
+
+darwin_mount_iso() { #Input: ISO path. Sets ISO_MOUNTPOINT and ISO_DEVICE.
+  local details
+  details="$(hdiutil attach -nobrowse -readonly -plist "$1")" || return 1
+  ISO_MOUNTPOINT="$(plutil -convert json -o - - <<<"$details" | jq -er '."system-entities"[] | select(.["mount-point"] != null) | .["mount-point"]' | head -n1)" || return 1
+  ISO_DEVICE="$(plutil -convert json -o - - <<<"$details" | jq -er '."system-entities"[] | select(.["mount-point"] != null) | .["dev-entry"]' | head -n1)" || return 1
+}
+
+darwin_flash_device() {
+  is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
+  status "Formatting $DEVICE - \e[93mThere is no turning back now."
+  sudo diskutil unmountDisk force "$DEVICE" || error "Failed to unmount $DEVICE."
+  sudo diskutil partitionDisk "$DEVICE" GPTFormat 'MS-DOS FAT32' WOR_BOOT 999M ExFAT WOR_INSTALL R || error "Failed to partition $DEVICE."
+
+  PART1="$(get_partition "$DEVICE" 1)" || error "Failed to find the boot partition on $DEVICE."
+  PART2="$(get_partition "$DEVICE" 2)" || error "Failed to find the installation partition on $DEVICE."
+  sudo diskutil mount "$PART1" >/dev/null || error "Failed to mount $PART1."
+  sudo diskutil mount "$PART2" >/dev/null || error "Failed to mount $PART2."
+  boot_mount="$(darwin_device_value "$PART1" '.MountPoint')" || error "Failed to determine the boot partition mount point."
+  win_mount="$(darwin_device_value "$PART2" '.MountPoint')" || error "Failed to determine the installation partition mount point."
+  register_mount_cleanup "$boot_mount"
+  register_mount_cleanup "$win_mount"
+
+  status "Copying files to $DEVICE:"
+  echo "  - Startup environment"
+  sudo cp -r "$PWD/$winfiles/bootpart"/* "$boot_mount" || error "Failed to copy startup files to $boot_mount"
+  echo "  - Installation files"
+  sudo cp "$PWD/$winfiles/install.wim" "$win_mount" || error "Failed to copy installation files to $win_mount"
+  echo "  - EFI files"
+  sudo cp -r "$PWD/peinstaller/efi" "$boot_mount" || error "Failed to copy EFI files to $boot_mount"
+  echo "  - PE installer"
+  errors="$(sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add peinstaller/winpe/2 /" 2>&1)" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim\nErrors:\n$errors"
+
+  if [ "$RPI_MODEL" == 5 ];then
+    echo "  - ARM64 drivers"
+    : > "$PWD/critical"
+    errors="$(sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add critical /drivers/critical" 2>&1)" || error "The wimupdate command failed to add $PWD/critical to boot.wim\nErrors:\n$errors"
+    rm "$PWD/critical"
+  else
+    echo "  - ARM64 drivers"
+    errors="$(sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add driverpackage /drivers" 2>&1)" || error "The wimupdate command failed to add $PWD/driverpackage to boot.wim\nErrors:\n$errors"
+  fi
+
+  echo "  - UEFI firmware"
+  sudo cp -r "$PWD/pi${RPI_MODEL}-uefipackage"/* "$boot_mount" || error "Failed to copy UEFI firmware to $boot_mount"
+  [ -z "$CONFIG_TXT" ] || echo "$CONFIG_TXT" | sudo tee "$boot_mount/config.txt" >/dev/null
+  [ "$RPI_MODEL" != 3 ] || sudo dd if="$PWD/peinstaller/pi3/gptpatch.img" of="/dev/r${DEVICE#/dev/}" conv=fsync || error "Failed to apply the Pi3 GPT partition-table fix to $DEVICE"
+
+  sync
+  sudo diskutil unmountDisk "$DEVICE" || echo_red "Warning: failed to unmount $DEVICE"
+  sudo diskutil eject "$DEVICE" || echo_red "Warning: failed to eject $DEVICE"
+  status "$(basename "$0") script has completed."
 }
 
 get_file_size() { #Input: file. Output: size in bytes, portable across GNU and BSD userlands
@@ -329,6 +459,14 @@ package_installed() { #exit 0 if $1 package is installed, otherwise exit 1
 
 install_packages() { #input: space-separated list of apt packages to install
   [ -z "$1" ] && error "install_packages(): requires a list of apt packages to install"
+  if is_macos ;then
+    command -v brew >/dev/null || error "macOS support requires Homebrew. Install it from https://brew.sh, then run this script again."
+    local formula
+    for formula in aria2 cabextract jq wget wimlib; do
+      brew list --formula "$formula" >/dev/null 2>&1 || brew install "$formula" || error "Failed to install Homebrew dependency '$formula'."
+    done
+    return 0
+  fi
   local dependencies="$1"
   local install_list=''
   local package
@@ -356,7 +494,12 @@ get_partition() { #Input: device & partition number. Output: partition /dev entr
   [ -z "$1" ] && error "get_partition(): no /dev device specified as"' $1'
   [ -z "$2" ] && error "get_partition(): no partition number specified as"' $2'
   [ ! -b "$1" ] && error "get_partition(): $1 is not a valid block device!"
-  command -v lsblk >/dev/null || error "get_partition(): lsblk is required. WoR-Flasher's flashing path currently supports Linux hosts only."
+  if is_macos ;then
+    [ "$2" == all ] && error "get_partition(): macOS does not support listing all partitions through this helper."
+    darwin_plist_json diskutil list -plist "$1" | jq -er ".AllDisksAndPartitions[0].Partitions[$(($2 - 1))].DeviceIdentifier" | sed 's+^+/dev/+'
+    return
+  fi
+  command -v lsblk >/dev/null || error "get_partition(): lsblk is required."
 
   if [ "$2" == 'all' ];then
     #special mode: return every partition if $2 is 'all'
@@ -372,6 +515,11 @@ get_device_name() { #get human-readable name of storage device: manufacturer and
   #input: /dev device
   [ -z "$1" ] && error "get_device_name(): requires an argument"
   [ ! -b "$1" ] && error "get_device_name(): Specified block device '$1' does not exist!"
+
+  if is_macos ;then
+    darwin_device_value "$1" '.MediaName // .DeviceIdentifier'
+    return
+  fi
 
   sys_path="$(find /sys/devices/platform -type d -name "$(basename "$1")")"
   #sys_path may be: /sys/devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb2/2-2/2-2:1.0/host0/target0:0:0/0:0:0:0/block/sda
@@ -401,7 +549,11 @@ get_device_name() { #get human-readable name of storage device: manufacturer and
 }
 
 get_size_raw() { #Input: device. Output: total size of device in bytes
-  command -v lsblk >/dev/null || error "get_size_raw(): lsblk is required. WoR-Flasher's flashing path currently supports Linux hosts only."
+  if is_macos ;then
+    darwin_device_value "$1" '.DiskSize'
+    return
+  fi
+  command -v lsblk >/dev/null || error "get_size_raw(): lsblk is required."
   lsblk -b --output SIZE -n -d "$1"
 }
 
@@ -461,6 +613,10 @@ mark_cache() { #Input: folder, version token. Records what was downloaded so cac
 }
 
 list_devs() { #Output: human-readable, colorized list of valid block devices to write to. Omits /dev/loop* and the root device. Returns code 1 if no drives found
+  if is_macos ;then
+    darwin_list_devices
+    return
+  fi
   [ -z "$ROOT_DEV" ] && detect_root_dev
   local IFS=$'\n'
   local exitcode=1
@@ -474,7 +630,11 @@ list_devs() { #Output: human-readable, colorized list of valid block devices to 
 }
 
 detect_root_dev() { #Set ROOT_DEV to the Linux block device backing /
-  command -v findmnt >/dev/null || error "findmnt is required to detect the current boot drive. WoR-Flasher's flashing path currently supports Linux hosts only."
+  if is_macos ;then
+    ROOT_DEV="/dev/$(darwin_device_value / '.ParentWholeDisk // .DeviceIdentifier')"
+    return
+  fi
+  command -v findmnt >/dev/null || error "findmnt is required to detect the current boot drive."
   command -v lsblk >/dev/null || error "lsblk is required to detect the current boot drive. WoR-Flasher's flashing path currently supports Linux hosts only."
   local root_source
   local root_parent
@@ -545,6 +705,10 @@ get_os_name() { #input: build id, Output: either "Windows 10 build $BID" or "Win
 setup() { #run safety checks and install packages
   require_linux_host
 
+  if is_macos ;then
+    require_macos_tools
+  fi
+
   #check for internet connection
   echo -n "Checking for internet connection... "
   local errors
@@ -569,7 +733,7 @@ setup() { #run safety checks and install packages
   fi
 
   #Make sure modules exist for the running kernel - otherwise a kernel upgrade occurred and the user needs to reboot. See https://github.com/Botspot/wor-flasher/issues/35
-  if [ ! -d /lib/modules/$(uname -r) ];then
+  if [ "$HOST_OS" == Linux ] && [ ! -d /lib/modules/$(uname -r) ];then
     error "The running kernel ($(uname -r)) does not match any directory in /lib/modules.
 Usually this means you have not yet rebooted since upgrading the kernel.
 Try rebooting.
@@ -934,7 +1098,7 @@ if [ -z "$DEVICE" ];then
     echo "Available devices:"
     list_devs || echo -e "\e[93mNone found - please insert a storage device and press Enter\e[0m"
     read -p "Choose a device to flash the Windows setup files to: " DEVICE
-    if [ "$DEVICE" == "$ROOT_DEV" ];then
+    if ! is_safe_target_device "$DEVICE";then
       echo_red "Device $DEVICE is your current boot drive! You cannot overwrite this drive."
     elif [ -b "$DEVICE" ];then
       break #exit loop
@@ -947,8 +1111,8 @@ if [ -z "$DEVICE" ];then
 
 elif [ ! -b "$DEVICE" ];then
   error "Invalid value for DEVICE: block device $DEVICE does not exist. Available devices:\n$(list_devs)"
-elif [ "$DEVICE" == "$ROOT_DEV" ];then
-  error "Refusing to overwrite current boot drive $DEVICE."
+elif ! is_safe_target_device "$DEVICE";then
+  error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
 fi
 }
 
@@ -1237,30 +1401,36 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
   cd "$PWD/$winfiles" || error "Failed to access $PWD/$winfiles folder"
 
   status "Mounting $(basename "$SOURCE_FILE")"
-  mkdir -p "$PWD/isomount" || error "Failed to make $PWD/isomount folder"
-  sudo umount "$PWD/isomount" 2>/dev/null
-  sudo mount "$SOURCE_FILE" "$PWD/isomount" 2>/dev/null
-  if [ $? != 0 ];then
-    status "Failed to mount the ISO file. Trying again after loading the 'udf' kernel module."
-    sudo modprobe udf
-
+  isomount="$PWD/isomount"
+  if is_macos ;then
+    darwin_mount_iso "$SOURCE_FILE" || error "Failed to mount ISO file $SOURCE_FILE with hdiutil."
+    isomount="$ISO_MOUNTPOINT"
+    register_device_cleanup "$ISO_DEVICE"
+  else
+    mkdir -p "$isomount" || error "Failed to make $isomount folder"
+    sudo umount "$isomount" 2>/dev/null
+    sudo mount "$SOURCE_FILE" "$isomount" 2>/dev/null
     if [ $? != 0 ];then
-      modprobe_failed=1
-    else
-      modprobe_failed=0
-    fi
+      status "Failed to mount the ISO file. Trying again after loading the 'udf' kernel module."
+      sudo modprobe udf
 
-    sudo mount "$SOURCE_FILE" "$PWD/isomount"
-    if [ $? != 0 ];then
-      if [ "$modprobe_failed" == 1 ] && [ ! -d "/lib/modules/$(uname -r)" ];then
-        error "The 'udf' kernel module is required to mount the ISO file (uupdump/$(basename $(echo "$PWD/uupdump"/*.ISO))), but all kernel modules are missing! Most likely, you upgraded kernel packages and have not rebooted yet. Try rebooting."
+      if [ $? != 0 ];then
+        modprobe_failed=1
       else
-        error "Failed to mount ISO file ($(echo "$PWD/uupdump"/*.ISO)) to $PWD/isomount"
+        modprobe_failed=0
+      fi
+
+      sudo mount "$SOURCE_FILE" "$isomount"
+      if [ $? != 0 ];then
+        if [ "$modprobe_failed" == 1 ] && [ ! -d "/lib/modules/$(uname -r)" ];then
+          error "The 'udf' kernel module is required to mount the ISO file (uupdump/$(basename $(echo "$PWD/uupdump"/*.ISO))), but all kernel modules are missing! Most likely, you upgraded kernel packages and have not rebooted yet. Try rebooting."
+        else
+          error "Failed to mount ISO file ($(echo "$PWD/uupdump"/*.ISO)) to $isomount"
+        fi
       fi
     fi
+    register_mount_cleanup "$isomount"
   fi
-  #unmount on exit
-  register_mount_cleanup "$PWD/isomount"
 
   mkdir -p "$PWD"/bootpart
   status "Copying files from ISO file to $PWD:"
@@ -1286,8 +1456,12 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
   echo "All necessary files have been copied out. Your ISO file will not be needed for future flashes."
 
   status "Unmounting ISO file"
-  sudo umount "$PWD/isomount" || echo_red "Warning: failed to unmount $PWD/isomount" #failure is non-fatal
-  rmdir "$PWD/isomount" #remove mountpoint
+  if is_macos ;then
+    sudo hdiutil detach "$ISO_DEVICE" || echo_red "Warning: failed to detach $ISO_DEVICE"
+  else
+    sudo umount "$isomount" || echo_red "Warning: failed to unmount $isomount" #failure is non-fatal
+    rmdir "$isomount" #remove mountpoint
+  fi
 
   #Change working directory back to $DL_DIR
   cd ..
@@ -1301,6 +1475,11 @@ fi
 #now that downloads are complete, check again if destination storage is accessible
 if [ ! -b "$DEVICE" ];then
   error "Device $DEVICE is not a valid block device! Available devices:\n$(list_devs)"
+fi
+
+if is_macos ;then
+  darwin_flash_device
+  exit $?
 fi
 
 echo

@@ -6,8 +6,8 @@
 #Usage:
 #  ./tests/run-tests.sh               run the automated suite; uses Docker for Linux integration on non-Linux hosts when available
 #  ./tests/run-tests.sh --walkthrough create fake drives, then run the CLI interactively
-#  ./tests/run-tests.sh --gui         create fake drives, then launch the GUI (needs a display)
-#  ./tests/run-tests-gui.sh           run the GUI walkthrough test with display preflight
+#  ./tests/run-tests.sh --gui         launch the GUI in DRY_RUN mode (Linux creates fake drives; macOS needs a removable drive)
+#  ./tests/run-tests-gui.sh           run the GUI walkthrough with host-specific preflight
 #  ./tests/run-tests.sh --full        also download the real Windows image (several GB)
 #  ./tests/run-tests.sh --keep        leave the fake drives and downloads in place afterwards
 #  ./tests/run-tests.sh --clean       remove the test workspace and detach fake drives
@@ -96,7 +96,8 @@ static_checks() {
     pass "deprecated updater sentinel file hook is not referenced"
   fi
 
-  grep -qF 'register_mount_cleanup "$PWD/isomount"' "$REPO_DIR/install-wor.sh" \
+  grep -qF 'register_device_cleanup "$ISO_DEVICE"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'register_mount_cleanup "$isomount"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'register_mount_cleanup "$mntpnt/bootpart"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'register_mount_cleanup "$mntpnt/winpart"' "$REPO_DIR/install-wor.sh" \
     && pass "all temporary mounts use the shared cleanup handler" \
@@ -105,6 +106,17 @@ static_checks() {
   grep -qF 'sources/install.esd' "$REPO_DIR/install-wor.sh" \
     && pass "ISO import accepts install.esd media" \
     || fail "ISO import does not accept install.esd media"
+
+  grep -qF 'macos_start_cli()' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Choose Windows version' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Choose Raspberry Pi model' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Choose Windows language' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'darwin_list_device_paths' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Choose installation mode' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'All data on the target drive will be erased.' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'do script (item 1 of argv)' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "macOS GUI collects choices and hands off to the Terminal CLI" \
+    || fail "macOS GUI handoff is missing"
 }
 
 make_disk() { #Input: size, name. Output: loop device path
@@ -253,6 +265,13 @@ static_checks
 
 info "== WoR-Flasher test suite =="
 
+if [ "$(uname -s)" == Darwin ] && [ "$MODE" == gui ];then
+  command -v osascript >/dev/null || die "The macOS GUI walkthrough needs osascript."
+  info "DRY_RUN is set, so the selected removable drive will not be modified."
+  DL_DIR="$TEST_DL_DIR" DRY_RUN=1 USE_CACHE=0 "$REPO_DIR/install-wor-gui.sh"
+  exit $?
+fi
+
 if [ "$(uname -s)" != Linux ];then
   if [ "$MODE" == suite ] && [ -z "${WOR_FLASHER_CONTAINER_TEST:-}" ] && [ -x "$REPO_DIR/tests/run-linux-integration.sh" ];then
     if command -v docker >/dev/null && docker info >/dev/null 2>&1 ;then
@@ -314,6 +333,40 @@ done
 [ "$(drive_capability "$DEV_INSTALL")" == install ] && pass "drive_capability $SIZE_INSTALL -> install" || fail "drive_capability $SIZE_INSTALL"
 [ "$(drive_capability "$DEV_RECOVERY")" == recovery ] && pass "drive_capability $SIZE_RECOVERY -> recovery" || fail "drive_capability $SIZE_RECOVERY"
 [ "$(drive_capability "$DEV_SMALL")" == too-small ] && pass "drive_capability $SIZE_TOO_SMALL -> too-small" || fail "drive_capability $SIZE_TOO_SMALL"
+
+if command -v jq >/dev/null ;then
+  original_darwin_plist_json="$(declare -f darwin_plist_json)"
+  test_host_os="$HOST_OS"
+  test_root_dev="$ROOT_DEV"
+  HOST_OS=Darwin
+  ROOT_DEV=/dev/disk0
+  DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false}'
+  darwin_plist_json() {
+    if [ "$2" == list ];then
+      printf '%s\n' '{"AllDisks":["disk2"]}'
+    else
+      printf '%s\n' "$DARWIN_DEVICE_INFO"
+    fi
+  }
+  is_safe_target_device /dev/disk2 && pass "Darwin accepts an external physical writable disk" || fail "Darwin rejected an external physical writable disk"
+  is_safe_target_device /dev/disk0 && fail "Darwin accepted the startup disk" || pass "Darwin rejects the startup disk"
+  [ "$(darwin_list_device_paths)" == /dev/disk2 ] && pass "Darwin GUI lists safe external disks" || fail "Darwin GUI listed an unexpected disk"
+  for safety_case in \
+    'internal:{"WholeDisk":true,"Internal":true,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false}' \
+    'virtual:{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Virtual","ReadOnlyMedia":false}' \
+    'read-only:{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","ReadOnlyMedia":true}' \
+    'partition:{"WholeDisk":false,"Internal":false,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false}'; do
+    case_name="${safety_case%%:*}"
+    DARWIN_DEVICE_INFO="${safety_case#*:}"
+    is_safe_target_device /dev/disk2 && fail "Darwin accepted a $case_name disk" || pass "Darwin rejects a $case_name disk"
+  done
+  eval "$original_darwin_plist_json"
+  unset DARWIN_DEVICE_INFO
+  HOST_OS="$test_host_os"
+  ROOT_DEV="$test_root_dev"
+else
+  skip "Darwin disk safety test needs jq"
+fi
 
 info "== Detecting builds from the catalog =="
 #the newest build an ARMv8.0 Pi can boot, and the newest build overall
@@ -384,6 +437,7 @@ else
   expect_fail "$NEWEST_BID is refused on a Pi 4"
   expect_output "the refusal explains why" "ARMv8.1"
 
+  seed_winfiles "$NEWEST_BID"
   run_flasher BID="$NEWEST_BID" RPI_MODEL=5 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
   expect_ok "$NEWEST_BID is allowed on a Pi 5"
 fi
@@ -409,25 +463,30 @@ expect_fail "an unknown RPI_MODEL is rejected"
 info "== GUI handoff =="
 #Regression test: lxterminal and gnome-terminal reuse an existing process, so the launched
 #terminal does not inherit exported variables. env -i reproduces that.
-handoff_out="$(
-  CONFIG_TXT='arm_64bit=1
-# a "quoted" line with $(touch '"$TEST_DIR"'/INJECTED) and `touch '"$TEST_DIR"'/INJECTED2`
-armstub=RPI_EFI.fd'
-  cli_script="$REPO_DIR/install-wor.sh"
-  export CONFIG_TXT cli_script
-  env_file="$(mktemp)"
-  # declare -p emits shell-escaped declarations; sourcing that generated file is the
-  # behavior under test, so SC2090's warning about indirect command expansion is a false positive.
-  #shellcheck disable=SC2090
-  declare -p CONFIG_TXT cli_script > "$env_file"
-  env -i /bin/bash -c "source '$env_file'; printf '%s\n' \"\$cli_script\"; echo \"\$CONFIG_TXT\" | wc -l"
-  rm -f "$env_file"
-)"
+injection_marker="$TEST_DIR/CONFIG_TXT_INJECTED"
+CONFIG_TXT="arm_64bit=1
+# a \"quoted\" line with \$(touch \"$injection_marker\")
+armstub=RPI_EFI.fd"
+cli_script="$REPO_DIR/install-wor.sh"
+env_file="$(mktemp)"
+runner_file="$(mktemp)"
+# declare -p emits shell-escaped declarations; sourcing that generated file is the
+# behavior under test, so SC2090's warning about indirect command expansion is a false positive.
+#shellcheck disable=SC2090
+declare -p CONFIG_TXT cli_script > "$env_file"
+printf 'source ' > "$runner_file"
+printf '%q' "$env_file" >> "$runner_file"
+printf '\n' >> "$runner_file"
+printf '%s\n' 'printf "%s\n" "$cli_script"' >> "$runner_file"
+printf '%s\n' 'printf "%s\n" "$CONFIG_TXT" | wc -l' >> "$runner_file"
+handoff_out="$(env -i /bin/bash "$runner_file")"
+rm -f "$env_file" "$runner_file"
+unset CONFIG_TXT cli_script injection_marker
 [ "$(head -n1 <<<"$handoff_out")" == "$REPO_DIR/install-wor.sh" ] \
   && pass "values survive a terminal that does not inherit the environment" \
   || fail "values were lost in a terminal that does not inherit the environment"
 [ "$(tail -n1 <<<"$handoff_out")" == 3 ] && pass "a multi-line CONFIG_TXT stays intact" || fail "CONFIG_TXT was mangled"
-if [ -e "$TEST_DIR/INJECTED" ] || [ -e "$TEST_DIR/INJECTED2" ];then
+if [ -e "$TEST_DIR/CONFIG_TXT_INJECTED" ];then
   fail "CONFIG_TXT was executed as code"
 else
   pass "CONFIG_TXT is not executed as code"

@@ -95,14 +95,14 @@ Now, using the new WoR-flasher, it's a _piece of cake_.
 
 WoR-flasher runs on a Linux machine and flashes a drive that you then move to a Raspberry Pi. The table below is about the **computer running the flasher**, not the Pi.
 
-| Host operating system                                     | CLI | GUI | Notes                                                                                                                                                                                                                                          |
-| --------------------------------------------------------- | --- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Raspberry Pi OS (32 or 64-bit)                            | Yes | Yes | The only system upstream tests against                                                                                                                                                                                                         |
-| Debian, Ubuntu, Linux Mint and other Debian-based distros | Yes | Yes | ARM or x86_64. The CLI works over a terminal or SSH; the GUI works on desktop sessions with `yad` and a supported terminal emulator such as GNOME Terminal                                                                                     |
-| Fedora, Arch, openSUSE and other non-Debian Linux         | No  | No  | Dependencies are installed with `apt`, and installed packages are detected by reading the dpkg database                                                                                                                                        |
-| macOS                                                     | No  | No  | The CLI and GUI now fail early with a clear message, but the flashing backend still requires Linux block-device and filesystem tools such as `lsblk`, `findmnt`, `parted`, `mkfs.fat`, `mkfs.exfat`, `mount.exfat-fuse`, `modprobe` and `/sys` |
-| Windows                                                   | No  | No  | Requires Linux block-device and filesystem tooling                                                                                                                                                                                             |
-| Windows with WSL2                                         | No  | No  | WSL2 does not expose removable drives by default, so assume it does not work                                                                                                                                                                   |
+| Host operating system                                     | CLI | GUI | Notes                                                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------------------- | --- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Raspberry Pi OS (32 or 64-bit)                            | Yes | Yes | The only system upstream tests against                                                                                                                                                                                                                                                                                 |
+| Debian, Ubuntu, Linux Mint and other Debian-based distros | Yes | Yes | ARM or x86_64. The CLI works over a terminal or SSH; the GUI works on desktop sessions with `yad` and a supported terminal emulator such as GNOME Terminal                                                                                                                                                             |
+| Fedora, Arch, openSUSE and other non-Debian Linux         | No  | No  | Dependencies are installed with `apt`, and installed packages are detected by reading the dpkg database                                                                                                                                                                                                                |
+| macOS                                                     | Yes | Yes | macOS 13+ with Homebrew. The native GUI selects Windows, Pi model, language, drive, and install mode, then runs the flash in Terminal. The CLI uses `diskutil` and `hdiutil`; it only lists external, physical, writable whole disks. Homebrew installs `aria2`, `cabextract`, `jq`, `wget`, and `wimlib` when needed. |
+| Windows                                                   | No  | No  | Requires Linux block-device and filesystem tooling                                                                                                                                                                                                                                                                     |
+| Windows with WSL2                                         | No  | No  | WSL2 does not expose removable drives by default, so assume it does not work                                                                                                                                                                                                                                           |
 
 You also need:
 
@@ -714,24 +714,24 @@ This repository is looking for a maintainer, so contributions are genuinely welc
 
 Useful when testing changes:
 
-| Command                              | Purpose                                                                                         |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `./tests/run-tests.sh`               | Run the automated suite; on non-Linux hosts it uses Docker for Linux integration when available |
-| `./tests/run-linux-integration.sh`   | Run only the privileged Ubuntu-container integration path, useful for debugging Docker setup    |
-| `./tests/run-tests-gui.sh`           | Run the GUI walkthrough test with Linux/display/yad preflight                                   |
-| `./tests/run-tests.sh --walkthrough` | Create fake drives, then step through the terminal interface by hand                            |
-| `./tests/run-tests.sh --gui`         | Same, but launch the graphical interface                                                        |
-| `./tests/run-tests.sh --full`        | Include the real multi-gigabyte Windows image download                                          |
-| `./tests/run-tests.sh --clean`       | Remove the test workspace and detach its loop devices                                           |
-| `tests/test-lib.sh`                  | Shared test output helpers used by the test entrypoints                                         |
-| `bash -n install-wor.sh`             | Check syntax without running anything                                                           |
-| `DRY_RUN=1 ...`                      | Run the whole flow but stop before touching the drive                                           |
-| `USE_CACHE=1 ...`                    | Reuse downloaded components so iterations are fast                                              |
-| `DEBUG=1 ./terminal-run ...`         | Print which terminal emulator was selected                                                      |
+| Command                              | Purpose                                                                                                         |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `./tests/run-tests.sh`               | Run the automated suite; on non-Linux hosts it uses Docker for Linux integration when available                 |
+| `./tests/run-linux-integration.sh`   | Run only the privileged Ubuntu-container integration path, useful for debugging Docker setup                    |
+| `./tests/run-tests-gui.sh`           | Run the GUI walkthrough with `yad`/display preflight on Linux or `osascript`/removable-drive preflight on macOS |
+| `./tests/run-tests.sh --walkthrough` | Create fake drives, then step through the terminal interface by hand                                            |
+| `./tests/run-tests.sh --gui`         | Same, but launch the graphical interface                                                                        |
+| `./tests/run-tests.sh --full`        | Include the real multi-gigabyte Windows image download                                                          |
+| `./tests/run-tests.sh --clean`       | Remove the test workspace and detach its loop devices                                                           |
+| `tests/test-lib.sh`                  | Shared test output helpers used by the test entrypoints                                                         |
+| `bash -n install-wor.sh`             | Check syntax without running anything                                                                           |
+| `DRY_RUN=1 ...`                      | Run the whole flow but stop before touching the drive                                                           |
+| `USE_CACHE=1 ...`                    | Reuse downloaded components so iterations are fast                                                              |
+| `DEBUG=1 ./terminal-run ...`         | Print which terminal emulator was selected                                                                      |
 
-The harness needs Linux loop devices and passwordless `sudo` for the integration tests. On Linux, `./tests/run-tests.sh` creates loopback drives directly. On non-Linux hosts, the same command tries Docker and runs the integration suite inside a privileged Ubuntu container; if Docker is missing or unavailable, it reports a skip instead of failing. The container uses `/tmp/wor-flasher-test-workspace`, so loop devices, downloads and caches disappear with the container unless you explicitly pass `--keep` to the inner harness. The GUI walkthrough has its own wrapper, `./tests/run-tests-gui.sh`, which skips cleanly without a Linux desktop display and `yad`. The harness detects the newest bootable build for each model from the catalog, so no build number is hardcoded.
+The harness needs Linux loop devices and passwordless `sudo` for the integration tests. On Linux, `./tests/run-tests.sh` creates loopback drives directly. On non-Linux hosts, the same command tries Docker and runs the integration suite inside a privileged Ubuntu container; if Docker is missing or unavailable, it reports a skip instead of failing. The container uses `/tmp/wor-flasher-test-workspace`, so loop devices, downloads and caches disappear with the container unless you explicitly pass `--keep` to the inner harness. The GUI walkthrough has its own wrapper, `./tests/run-tests-gui.sh`: Linux requires a desktop display and `yad`; macOS requires `osascript` and an eligible removable drive, but uses `DRY_RUN=1` and does not modify it. The harness detects the newest bootable build for each model from the catalog, so no build number is hardcoded.
 
-GitHub Actions runs ShellCheck on every shell entrypoint and a focused Ubuntu dry-run integration job with `TEST_MODELS=4`. That keeps pull requests covered without downloading the full Windows image or exercising every Raspberry Pi firmware package on every push.
+GitHub Actions runs ShellCheck on every shell entrypoint, checks syntax with the macOS system Bash, and runs a focused Ubuntu dry-run integration job with `TEST_MODELS=4`. That keeps pull requests covered without downloading the full Windows image or exercising every Raspberry Pi firmware package on every push.
 
 Both installer scripts are plain Bash with no build step. `install-wor-gui.sh` sources `install-wor.sh` for its functions, so shared installer logic belongs in the latter. Test entrypoints share reporting helpers through `tests/test-lib.sh`.
 

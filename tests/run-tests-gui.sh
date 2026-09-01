@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# GUI test harness for wor-flasher. Creates fake drives through run-tests.sh, then
-# launches install-wor-gui.sh with DRY_RUN=1 so no storage is written.
+# GUI test harness for wor-flasher. On Linux it creates fake drives through
+# run-tests.sh; on macOS it uses a real removable drive in DRY_RUN=1 mode.
 #
 # Usage:
 #   ./tests/run-tests-gui.sh        run the GUI walkthrough test
@@ -17,23 +17,29 @@ REPO_DIR="$(script_dir "$TEST_SCRIPT_DIR/..")"
 
 info "== GUI test preflight =="
 
-if [ "$(uname -s)" != Linux ];then
-  skip "GUI walkthrough needs a Linux desktop host with loop-device support"
-  summary
-fi
-pass "Linux host detected"
-
-if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ];then
-  skip "GUI walkthrough needs DISPLAY or WAYLAND_DISPLAY"
-  summary
-fi
-pass "desktop display detected"
-
-if ! command -v yad >/dev/null ;then
-  skip "GUI walkthrough needs yad installed"
-  summary
-fi
-pass "yad is available"
+case "$(uname -s)" in
+  Linux)
+    pass "Linux host detected"
+    if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ];then
+      skip "GUI walkthrough needs DISPLAY or WAYLAND_DISPLAY"
+      summary
+    fi
+    pass "desktop display detected"
+    if ! command -v yad >/dev/null ;then
+      skip "GUI walkthrough needs yad installed"
+      summary
+    fi
+    pass "yad is available"
+    ;;
+  Darwin)
+    command -v osascript >/dev/null || { skip "macOS GUI walkthrough needs osascript"; summary; }
+    pass "macOS native GUI is available"
+    ;;
+  *)
+    skip "GUI walkthrough supports Linux and macOS hosts only"
+    summary
+    ;;
+esac
 
 info "== GUI walkthrough =="
 "$REPO_DIR/tests/run-tests.sh" --gui "$@"
