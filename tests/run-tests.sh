@@ -111,6 +111,15 @@ static_checks() {
     && pass "Darwin drive sizing supports current diskutil metadata" \
     || fail "Darwin drive sizing does not support current diskutil metadata"
 
+  grep -qF 'MACOS_ASKPASS="$(mktemp)"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'register_file_cleanup "$MACOS_ASKPASS"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Formatting " & targetDevice & " - There is no turning back now.' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'WOR_FLASH_TARGET="$DEVICE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'RUN_MODE=%q' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "macOS GUI shows a native password dialog instead of a terminal prompt" \
+    || fail "macOS GUI does not use a native password dialog"
+
   grep -qF 'macos_start_cli()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'macos_show_announcement()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'announcement.png' "$REPO_DIR/install-wor-gui.sh" \
@@ -118,22 +127,24 @@ static_checks() {
     && grep -qF 'Choose Windows version' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "'Windows 11'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Raspberry Pi model' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "'5' Back)" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'cancel button name backButton' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows language' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "'en-us' Back)" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'buttons {"Back", "Refresh"}' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'darwin_list_device_choices' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Refresh detected devices' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '[ "$device_choice" == '\''Refresh detected devices'\'' ]' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose installation mode' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "'Install Windows onto this drive' Back)" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'cancel button name backButton' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'buttons {"Back", "Flash"}' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'step=language; continue' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'buttons {"Cancel", "Back", "Flash"}' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'on error number -128' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '[ "$confirmation" == Cancel ] && exit 0' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '2>/dev/null <<'"'"'APPLESCRIPT' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'All data on the target drive will be erased.' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'completion_script="$(mktemp)"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'osascript "$completion_script"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'installer_status=$?' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'tell application \\\"System Events\\\" to keystroke \\\"w\\\" using command down' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'CONFIG_TXT=%q' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "terminal_runner=\"\$(mktemp)\"" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "printf -v terminal_launch_command 'exec /bin/bash %q'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'do script (item 1 of argv)' "$REPO_DIR/install-wor-gui.sh" \
     && pass "macOS GUI collects choices and hands off to the Terminal CLI" \
     || fail "macOS GUI handoff is missing"
@@ -183,6 +194,22 @@ seed_winfiles() { #Input: build id. Makes install-wor.sh skip the multi-gigabyte
   touch "$TEST_DL_DIR/winfiles_${1}_${TEST_WIN_LANG}/alldone"
 }
 
+seed_bootable_winfiles() { #Input: build id. Creates a small, valid WinPE fixture for a real loop-device flash.
+  local bid="$1" winfiles fixture_one fixture_two
+  winfiles="$TEST_DL_DIR/winfiles_${bid}_${TEST_WIN_LANG}"
+  fixture_one="$TEST_DIR/boot-wim-index-one"
+  fixture_two="$TEST_DIR/boot-wim-index-two"
+  rm -rf "$winfiles" "$fixture_one" "$fixture_two"
+  mkdir -p "$winfiles/bootpart/sources" "$winfiles/bootpart/EFI/BOOT" "$fixture_one" "$fixture_two" "$TEST_DL_DIR/peinstaller/winpe/2"
+  printf 'first boot image\n' > "$fixture_one/fixture.txt"
+  printf 'second boot image\n' > "$fixture_two/fixture.txt"
+  printf 'PE installer fixture\n' > "$TEST_DL_DIR/peinstaller/winpe/2/fixture.txt"
+  printf 'fallback bootloader fixture\n' > "$winfiles/bootpart/EFI/BOOT/BOOTAA64.EFI"
+  wimcapture "$fixture_one" "$winfiles/bootpart/sources/boot.wim" boot-one >/dev/null
+  wimappend "$fixture_two" "$winfiles/bootpart/sources/boot.wim" boot-two >/dev/null
+  touch "$winfiles/install.wim" "$winfiles/alldone"
+}
+
 run_with_timeout() {
   if command -v timeout >/dev/null ;then
     timeout "$TEST_COMMAND_TIMEOUT" "$@"
@@ -198,6 +225,28 @@ run_flasher() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
   output_file="$TEST_DIR/flasher-output.log"
   #stdin is closed so an unexpected prompt (e.g. the root-user confirmation) fails fast instead of hanging
   (cd "$TEST_DIR" && run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" </dev/null) 2>&1 | tee "$output_file" 1>&2
+  LAST_CODE="${PIPESTATUS[0]}"
+  LAST_OUT="$(<"$output_file")"
+  progress "install-wor.sh finished with exit $LAST_CODE"
+}
+
+run_flasher_real() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
+  local output_file
+  progress "running install-wor.sh with $(printf '%s ' "$@")"
+  progress "live installer output follows (timeout: ${TEST_COMMAND_TIMEOUT}s)"
+  output_file="$TEST_DIR/flasher-output.log"
+  (cd "$TEST_DIR" && run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=0 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" </dev/null) 2>&1 | tee "$output_file" 1>&2
+  LAST_CODE="${PIPESTATUS[0]}"
+  LAST_OUT="$(<"$output_file")"
+  progress "install-wor.sh finished with exit $LAST_CODE"
+}
+
+run_flasher_interrupted() { #Input: seconds to wait before SIGINT, then VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
+  local delay="$1" output_file
+  shift
+  progress "running install-wor.sh with $(printf '%s ' "$@"), sending SIGINT after ${delay}s"
+  output_file="$TEST_DIR/flasher-output.log"
+  (cd "$TEST_DIR" && timeout --signal=INT --kill-after=10 "$delay" env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=0 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" </dev/null) 2>&1 | tee "$output_file" 1>&2
   LAST_CODE="${PIPESTATUS[0]}"
   LAST_OUT="$(<"$output_file")"
   progress "install-wor.sh finished with exit $LAST_CODE"
@@ -363,7 +412,7 @@ if command -v jq >/dev/null ;then
   DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false,"DiskSize":64000000000,"MediaName":"USB Drive"}'
   darwin_plist_json() {
     if [ "$2" == list ] && [ "$4" == /dev/disk2 ];then
-      printf '%s\n' '{"AllDisksAndPartitions":[{"Partitions":[{"VolumeName":"EFI","DeviceIdentifier":"disk2s1"},{"VolumeName":"WOR_BOOT","DeviceIdentifier":"disk2s2"},{"VolumeName":"WOR_INSTALL","DeviceIdentifier":"disk2s3"}]}]}'
+      printf '%s\n' '{"AllDisksAndPartitions":[{"Partitions":[{"VolumeName":"WOR_BOOT","DeviceIdentifier":"disk2s1"},{"VolumeName":"WOR_INSTALL","DeviceIdentifier":"disk2s2"}]}]}'
     elif [ "$2" == list ];then
       printf '%s\n' '{"AllDisks":["disk2"]}'
     else
@@ -373,12 +422,16 @@ if command -v jq >/dev/null ;then
   is_safe_target_device /dev/disk2 && pass "Darwin accepts an external physical writable disk" || fail "Darwin rejected an external physical writable disk"
   is_safe_target_device /dev/disk0 && fail "Darwin accepted the startup disk" || pass "Darwin rejects the startup disk"
   [ "$(darwin_list_device_paths)" == /dev/disk2 ] && pass "Darwin GUI lists safe external disks" || fail "Darwin GUI listed an unexpected disk"
-  [ "$(darwin_list_device_choices)" == $'/dev/disk2\t64000000000\tUSB Drive\tVolumes: EFI, WOR_BOOT, WOR_INSTALL' ] \
+  [ "$(darwin_list_device_choices)" == $'/dev/disk2\t64000000000\tUSB Drive\tVolumes: WOR_BOOT, WOR_INSTALL' ] \
     && pass "Darwin GUI lists detected volumes" || fail "Darwin GUI did not show detected volume details"
-  [ "$(darwin_partition_by_volume_name /dev/disk2 WOR_BOOT)" == /dev/disk2s2 ] \
-    && [ "$(darwin_partition_by_volume_name /dev/disk2 WOR_INSTALL)" == /dev/disk2s3 ] \
-    && pass "Darwin flash partitions ignore the automatic EFI partition" \
-    || fail "Darwin flash partitions were not selected by volume name"
+  grep -qF 'sgdisk_bin="$(command -v sgdisk)"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF -e '-t 1:ef00 -c 1:WOR_BOOT' "$REPO_DIR/install-wor.sh" \
+    && grep -qF -e '-t 2:0700 -c 2:WOR_INSTALL' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'diskutil unmountDisk force "$DEVICE" >/dev/null || error "Failed to unmount newly created partitions on $DEVICE."' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'raw_part2="/dev/r${PART2#/dev/}"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'newfs_exfat -v WOR_INSTALL "$raw_part2"' "$REPO_DIR/install-wor.sh" \
+    && pass "Darwin creates WOR_BOOT as a real EFI System Partition" \
+    || fail "Darwin does not type WOR_BOOT as an EFI System Partition"
   DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","WritableMedia":true,"TotalSize":64000000000,"MediaName":"USB Drive"}'
   is_safe_target_device /dev/disk2 && pass "Darwin accepts current writable-media metadata" || fail "Darwin rejected current writable-media metadata"
   for safety_case in \
@@ -453,6 +506,64 @@ info "== Cache modes =="
 run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=0
 run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=1
 expect_output "USE_CACHE=1 reuses a current cache" "cached copy is up to date"
+info "== Linux boot partition layout =="
+seed_bootable_winfiles "$GOOD_BID"
+run_flasher_real BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
+expect_ok "Pi 4 real loop-device flash completes"
+
+boot_partition="$(get_partition "$DEV_INSTALL" 1)"
+partition_count="$(parted -ms "$DEV_INSTALL" unit s print | awk -F: '$1 ~ /^[0-9]+$/ { count++ } END { print count + 0 }')"
+boot_filesystem="$(parted -ms "$DEV_INSTALL" unit s print | awk -F: '$1 == 1 { print $5 }')"
+boot_mount="$(mktemp -d)"
+if sudo mount "$boot_partition" "$boot_mount"; then
+  [ "$partition_count" == 2 ] \
+    && pass "Pi 4 flash creates exactly two partitions" \
+    || fail "Pi 4 flash creates an unexpected partition layout"
+  [ "$boot_filesystem" == fat32 ] \
+    && pass "Pi 4 boot partition is FAT32" \
+    || fail "Pi 4 first partition is not FAT32"
+  sudo test -f "$boot_mount/EFI/BOOT/BOOTAA64.EFI" \
+    && pass "Pi 4 boot loader is on the first FAT partition" \
+    || fail "Pi 4 first partition lacks the UEFI fallback boot loader"
+  sudo umount "$boot_mount"
+else
+  fail "Pi 4 boot partition could not be mounted for verification"
+fi
+rmdir "$boot_mount"
+
+info "== Interruption and authorization failures =="
+
+fake_sudo_dir="$(mktemp -d)"
+cat > "$fake_sudo_dir/sudo" <<'FAKESUDO'
+#!/bin/bash
+echo "sudo: a password is required" 1>&2
+exit 1
+FAKESUDO
+chmod +x "$fake_sudo_dir/sudo"
+
+run_flasher_real PATH="$fake_sudo_dir:$PATH" BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
+expect_fail "flashing stops immediately when sudo/authorization fails"
+expect_output "the failure names the affected step" "Failed to make GPT partition table"
+expect_no_output "nothing continues past an authorization failure" "Generating partitions"
+expect_no_output "nothing continues past an authorization failure" "Copying files"
+expect_no_output "nothing continues past an authorization failure" "script has completed"
+rm -rf "$fake_sudo_dir"
+
+hanging_sudo_dir="$(mktemp -d)"
+cat > "$hanging_sudo_dir/sudo" <<'HANGINGSUDO'
+#!/bin/bash
+#simulates being stuck at an interactive password prompt, like the real sudo would be
+echo "Password:"
+sleep 30
+HANGINGSUDO
+chmod +x "$hanging_sudo_dir/sudo"
+
+run_flasher_interrupted 3 PATH="$hanging_sudo_dir:$PATH" BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
+expect_fail "Ctrl+C while stuck at the password prompt stops the flasher"
+expect_output "Ctrl+C shows a clear interrupted message" "Interrupted"
+expect_no_output "Ctrl+C does not let the flash continue in the background" "script has completed"
+rm -rf "$hanging_sudo_dir"
+
 expect_no_output "USE_CACHE=1 downloads nothing" "Downloading ARM64 drivers"
 
 echo 'https://example.com/stale.zip' > "$TEST_DL_DIR/driverpackage/.wor-flasher-version"

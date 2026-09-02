@@ -5,11 +5,36 @@
 
 CLEANUP_MOUNTS=()
 CLEANUP_DEVICES=()
+CLEANUP_FILES=()
 
 HOST_OS="$(uname -s)"
 
 is_macos() {
   [ "$HOST_OS" == Darwin ]
+}
+
+sudo() { #On the macOS GUI, show a native password dialog instead of blocking the hidden Terminal window.
+  if is_macos && [ "$RUN_MODE" == gui ];then
+    if [ -z "$MACOS_ASKPASS" ] && MACOS_ASKPASS="$(mktemp)" && chmod +x "$MACOS_ASKPASS";then
+      cat > "$MACOS_ASKPASS" <<'ASKPASS'
+#!/bin/bash
+osascript - "$WOR_FLASH_TARGET" <<'APPLESCRIPT'
+on run argv
+  set targetDevice to item 1 of argv
+  set promptText to "WoR-Flasher needs administrator access to flash the drive." & return & return & "Formatting " & targetDevice & " - There is no turning back now."
+  set dialogResult to display dialog promptText default answer "" with hidden answer with title "Windows on Raspberry" with icon caution
+  return text returned of dialogResult
+end run
+APPLESCRIPT
+ASKPASS
+      register_file_cleanup "$MACOS_ASKPASS"
+    fi
+    if [ -n "$MACOS_ASKPASS" ];then
+      WOR_FLASH_TARGET="$DEVICE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"
+      return
+    fi
+  fi
+  command sudo "$@"
 }
 
 cleanup_mounts() {
@@ -26,6 +51,10 @@ cleanup_mounts() {
       sudo hdiutil detach "$mountpoint" >/dev/null 2>&1
     fi
   done
+  local file
+  for file in "${CLEANUP_FILES[@]}" ;do
+    rm -f "$file"
+  done
 }
 
 register_mount_cleanup() { #Input: mountpoint
@@ -35,6 +64,11 @@ register_mount_cleanup() { #Input: mountpoint
 
 register_device_cleanup() { #Input: hdiutil device
   CLEANUP_DEVICES+=("$1")
+  trap cleanup_mounts EXIT
+}
+
+register_file_cleanup() { #Input: file path
+  CLEANUP_FILES+=("$1")
   trap cleanup_mounts EXIT
 }
 
@@ -185,12 +219,38 @@ darwin_mount_iso() { #Input: ISO path. Sets ISO_MOUNTPOINT and ISO_DEVICE.
 
 darwin_flash_device() {
   is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
+  local sgdisk_bin raw_device raw_part1 raw_part2 attempt
+  sgdisk_bin="$(command -v sgdisk)" || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."
+  raw_device="/dev/r${DEVICE#/dev/}"
   status "Formatting $DEVICE - \e[93mThere is no turning back now."
   sudo diskutil unmountDisk force "$DEVICE" || error "Failed to unmount $DEVICE."
-  sudo diskutil partitionDisk "$DEVICE" GPTFormat 'MS-DOS FAT32' WOR_BOOT 999M ExFAT WOR_INSTALL R || error "Failed to partition $DEVICE."
 
-  PART1="$(darwin_partition_by_volume_name "$DEVICE" WOR_BOOT)" || error "Failed to find the WOR_BOOT partition on $DEVICE."
-  PART2="$(darwin_partition_by_volume_name "$DEVICE" WOR_INSTALL)" || error "Failed to find the WOR_INSTALL partition on $DEVICE."
+  #diskutil's partitionDisk cannot set a partition's low-level type, so it never marks the boot
+  #partition as a real EFI System Partition. sgdisk writes that type directly (ef00), which is what
+  #Pi 4 UEFI needs to auto-discover EFI/BOOT/BOOTAA64.EFI on first boot.
+  sudo "$sgdisk_bin" --zap-all "$raw_device" || error "Failed to clear the existing partition table on $DEVICE."
+  sudo "$sgdisk_bin" -og \
+    -n 1:0:+999M -t 1:ef00 -c 1:WOR_BOOT \
+    -n 2:0:0 -t 2:0700 -c 2:WOR_INSTALL \
+    "$raw_device" || error "Failed to partition $DEVICE."
+
+  #raw partition writes don't republish device nodes instantly; wait for macOS to notice them
+  PART1="${DEVICE}s1"
+  PART2="${DEVICE}s2"
+  for attempt in $(seq 1 15) ;do
+    [ -e "$PART1" ] && [ -e "$PART2" ] && break
+    [ "$attempt" == 5 ] && sudo diskutil unmountDisk force "$DEVICE" >/dev/null 2>&1
+    sleep 1
+  done
+  [ -e "$PART1" ] || error "$PART1 did not appear after partitioning $DEVICE."
+  [ -e "$PART2" ] || error "$PART2 did not appear after partitioning $DEVICE."
+  sudo diskutil unmountDisk force "$DEVICE" >/dev/null || error "Failed to unmount newly created partitions on $DEVICE."
+  raw_part1="/dev/r${PART1#/dev/}"
+  raw_part2="/dev/r${PART2#/dev/}"
+
+  sudo newfs_msdos -F 32 -v WOR_BOOT "$raw_part1" >/dev/null || error "Failed to format the boot partition on $PART1."
+  sudo newfs_exfat -v WOR_INSTALL "$raw_part2" >/dev/null || error "Failed to format the installation partition on $PART2."
+
   sudo diskutil mount "$PART1" >/dev/null || error "Failed to mount $PART1."
   sudo diskutil mount "$PART2" >/dev/null || error "Failed to mount $PART2."
   boot_mount="$(darwin_device_value "$PART1" '.MountPoint')" || error "Failed to determine the boot partition mount point."
@@ -493,7 +553,7 @@ install_packages() { #input: space-separated list of apt packages to install
   if is_macos ;then
     command -v brew >/dev/null || error "macOS support requires Homebrew. Install it from https://brew.sh, then run this script again."
     local formula
-    for formula in aria2 cabextract jq wget wimlib; do
+    for formula in aria2 cabextract jq wget wimlib gptfdisk; do
       brew list --formula "$formula" >/dev/null 2>&1 || brew install "$formula" || error "Failed to install Homebrew dependency '$formula'."
     done
     return 0
@@ -800,7 +860,7 @@ If this error persists, contact Botspot - the WoR-flasher developer."
 
 #Pinned versions. Used by default, or as a fallback when the GitHub API is unreachable.
 [ -z "$UEFI_VER_PI3" ] && UEFI_VER_PI3='v1.39'
-[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.33'
+[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.52'
 [ -z "$UEFI_VER_PI5" ] && UEFI_VER_PI5='v0.3'
 
 #Windows driver package. The upstream project is archived, so v0.17 is the final release.
@@ -879,6 +939,9 @@ require_linux_host
 
 #Ensure this script's parent directory is valid
 [ ! -e "$DIRECTORY" ] && error "$(basename "$0"): Failed to determine the directory that contains this script. Try running this script with full paths."
+
+#Guarantee a clean stop with no further steps on Ctrl+C or a termination signal, same as any other error.
+trap 'error "Interrupted."' INT TERM
 
 LANG=C
 LC_ALL=C
@@ -1179,6 +1242,9 @@ elif [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
   CAN_INSTALL_ON_SAME_DRIVE=0
 fi
 }
+
+#fail fast, before any downloads, if macOS partitioning can't proceed later
+is_macos && { command -v sgdisk >/dev/null || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."; }
 
 echo "
 Input configuration:
@@ -1523,7 +1589,7 @@ sudo parted -s "$DEVICE" mklabel gpt || error "Failed to make GPT partition tabl
 sync
 status "Generating partitions"
 sudo parted -s "$DEVICE" mkpart primary 1MB 1000MB || error "Failed to make 1GB primary partition 1 on ${DEVICE}!"
-sudo parted -s "$DEVICE" set 1 msftdata on || error "Failed to enable msftdata flag on $DEVICE partition 1"
+sudo parted -s "$DEVICE" set 1 esp on || error "Failed to enable the EFI System Partition flag on $DEVICE partition 1"
 sync
 if [ $CAN_INSTALL_ON_SAME_DRIVE == 1 ];then
   sudo parted -s "$DEVICE" mkpart primary 1000MB 19000MB || error "Failed to make 19GB primary partition 2 on ${DEVICE}!"

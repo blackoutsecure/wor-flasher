@@ -40,7 +40,7 @@ loading_dialog() { #display a dialog to say something is loading
 }
 
 macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label. Output: selected choice.
-  osascript - "$1" "$2" "$3" "${4:-Cancel}" <<'APPLESCRIPT'
+  osascript - "$1" "$2" "$3" "${4:-Cancel}" 2>/dev/null <<'APPLESCRIPT'
 on run argv
   set choicesText to item 1 of argv
   set promptText to item 2 of argv
@@ -55,7 +55,7 @@ APPLESCRIPT
 }
 
 macos_show_announcement() { #Output: proceed or bvm.
-  osascript - "$DIRECTORY/announcement.png" <<'APPLESCRIPT'
+  osascript - "$DIRECTORY/announcement.png" 2>/dev/null <<'APPLESCRIPT'
 on run argv
   set announcementImage to POSIX file (item 1 of argv) as alias
   set response to display dialog "Consider BVM for running Windows alongside Linux on Raspberry Pi." with title "Windows on Raspberry" buttons {"Cancel", "Check out BVM", "Proceed with WoR-Flasher"} default button "Proceed with WoR-Flasher" cancel button "Cancel" with icon announcementImage
@@ -66,8 +66,8 @@ APPLESCRIPT
 
 macos_choose_device() { #Input: newline-separated detected volume rows. Output: selected row or __REFRESH__.
   if [ -z "$1" ];then
-    osascript <<'APPLESCRIPT'
-display dialog "No external, physical, writable drive was found. Connect a removable drive, then click Refresh." with title "Choose device to flash" buttons {"Back", "Refresh"} default button "Refresh" cancel button "Back"
+    osascript 2>/dev/null <<'APPLESCRIPT'
+  display dialog "No external, physical, writable drive was found. Connect a removable drive, then click Refresh." with title "Choose device to flash" buttons {"Back", "Refresh"} default button "Refresh" cancel button "Back"
 return "__REFRESH__"
 APPLESCRIPT
   else
@@ -77,8 +77,32 @@ APPLESCRIPT
   fi
 }
 
+macos_set_default_config_txt() {
+  if [ -z "$CONFIG_TXT" ] && [ "$RPI_MODEL" == 4 ];then
+    CONFIG_TXT="
+
+# don't change anything below this point #
+arm_64bit=1
+arm_boost=1
+enable_uart=1
+uart_2ndstage=1
+enable_gic=1
+armstub=RPI_EFI.fd
+disable_commandline_tags=1
+disable_overscan=1
+hdmi_drive=2
+hdmi_group=2
+hdmi_mode=87
+hdmi_cvt=1920 1200 60 6 0 0 0
+device_tree_address=0x1f0000
+device_tree_end=0x200000
+dtoverlay=miniuart-bt
+dtoverlay=upstream-pi4"
+  fi
+}
+
 macos_start_cli() {
-  local device_choices device_capability device_choice install_mode mode_choices pi_choices step terminal_command windows_choices
+  local device_choices device_capability device_choice install_mode mode_choices pi_choices step terminal_command terminal_launch_command terminal_runner windows_choices
 
   windows_choices=$'Windows 11\nWindows 10'
   pi_choices=$'5\n4\n3'
@@ -94,6 +118,7 @@ macos_start_cli() {
         list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
         [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
         [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
+        macos_set_default_config_txt
         step=language
         ;;
       language)
@@ -121,7 +146,7 @@ macos_start_cli() {
         step=confirm
         ;;
       confirm)
-        confirmation="$(osascript - "$DEVICE" "$RPI_MODEL" "$BID" "$WIN_LANG" "$CAN_INSTALL_ON_SAME_DRIVE" <<'APPLESCRIPT'
+        confirmation="$(osascript - "$DEVICE" "$RPI_MODEL" "$BID" "$WIN_LANG" "$CAN_INSTALL_ON_SAME_DRIVE" 2>/dev/null <<'APPLESCRIPT'
 on run argv
   set mode to item 5 of argv
   if mode is "1" then
@@ -129,19 +154,28 @@ on run argv
   else
     set mode to "Recovery drive"
   end if
-  set response to display dialog "Target drive: " & item 1 of argv & return & "Raspberry Pi: " & item 2 of argv & return & "Windows build: " & item 3 of argv & " (" & item 4 of argv & ")" & return & "Mode: " & mode & return & return & "All data on the target drive will be erased." with title "Windows on Raspberry" buttons {"Back", "Flash"} default button "Flash" cancel button "Back" with icon caution
+  try
+    set response to display dialog "Target drive: " & item 1 of argv & return & "Raspberry Pi: " & item 2 of argv & return & "Windows build: " & item 3 of argv & " (" & item 4 of argv & ")" & return & "Mode: " & mode & return & return & "All data on the target drive will be erased." with title "Windows on Raspberry" buttons {"Cancel", "Back", "Flash"} default button "Flash" cancel button "Cancel" with icon caution
+  on error number -128
+    return "Cancel"
+  end try
   return button returned of response
 end run
 APPLESCRIPT
-        )" || { step=mode; continue; }
+        )" || exit 0
+        [ "$confirmation" == Cancel ] && exit 0
         [ "$confirmation" == Flash ] && break
         step=mode
         ;;
     esac
   done
 
-  printf -v terminal_command 'cd %q || exit $?; env DL_DIR=%q RPI_MODEL=%q BID=%q WIN_LANG=%q DEVICE=%q CAN_INSTALL_ON_SAME_DRIVE=%q DRY_RUN=%q %q; installer_status=$?; completion_script="$(mktemp)"; printf "%%s\\n" "display dialog \\"Process completed.\\" with title \\"Windows on Raspberry\\" buttons {\\"OK\\"} default button \\"OK\\"" > "$completion_script"; osascript "$completion_script"; rm -f "$completion_script"; (osascript -e "delay 0.5" -e "tell application \\\"Terminal\\\" to activate" -e "tell application \\\"System Events\\\" to keystroke \\\"w\\\" using command down" >/dev/null 2>&1 &) ; exit "$installer_status"' "$DIRECTORY" "$DL_DIR" "$RPI_MODEL" "$BID" "$WIN_LANG" "$DEVICE" "$CAN_INSTALL_ON_SAME_DRIVE" "$DRY_RUN" "$cli_script"
-  osascript - "$terminal_command" <<'APPLESCRIPT'
+  printf -v terminal_command 'cd %q || exit $?; env DL_DIR=%q RPI_MODEL=%q BID=%q WIN_LANG=%q DEVICE=%q CAN_INSTALL_ON_SAME_DRIVE=%q CONFIG_TXT=%q DRY_RUN=%q RUN_MODE=%q %q; installer_status=$?; if [ "$installer_status" == 0 ]; then completion_text="Process completed successfully."; else completion_text="Process failed. See the terminal output above for details."; fi; completion_script="$(mktemp)"; printf "%%s\\n" "display dialog \\"$completion_text\\" with title \\"Windows on Raspberry\\" buttons {\\"OK\\"} default button \\"OK\\"" > "$completion_script"; osascript "$completion_script"; rm -f "$completion_script"; exit "$installer_status"' "$DIRECTORY" "$DL_DIR" "$RPI_MODEL" "$BID" "$WIN_LANG" "$DEVICE" "$CAN_INSTALL_ON_SAME_DRIVE" "$CONFIG_TXT" "$DRY_RUN" "$RUN_MODE" "$cli_script"
+  terminal_runner="$(mktemp)" || error "Failed to create a temporary Terminal runner."
+  printf '%s\n%s\n%s\n' '#!/bin/bash' 'trap '\''rm -f "$0"'\'' EXIT' "$terminal_command" > "$terminal_runner"
+  chmod +x "$terminal_runner" || error "Failed to make the temporary Terminal runner executable."
+  printf -v terminal_launch_command 'exec /bin/bash %q' "$terminal_runner"
+  osascript - "$terminal_launch_command" <<'APPLESCRIPT' >/dev/null
 on run argv
   tell application "Terminal"
     activate

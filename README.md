@@ -95,14 +95,14 @@ Now, using the new WoR-flasher, it's a _piece of cake_.
 
 WoR-flasher runs on a Linux machine and flashes a drive that you then move to a Raspberry Pi. The table below is about the **computer running the flasher**, not the Pi.
 
-| Host operating system                                     | CLI | GUI | Notes                                                                                                                                                                                                                                                                                                                  |
-| --------------------------------------------------------- | --- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Raspberry Pi OS (32 or 64-bit)                            | Yes | Yes | The only system upstream tests against                                                                                                                                                                                                                                                                                 |
-| Debian, Ubuntu, Linux Mint and other Debian-based distros | Yes | Yes | ARM or x86_64. The CLI works over a terminal or SSH; the GUI works on desktop sessions with `yad` and a supported terminal emulator such as GNOME Terminal                                                                                                                                                             |
-| Fedora, Arch, openSUSE and other non-Debian Linux         | No  | No  | Dependencies are installed with `apt`, and installed packages are detected by reading the dpkg database                                                                                                                                                                                                                |
-| macOS                                                     | Yes | Yes | macOS 13+ with Homebrew. The native GUI selects Windows, Pi model, language, drive, and install mode, then runs the flash in Terminal. The CLI uses `diskutil` and `hdiutil`; it only lists external, physical, writable whole disks. Homebrew installs `aria2`, `cabextract`, `jq`, `wget`, and `wimlib` when needed. |
-| Windows                                                   | No  | No  | Requires Linux block-device and filesystem tooling                                                                                                                                                                                                                                                                     |
-| Windows with WSL2                                         | No  | No  | WSL2 does not expose removable drives by default, so assume it does not work                                                                                                                                                                                                                                           |
+| Host operating system                                     | CLI | GUI | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------------------------- | --- | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Raspberry Pi OS (32 or 64-bit)                            | Yes | Yes | The only system upstream tests against                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Debian, Ubuntu, Linux Mint and other Debian-based distros | Yes | Yes | ARM or x86_64. The CLI works over a terminal or SSH; the GUI works on desktop sessions with `yad` and a supported terminal emulator such as GNOME Terminal                                                                                                                                                                                                                                                                                                                                                          |
+| Fedora, Arch, openSUSE and other non-Debian Linux         | No  | No  | Dependencies are installed with `apt`, and installed packages are detected by reading the dpkg database                                                                                                                                                                                                                                                                                                                                                                                                             |
+| macOS                                                     | Yes | Yes | macOS 13+ with Homebrew. The native GUI selects Windows, Pi model, language, drive, and install mode, then runs the flash in Terminal. The CLI uses `diskutil`, `hdiutil`, and `sgdisk` (from Homebrew's `gptfdisk`) to partition the drive with a real EFI System Partition for `WOR_BOOT`. It only lists external, physical, writable whole disks. Homebrew installs `aria2`, `cabextract`, `gptfdisk`, `jq`, `wget`, and `wimlib` when needed. See [macOS Pi 4/400 boot notes](#macos-pi-4400-boot-notes) below. |
+| Windows                                                   | No  | No  | Requires Linux block-device and filesystem tooling                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Windows with WSL2                                         | No  | No  | WSL2 does not expose removable drives by default, so assume it does not work                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 You also need:
 
@@ -351,7 +351,7 @@ CAN_INSTALL_ON_SAME_DRIVE: 1
 BID: 22631.2861
 WIN_LANG: en-us
 
-Using UEFI firmware: https://github.com/pftf/RPi4/releases/download/v1.33/RPi4_UEFI_Firmware_v1.33.zip
+Using UEFI firmware: https://github.com/pftf/RPi4/releases/download/v1.52/RPi4_UEFI_Firmware_v1.52.zip
 Formatting /dev/sdb
 Generating partitions
 Generating filesystems
@@ -361,6 +361,14 @@ Generating filesystems
 </details>
 This script is actually what does the flashing: the GUI script is a front-end that launches dialog windows and finally runs install-wor.sh in a terminal.
 
+### macOS Pi 4/400 boot notes
+
+`diskutil` cannot set a partition's low-level type ID directly, and it also auto-inserts its own empty ~200 MB EFI partition ahead of `WOR_BOOT` on GPT disks whenever `WOR_BOOT` is given a fixed size. Neither can be worked around through `diskutil` alone, and macOS blocks (under System Integrity Protection) the raw `gpt`/`fdisk` writes that Apple's own tools would need to fix it.
+
+WoR-flasher works around this by partitioning with `sgdisk` (from Homebrew's `gptfdisk`) instead, writing `WOR_BOOT` directly as a real EFI System Partition with no extra partition ahead of it. `setup()` installs `gptfdisk` automatically; if `sgdisk` is still missing for any reason, install it manually with `brew install gptfdisk`.
+
+When launched from the native GUI, `install-wor.sh` runs in a separate Terminal window. Instead of blocking there with a plain-text `sudo` prompt, it shows a native macOS password dialog. This only applies to the GUI; the terminal interface still prompts for `sudo` normally in the same window you ran it from.
+
 ## Troubleshooting
 
 ### The Pi is stuck on the rainbow screen
@@ -368,7 +376,7 @@ This script is actually what does the flashing: the GUI script is a front-end th
 The GPU firmware never handed off to the UEFI firmware. Usually one of:
 
 - **Mismatched firmware files.** `RPI_EFI.fd`, `start4.elf`, `fixup4.dat`, the `.dtb` files, and the `overlays/` folder must all come from the same UEFI release. Hand-copying only some of them causes this. Re-flash rather than patching files individually.
-- **Incompatible firmware.** WoR-flasher uses Pi 4 UEFI v1.33 by default because upstream held that version for Windows boot stability. Set `UEFI_USE_LATEST=1` only when testing a newer firmware release intentionally.
+- **Incompatible firmware.** WoR-flasher uses Pi 4 UEFI v1.52 by default. Set `UEFI_USE_LATEST=1` only when testing a newer firmware release intentionally.
 - **Outdated bootloader EEPROM.** Update it with Raspberry Pi Imager (`Misc Utility Images` → `Bootloader`).
 
 The green ACT LED blink pattern narrows it down: 3 blinks means `start4.elf` was not found, 4 blinks means it failed to launch, and 7 blinks means `RPI_EFI.fd` was not found.
@@ -474,7 +482,7 @@ These have working defaults and rarely need changing.
 | --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `UEFI_USE_LATEST`     | `0`                                      | Use the pinned, known-compatible UEFI version. Set to `1` to query GitHub for the newest stable release                                                                                    |
 | `UEFI_VER_PI3`        | `v1.39`                                  | Pinned UEFI version, used by default or when the GitHub API is unreachable                                                                                                                 |
-| `UEFI_VER_PI4`        | `v1.33`                                  | Pinned UEFI version, retained by the upstream WoR-Flasher project for Windows boot stability                                                                                               |
+| `UEFI_VER_PI4`        | `v1.52`                                  | Pinned UEFI version, used by default or when the GitHub API is unreachable                                                                                                                 |
 | `UEFI_VER_PI5`        | `v0.3`                                   | Pinned UEFI version, used by default or when the GitHub API is unreachable                                                                                                                 |
 | `DRIVERS_USE_LATEST`  | `1`                                      | Download the newest ARM64 driver release from GitHub. Set to `0` to use the pinned version instead                                                                                         |
 | `DRIVER_VER`          | `v0.17`                                  | Pinned driver package version, used when `DRIVERS_USE_LATEST=0` or GitHub is unreachable. The upstream project is archived, so this is the final release                                   |
