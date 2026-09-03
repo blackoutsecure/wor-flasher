@@ -3,6 +3,9 @@
 #Written by Botspot
 #This script is an automation for the tutorial that can be found here: https://worproject.com/guides/how-to-install/from-other-os
 
+#shared app title, used for window titles and dialog titles across this file and install-wor-gui.sh
+: "${WOR_APP_TITLE:=Windows on Raspberry}"
+
 CLEANUP_MOUNTS=()
 CLEANUP_DEVICES=()
 CLEANUP_FILES=()
@@ -21,7 +24,7 @@ sudo() { #On the macOS GUI, show a native password dialog instead of blocking th
 osascript - "$WOR_FLASH_TARGET" <<'APPLESCRIPT'
 on run argv
   set targetDevice to item 1 of argv
-  set promptText to "WoR-Flasher needs administrator access to flash the drive." & return & return & "Formatting " & targetDevice & " - There is no turning back now."
+  set promptText to "WoR-Flasher needs administrator access to flash the drive." & return & return & "Formatting " & targetDevice & return & return & "There is no turning back now."
   set dialogResult to display dialog promptText default answer "" with hidden answer with title "Windows on Raspberry" with icon caution
   return text returned of dialogResult
 end run
@@ -73,37 +76,120 @@ register_file_cleanup() { #Input: file path
 }
 
 gui_error_dialog() { #Input: error message
-  local plain
+  local plain icon_path
   plain="$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
-  if command -v zenity >/dev/null ;then
-    zenity --error --title "$(basename "$0")" --width 360 --text "$plain"
-  elif command -v osascript >/dev/null ;then
-    osascript -e 'on run argv' -e 'display alert (item 1 of argv) message (item 2 of argv) as critical' -e 'end run' "$(basename "$0")" "$plain" >/dev/null
+  [ -n "$WOR_GUI_ERROR_MARKER" ] && : > "$WOR_GUI_ERROR_MARKER"
+  [ -f "$DIRECTORY/logo.png" ] && icon_path="$DIRECTORY/logo.png" || icon_path=''
+  if command -v osascript >/dev/null ;then
+    osascript -l JavaScript - "$plain" "$icon_path" "$WOR_APP_TITLE" <<'JXA' >/dev/null 2>&1
+ObjC.import('AppKit')
+const args = $.NSProcessInfo.processInfo.arguments
+const message = ObjC.unwrap(args.objectAtIndex(4))
+const iconPath = ObjC.unwrap(args.objectAtIndex(5))
+const appTitle = ObjC.unwrap(args.objectAtIndex(6))
+
+const app = $.NSApplication.sharedApplication
+$.NSProcessInfo.processInfo.processName = appTitle
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+if (iconPath.length > 0) {
+  app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
+}
+
+let window
+const Controller = ObjC.registerSubclass({
+  name: 'WorErrorController',
+  superclass: 'NSObject',
+  methods: {
+    'okClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        app.stopModalWithCode($.NSOKButton)
+        window.orderOut(null)
+      }
+    },
+    'windowWillClose:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        app.stopModalWithCode($.NSOKButton)
+      }
+    }
+  }
+})
+const controller = $.WorErrorController.alloc.init
+
+const width = 560
+const height = 220
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable
+window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
+window.title = appTitle
+window.setDelegate(controller)
+window.center
+
+const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
+window.contentView = content
+
+const label = $.NSTextField.labelWithString(message)
+label.frame = $.NSMakeRect(20, 70, width - 40, height - 100)
+label.font = $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightMedium)
+label.setUsesSingleLineMode(false)
+label.cell.setWraps(true)
+label.cell.setScrollable(false)
+content.addSubview(label)
+
+const okButton = $.NSButton.buttonWithTitleTargetAction('OK', controller, 'okClicked:')
+okButton.bezelStyle = $.NSBezelStyleRounded
+okButton.keyEquivalent = '\r'
+okButton.sizeToFit
+const okWidth = Math.max(96, okButton.frame.size.width)
+okButton.frame = $.NSMakeRect(width - 20 - okWidth, 22, okWidth, 32)
+content.addSubview(okButton)
+
+window.makeKeyAndOrderFront(null)
+if (!app.isActive) app.requestUserAttention($.NSInformationalRequest)
+app.activateIgnoringOtherApps(true)
+app.runModalForWindow(window)
+app.terminate(null)
+JXA
+  elif command -v yad >/dev/null ;then
+    yad --center --window-icon="$icon_path" --title="$WOR_APP_TITLE" --text="$plain"
+  elif command -v zenity >/dev/null ;then
+    zenity --error --title "$WOR_APP_TITLE" --width 360 --text "$plain"
   fi
 }
 
 error() { #Input: error message
-  echo -e "\e[91m$1\e[0m" 1>&2
+  printf '\033[91m%b\033[0m\n' "$1" 1>&2
   [ "$RUN_MODE" == gui ] && gui_error_dialog "$1"
   exit 1
 }
 
 status() { #blue text to indicate what is happening
-
-  #detect if a flag was passed, and if so, pass it on to the echo command
   if [[ "$1" == '-'* ]] && [ ! -z "$2" ];then
-    echo -e $1 "\e[96m$2\e[0m" 1>&2
+    printf '\033[96m%b\033[0m' "$2" 1>&2
+    [ "$1" == '-n' ] || printf '\n' 1>&2
   else
-    echo -e "\e[96m$1\e[0m" 1>&2
+    printf '\033[96m%b\033[0m\n' "$1" 1>&2
   fi
 }
 
 echo_green() { #announce the success of a major action
-  echo -e "\e[92m$1\e[0m" 1>&2
+  printf '\033[92m%b\033[0m\n' "$1" 1>&2
 }
 
 echo_red() { #announce the failure of a nonfatal action
-  echo -e "\e[91m$1\e[0m" 1>&2
+  printf '\033[91m%b\033[0m\n' "$1" 1>&2
+}
+
+phase() { #Input: message. A numbered status() line marking one of the major installation stages.
+  STEP_NUM=$((STEP_NUM+1))
+  status "[Step $STEP_NUM/$STEP_TOTAL] $1"
+}
+
+cli_pause() {
+  if [ "$RUN_MODE" != gui ] && [ -t 0 ];then
+    printf 'Press Enter to exit.\n'
+    read -r </dev/tty
+  fi
 }
 
 resolve_path() { #Input: path. Output: absolute path, using GNU or BSD tools when available
@@ -139,8 +225,8 @@ require_macos_tools() {
     fi
   fi
   local tool
-  for tool in diskutil hdiutil plutil jq; do
-    command -v "$tool" >/dev/null || error "macOS support requires '$tool'. Install Homebrew from https://brew.sh, then run this script again so it can install the required packages."
+  for tool in diskutil hdiutil plutil; do
+    command -v "$tool" >/dev/null || error "macOS support requires '$tool' on PATH. Run this script from a normal macOS shell, then try again."
   done
 }
 
@@ -195,17 +281,52 @@ darwin_list_device_paths() { #Output: external physical whole-disk paths suitabl
   done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
 }
 
-darwin_list_device_choices() { #Output: tab-delimited safe disk path, size, media name, and detected volumes.
-  local device details volume_names
+darwin_human_size() { #Input: size in bytes. Output: human-readable size (e.g. 1.9 TB)
+  awk -v bytes="$1" 'BEGIN {
+    units[0]="B"; units[1]="KB"; units[2]="MB"; units[3]="GB"; units[4]="TB"
+    size = bytes + 0
+    i = 0
+    while (size >= 1024 && i < 4) { size /= 1024; i++ }
+    printf "%.1f %s", size, units[i]
+  }'
+}
+
+darwin_apfs_volume_names() { #Input: whole disk. Output: APFS volume labels backed by this physical disk.
+  local apfs_details partition_ids
+  partition_ids="$(darwin_plist_json diskutil list -plist "$1" | jq -r '.AllDisksAndPartitions[0].Partitions[]?.DeviceIdentifier')" || return 0
+  [ -z "$partition_ids" ] && return 0
+  apfs_details="$(diskutil apfs list -plist 2>/dev/null | plutil -convert json -o - -)" || return 0
+  jq -r --arg ids "$partition_ids" '
+    ($ids | split("\n") | map(select(length > 0))) as $stores |
+    [.Containers[]?
+      | select([.PhysicalStores[]?.DeviceIdentifier] | any(. as $id | $stores | index($id)))
+      | .Volumes[]?.Name]
+    | unique
+    | if length == 0 then empty else join(", ") end
+  ' <<<"$apfs_details"
+}
+
+darwin_list_device_choices() { #Output: tab-delimited safe disk path, size, media name, labels, and detected volumes.
+  local device details label_names volume_names
   while read -r device; do
     device="/dev/$device"
     darwin_is_safe_device "$device" || continue
     details="$(darwin_plist_json diskutil list -plist "$device")" || continue
+    label_names="$(
+      {
+        jq -r '.AllDisksAndPartitions[0].Partitions[]?.VolumeName? // empty' <<<"$details"
+        darwin_apfs_volume_names "$device"
+      } | awk 'NF && !seen[$0]++ { labels = labels ? labels ", " $0 : $0 } END { print labels }'
+    )"
+    [ -z "$label_names" ] && label_names='No labels'
     volume_names="$(jq -r '[.AllDisksAndPartitions[0].Partitions[]? | .VolumeName // .DeviceIdentifier] | if length == 0 then "No volumes" else join(", ") end' <<<"$details")"
-    printf '%s\t%s\t%s\tVolumes: %s\n' \
+    #only the field before the first tab is parsed as the device path, so the remaining
+    #fields use readable spacing instead of raw tabs, which render squished together
+    printf '%s\t%s   %s   Labels: %s   Volumes: %s\n' \
       "$device" \
-      "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')" \
+      "$(darwin_human_size "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')")" \
       "$(darwin_device_value "$device" '.MediaName // .DeviceIdentifier')" \
+      "$label_names" \
       "$volume_names"
   done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
 }
@@ -219,24 +340,35 @@ darwin_mount_iso() { #Input: ISO path. Sets ISO_MOUNTPOINT and ISO_DEVICE.
 
 darwin_flash_device() {
   is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
-  local sgdisk_bin raw_device raw_part1 raw_part2 attempt
+  local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device raw_part1 raw_part2 attempt
   sgdisk_bin="$(command -v sgdisk)" || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."
+  if ! sudo -v >/dev/null 2>&1;then
+    error "Administrator authentication failed or was canceled. Enter the correct macOS password and try again."
+  fi
   raw_device="/dev/r${DEVICE#/dev/}"
-  status "Formatting $DEVICE - \e[93mThere is no turning back now."
+  boot_payload_kb="$(du -sk "$PWD/$winfiles/bootpart" "$PWD/peinstaller/winpe/2" "$PWD/peinstaller/efi" 2>/dev/null | awk '{total += $1} END {print total + 0}')"
+  boot_size_mb=$((boot_payload_kb / 1024 + 512))
+  [ "$boot_size_mb" -lt 1536 ] && boot_size_mb=1536
+  [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && install_size_mb=18000 || install_size_mb=6000
+  phase "Partitioning and formatting $DEVICE"
+  printf '  There is no turning back now.\n' 1>&2
+  status "  Unmounting existing volumes"
   sudo diskutil unmountDisk force "$DEVICE" || error "Failed to unmount $DEVICE."
 
-  #diskutil's partitionDisk cannot set a partition's low-level type, so it never marks the boot
-  #partition as a real EFI System Partition. sgdisk writes that type directly (ef00), which is what
-  #Pi 4 UEFI needs to auto-discover EFI/BOOT/BOOTAA64.EFI on first boot.
-  sudo "$sgdisk_bin" --zap-all "$raw_device" || error "Failed to clear the existing partition table on $DEVICE."
+  status "  Creating WOR_BOOT (${boot_size_mb} MB) and WOR_INSTALL (${install_size_mb} MB)"
+  sudo "$sgdisk_bin" --zap-all "$raw_device" >/dev/null || error "Failed to clear the existing partition table on $DEVICE."
   sudo "$sgdisk_bin" -og \
-    -n 1:0:+999M -t 1:ef00 -c 1:WOR_BOOT \
-    -n 2:0:0 -t 2:0700 -c 2:WOR_INSTALL \
-    "$raw_device" || error "Failed to partition $DEVICE."
-
-  #raw partition writes don't republish device nodes instantly; wait for macOS to notice them
+    -n "1:0:+${boot_size_mb}M" -t 1:ef00 -c 1:WOR_BOOT \
+    -n "2:0:+${install_size_mb}M" -t 2:0700 -c 2:WOR_INSTALL \
+    -A 1:set:63 -A 2:set:63 \
+    "$raw_device" >/dev/null || error "Failed to partition $DEVICE."
+  status "  Releasing partition locks"
+  sudo diskutil unmountDisk force "$DEVICE" >/dev/null \
+    || error "Failed to unmount newly created partitions on $DEVICE."
   PART1="${DEVICE}s1"
   PART2="${DEVICE}s2"
+
+  #raw partition writes don't republish device nodes instantly; wait for macOS to notice them
   for attempt in $(seq 1 15) ;do
     [ -e "$PART1" ] && [ -e "$PART2" ] && break
     [ "$attempt" == 5 ] && sudo diskutil unmountDisk force "$DEVICE" >/dev/null 2>&1
@@ -244,12 +376,14 @@ darwin_flash_device() {
   done
   [ -e "$PART1" ] || error "$PART1 did not appear after partitioning $DEVICE."
   [ -e "$PART2" ] || error "$PART2 did not appear after partitioning $DEVICE."
-  sudo diskutil unmountDisk force "$DEVICE" >/dev/null || error "Failed to unmount newly created partitions on $DEVICE."
   raw_part1="/dev/r${PART1#/dev/}"
   raw_part2="/dev/r${PART2#/dev/}"
 
+  status "  Formatting WOR_BOOT and WOR_INSTALL"
   sudo newfs_msdos -F 32 -v WOR_BOOT "$raw_part1" >/dev/null || error "Failed to format the boot partition on $PART1."
-  sudo newfs_exfat -v WOR_INSTALL "$raw_part2" >/dev/null || error "Failed to format the installation partition on $PART2."
+  sudo newfs_exfat -R -v WOR_INSTALL "$raw_part2" >/dev/null || error "Failed to format the installation partition on $PART2."
+  sudo "$sgdisk_bin" -A 1:clear:63 -A 2:clear:63 "$raw_device" >/dev/null \
+    || error "Failed to enable mounting of the formatted partitions on $DEVICE."
 
   sudo diskutil mount "$PART1" >/dev/null || error "Failed to mount $PART1."
   sudo diskutil mount "$PART2" >/dev/null || error "Failed to mount $PART2."
@@ -258,24 +392,24 @@ darwin_flash_device() {
   register_mount_cleanup "$boot_mount"
   register_mount_cleanup "$win_mount"
 
-  status "Copying files to $DEVICE:"
+  phase "Copying files to $DEVICE:"
   echo "  - Startup environment"
-  sudo cp -r "$PWD/$winfiles/bootpart"/* "$boot_mount" || error "Failed to copy startup files to $boot_mount"
+  copy_startup_environment_with_progress "$PWD/$winfiles/bootpart" "$boot_mount" || error "Failed to copy startup files to $boot_mount"
   echo "  - Installation files"
-  sudo cp "$PWD/$winfiles/install.wim" "$win_mount" || error "Failed to copy installation files to $win_mount"
+  copy_file_with_progress install.wim "$PWD/$winfiles/install.wim" "$win_mount/install.wim" || error "Failed to copy installation files to $win_mount"
   echo "  - EFI files"
   sudo cp -r "$PWD/peinstaller/efi" "$boot_mount" || error "Failed to copy EFI files to $boot_mount"
   echo "  - PE installer"
-  errors="$(sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add peinstaller/winpe/2 /" 2>&1)" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim\nErrors:\n$errors"
+  sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add peinstaller/winpe/2 /" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim"
 
   if [ "$RPI_MODEL" == 5 ];then
     echo "  - ARM64 drivers"
     : > "$PWD/critical"
-    errors="$(sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add critical /drivers/critical" 2>&1)" || error "The wimupdate command failed to add $PWD/critical to boot.wim\nErrors:\n$errors"
+    sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add critical /drivers/critical" || error "The wimupdate command failed to add $PWD/critical to boot.wim"
     rm "$PWD/critical"
   else
     echo "  - ARM64 drivers"
-    errors="$(sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add driverpackage /drivers" 2>&1)" || error "The wimupdate command failed to add $PWD/driverpackage to boot.wim\nErrors:\n$errors"
+    sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add driverpackage /drivers" || error "The wimupdate command failed to add $PWD/driverpackage to boot.wim"
   fi
 
   echo "  - UEFI firmware"
@@ -283,10 +417,11 @@ darwin_flash_device() {
   [ -z "$CONFIG_TXT" ] || echo "$CONFIG_TXT" | sudo tee "$boot_mount/config.txt" >/dev/null
   [ "$RPI_MODEL" != 3 ] || sudo dd if="$PWD/peinstaller/pi3/gptpatch.img" of="/dev/r${DEVICE#/dev/}" conv=fsync || error "Failed to apply the Pi3 GPT partition-table fix to $DEVICE"
 
-  sync
+  verify_written_image "$DEVICE" "$PART1" "$PART2" "$boot_mount" "$win_mount" "$PWD/$winfiles/install.wim"
   sudo diskutil unmountDisk "$DEVICE" || echo_red "Warning: failed to unmount $DEVICE"
   sudo diskutil eject "$DEVICE" || echo_red "Warning: failed to eject $DEVICE"
-  status "$(basename "$0") script has completed."
+  phase "$WOR_APP_TITLE script has completed."
+  cli_pause
 }
 
 get_file_size() { #Input: file. Output: size in bytes, portable across GNU and BSD userlands
@@ -318,27 +453,149 @@ sha256_file() { #Input: file. Output: SHA256 hash
   fi
 }
 
+copy_file_with_progress() { #Input: progress label, source file, destination file
+  local label="$1" source="$2" destination="$3" size pipe_status
+  size="$(get_file_size "$source")" || return 1
+  pv -f -N "$label" -s "$size" "$source" | sudo tee "$destination" >/dev/null
+  pipe_status=("${PIPESTATUS[@]}")
+  [ "${pipe_status[0]}" == 0 ] && [ "${pipe_status[1]}" == 0 ]
+}
+
+copy_local_file_with_progress() { #Input: progress label, source file, destination file
+  local label="$1" source="$2" destination="$3" size pipe_status
+  size="$(get_file_size "$source")" || return 1
+  pv -f -N "$label" -s "$size" "$source" | tee "$destination" >/dev/null
+  pipe_status=("${PIPESTATUS[@]}")
+  [ "${pipe_status[0]}" == 0 ] && [ "${pipe_status[1]}" == 0 ]
+}
+
+copy_startup_environment_with_progress() { #Input: source boot-media root, destination root, optional local flag
+  local source="$1" destination="$2" mode="${3:-device}"
+  if [ "$mode" == local ];then
+    cp -R "$source/boot" "$source/efi" "$destination" || return 1
+    mkdir -p "$destination/sources" || return 1
+    copy_local_file_with_progress boot.wim "$source/sources/boot.wim" "$destination/sources/boot.wim"
+  else
+    sudo cp -R "$source/boot" "$source/efi" "$destination" || return 1
+    sudo mkdir -p "$destination/sources" || return 1
+    copy_file_with_progress boot.wim "$source/sources/boot.wim" "$destination/sources/boot.wim"
+  fi
+}
+
+sha1_file_with_progress() { #Input: progress label, file. Output: SHA1 hash
+  local label="$1" file="$2" size
+  size="$(get_file_size "$file")" || return 1
+  if command -v sha1sum >/dev/null ;then
+    (set -o pipefail; pv -f -N "$label" -s "$size" "$file" | sha1sum | awk '{print $1}')
+  else
+    (set -o pipefail; pv -f -N "$label" -s "$size" "$file" | shasum -a 1 | awk '{print $1}')
+  fi
+}
+
+sha256_file_with_progress() { #Input: progress label, file. Output: SHA256 hash
+  local label="$1" file="$2" size
+  size="$(get_file_size "$file")" || return 1
+  if command -v sha256sum >/dev/null ;then
+    (set -o pipefail; pv -f -N "$label" -s "$size" "$file" | sha256sum | awk '{print $1}')
+  else
+    (set -o pipefail; pv -f -N "$label" -s "$size" "$file" | shasum -a 256 | awk '{print $1}')
+  fi
+}
+
+verify_written_image() { #Input: device, boot partition, install partition, boot mount, install mount, source install.wim
+  local device="$1" boot_partition="$2" install_partition="$3" boot_mount="$4" install_mount="$5" source_install="$6"
+  local partition_count boot_content install_content boot_filesystem install_filesystem boot_label install_label source_hash written_hash
+  local device_size install_offset install_size trailing_free geometry
+
+  phase "Verifying the written image"
+  sync
+
+  if is_macos ;then
+    partition_count="$(darwin_plist_json diskutil list -plist "$device" | jq '[.AllDisksAndPartitions[0].Partitions[]?] | length')"
+    boot_content="$(darwin_device_value "$boot_partition" '.Content')"
+    install_content="$(darwin_device_value "$install_partition" '.Content')"
+    boot_filesystem="$(darwin_device_value "$boot_partition" '.FilesystemType')"
+    install_filesystem="$(darwin_device_value "$install_partition" '.FilesystemType')"
+    boot_label="$(darwin_device_value "$boot_partition" '.VolumeName')"
+    install_label="$(darwin_device_value "$install_partition" '.VolumeName')"
+    device_size="$(darwin_device_value "$device" '.TotalSize // .Size')"
+    install_offset="$(darwin_device_value "$install_partition" '.PartitionMapPartitionOffset')"
+    install_size="$(darwin_device_value "$install_partition" '.Size')"
+  else
+    geometry="$(parted -ms "$device" unit B print)" || error "Written-image verification failed: could not read partition geometry from $device."
+    partition_count="$(awk -F: '$1 ~ /^[0-9]+$/ {count++} END {print count + 0}' <<<"$geometry")"
+    boot_content="$(awk -F: '$1 == 1 {print $7}' <<<"$geometry")"
+    install_content="$(awk -F: '$1 == 2 {print $7}' <<<"$geometry")"
+    device_size="$(awk -F: 'NR == 2 {sub(/B$/, "", $2); print $2}' <<<"$geometry")"
+    install_offset="$(awk -F: '$1 == 2 {sub(/B$/, "", $2); print $2}' <<<"$geometry")"
+    install_size="$(awk -F: '$1 == 2 {sub(/B$/, "", $4); print $4}' <<<"$geometry")"
+    boot_filesystem="$(sudo blkid -s TYPE -o value "$boot_partition")"
+    install_filesystem="$(sudo blkid -s TYPE -o value "$install_partition")"
+    boot_label="$(sudo blkid -s LABEL -o value "$boot_partition")"
+    install_label="$(sudo blkid -s LABEL -o value "$install_partition")"
+  fi
+
+  [ "$partition_count" == 2 ] || error "Written-image verification failed: expected exactly 2 partitions on $device, found $partition_count."
+  [ "$boot_content" == EFI ] || [[ "$boot_content" == *esp* ]] || error "Written-image verification failed: partition 1 is not an EFI System Partition."
+  [ "$install_content" == "Microsoft Basic Data" ] || [[ "$install_content" == *msftdata* ]] || error "Written-image verification failed: partition 2 is not Microsoft Basic Data."
+  [ "$boot_filesystem" == msdos ] || [ "$boot_filesystem" == vfat ] || error "Written-image verification failed: partition 1 is not FAT32."
+  [ "$install_filesystem" == exfat ] || error "Written-image verification failed: partition 2 is not ExFAT."
+  [ "$boot_label" == WOR_BOOT ] || error "Written-image verification failed: partition 1 is labeled '$boot_label', not 'WOR_BOOT'."
+  [ "$install_label" == WOR_INSTALL ] || error "Written-image verification failed: partition 2 is labeled '$install_label', not 'WOR_INSTALL'."
+  [[ "$device_size" =~ ^[0-9]+$ ]] && [[ "$install_offset" =~ ^[0-9]+$ ]] && [[ "$install_size" =~ ^[0-9]+$ ]] \
+    || error "Written-image verification failed: could not determine unallocated space on $device."
+  trailing_free=$((device_size - install_offset - install_size))
+  [ "$trailing_free" -ge $((1024*1024*1024)) ] \
+    || error "Written-image verification failed: less than 1 GiB remains unallocated for the Windows target partition."
+
+  status "  Checking required boot artifacts"
+  sudo test -s "$boot_mount/RPI_EFI.fd" || error "Written-image verification failed: RPI_EFI.fd is missing or empty."
+  case "$RPI_MODEL" in
+    3)
+      sudo test -s "$boot_mount/bootcode.bin" || error "Written-image verification failed: bootcode.bin is missing or empty."
+      sudo test -s "$boot_mount/start.elf" || error "Written-image verification failed: start.elf is missing or empty."
+      ;;
+    4)
+      sudo test -s "$boot_mount/start4.elf" || error "Written-image verification failed: start4.elf is missing or empty."
+      sudo test -s "$boot_mount/fixup4.dat" || error "Written-image verification failed: fixup4.dat is missing or empty."
+      ;;
+    5)
+      sudo test -s "$boot_mount/bcm2712-rpi-5-b.dtb" || error "Written-image verification failed: bcm2712-rpi-5-b.dtb is missing or empty."
+      ;;
+  esac
+  sudo test -s "$boot_mount/EFI/BOOT/BOOTAA64.EFI" || error "Written-image verification failed: EFI/BOOT/BOOTAA64.EFI is missing or empty."
+  sudo test -s "$boot_mount/EFI/Microsoft/Boot/bcd" || error "Written-image verification failed: EFI/Microsoft/Boot/bcd is missing or empty."
+  sudo test -s "$boot_mount/sources/boot.wim" || error "Written-image verification failed: sources/boot.wim is missing or empty."
+  sudo test -s "$install_mount/install.wim" || error "Written-image verification failed: install.wim is missing or empty."
+
+  status "  Verifying boot.wim integrity"
+  sudo wimverify "$boot_mount/sources/boot.wim" || error "Written-image verification failed: boot.wim is invalid or corrupted."
+  status "  Verifying install.wim integrity"
+  sudo wimverify "$install_mount/install.wim" || error "Written-image verification failed: install.wim is invalid or corrupted."
+
+  status "  Comparing install.wim with its source"
+  source_hash="$(sha256_file_with_progress source "$source_install")" || error "Written-image verification failed: could not hash source install.wim."
+  written_hash="$(sha256_file_with_progress written "$install_mount/install.wim")" || error "Written-image verification failed: could not hash written install.wim."
+  [ "$source_hash" == "$written_hash" ] || error "Written-image verification failed: install.wim does not match its source."
+  echo_green "Written image verified successfully"
+}
+
 wget() { #Intercept all wget commands. When possible, uses aria2c.
   local file=''
   local url=''
-  #determine the download manager to use
   local use=aria2c
-  #determine if being run silently (if the '-q' flag was passed)
   local quiet=0
-
-  #use these flags for aria2c
   local check_cert=true
+  local -a aria2_flags
   [ "$VERIFY_TLS" == 0 ] && check_cert=false
-  aria2_flags=(-x 16 -s 16 --max-tries=10 --retry-wait=30 --max-file-not-found=5 --http-no-cache=true --check-certificate=$check_cert \
+  aria2_flags=(-x 16 -s 16 --max-tries=10 --retry-wait=30 --max-file-not-found=5 --http-no-cache=true "--check-certificate=$check_cert" \
     --allow-overwrite=true --auto-file-renaming=false --remove-control-file --auto-save-interval=0 \
     --console-log-level=error --show-console-readout=false --summary-interval=1)
 
-  #convert wget arguments to newline-separated list
   local IFS=$'\n'
-  local opts="$(IFS=$'\n'; echo "$*")"
+  local opts
+  opts="$(IFS=$'\n'; echo "$*")"
   for opt in $opts ;do
-
-    #check if this argument to wget begins with '--'
     if [[ "$opt" == '--'* ]];then
       if [ "$opt" == '--quiet' ];then
         quiet=1
@@ -421,10 +678,12 @@ wget() { #Intercept all wget commands. When possible, uses aria2c.
     #suppress output if -q flag passed
     if [ "$quiet" == 1 ];then
       aria2c --quiet "${aria2_flags[@]}"
-      local exitcode=$?
+      local exitcode
+      exitcode=$?
 
     else #run aria2c without quietness and format download-progress output
-      local terminal_width="$(tput cols 2>/dev/null || :)"
+      local terminal_width
+      terminal_width="$(tput cols 2>/dev/null || :)"
       [[ "$terminal_width" =~ ^[0-9]+$ ]] || terminal_width=80
 
       #run aria2c and reduce its output.
@@ -460,8 +719,10 @@ wget() { #Intercept all wget commands. When possible, uses aria2c.
             #determine how many characters in progress bar to light up
             progress_characters=$(((percent*available_width)/100))
 
-            statsline+="\e[92m\e[1m$(for ((i=0; i<$progress_characters; i++)); do printf "—"; done)\e[39m" # other possible characters to put here: █🭸
-            echo -ne "\e[0K${statsline}\r\033\e[0m" 1>&2 #clear and print over previous line
+            progress_bar="$(for ((i=0; i<$progress_characters; i++)); do printf "—"; done)"
+            printf -v colored_progress_bar '\033[92m\033[1m%s\033[39m' "$progress_bar"
+            statsline+="$colored_progress_bar" # other possible characters to put here: █🭸
+            printf '\033[0K%s\r\033[0m' "$statsline" 1>&2 #clear and print over previous line
 
             #reduce the line and print over the previous line, like: "1.1GiB/1.1GiB(98%) DL:18MiB"
             #echo "$line" | awk '{print $2 " " $4 " " substr($5, 1, length($5)-1)}' | tr -d '\n'
@@ -486,7 +747,7 @@ wget() { #Intercept all wget commands. When possible, uses aria2c.
     #display "done" message
     if [ "$use" == aria2c ];then
       local progress_characters=$(($terminal_width - 5))
-      echo -e "\e[0KDone \e[92m\e[1m$(for ((i=0; i<$progress_characters; i++)); do printf "—"; done)\e[39m\e[0m" 1>&2 #clear and print over previous line
+      printf '\033[0KDone \033[92m\033[1m%s\033[39m\033[0m\n' "$(for ((i=0; i<$progress_characters; i++)); do printf "—"; done)" 1>&2 #clear and print over previous line
     else
       echo
       echo_green "Done" 1>&2
@@ -553,7 +814,7 @@ install_packages() { #input: space-separated list of apt packages to install
   if is_macos ;then
     command -v brew >/dev/null || error "macOS support requires Homebrew. Install it from https://brew.sh, then run this script again."
     local formula
-    for formula in aria2 cabextract jq wget wimlib gptfdisk; do
+    for formula in aria2 cabextract jq wget wimlib gptfdisk pv; do
       brew list --formula "$formula" >/dev/null 2>&1 || brew install "$formula" || error "Failed to install Homebrew dependency '$formula'."
     done
     return 0
@@ -690,17 +951,46 @@ get_space_free() { #Input: folder to check. Output: show many bytes can fit befo
   fi
 }
 
+cache_manifest() { #Input: folder. Output: stable SHA-256 manifest of cached payload files.
+  (
+    local file hash
+    cd "$1" || return 1
+    find . -type f ! -name '.wor-flasher-version' ! -name '.wor-flasher-sha256' ! -name '.wor-flasher-sha256.tmp' -print \
+      | LC_ALL=C sort \
+      | while IFS= read -r file ;do
+          hash="$(sha256_file "$file")" || exit 1
+          [ -n "$hash" ] || exit 1
+          printf '%s  %s\n' "$hash" "$file"
+        done
+  )
+}
+
+cache_contents_are_current() { #Input: folder. Exit 0 if its payload matches the recorded manifest.
+  [ -s "$1/.wor-flasher-sha256" ] || return 1
+  cache_manifest "$1" | cmp -s - "$1/.wor-flasher-sha256"
+}
+
 cache_is_current() { #Input: folder, version token. Exit 0 if the cached folder can be reused.
   local folder="$1"
   local token="$2"
   [ ! -d "$folder" ] && return 1
   [ "$USE_CACHE" == 2 ] && return 0 #trust the cache without checking anything
-  [ "$USE_CACHE" == 1 ] && [ "$(cat "${folder}/.wor-flasher-version" 2>/dev/null)" == "$token" ] && return 0
+  [ "$USE_CACHE" == 1 ] \
+    && [ "$(cat "${folder}/.wor-flasher-version" 2>/dev/null)" == "$token" ] \
+    && cache_contents_are_current "$folder" \
+    && return 0
   return 1
 }
 
-mark_cache() { #Input: folder, version token. Records what was downloaded so cache_is_current() can compare later.
-  echo "$2" > "${1}/.wor-flasher-version"
+mark_cache() { #Input: folder, version token. Records payload integrity and source version.
+  local manifest="${1}/.wor-flasher-sha256"
+  rm -f "${1}/.wor-flasher-version"
+  cache_manifest "$1" > "${manifest}.tmp" || {
+    rm -f "${manifest}.tmp"
+    return 1
+  }
+  mv "${manifest}.tmp" "$manifest" || return 1
+  printf '%s\n' "$2" > "${1}/.wor-flasher-version"
 }
 
 list_devs() { #Output: human-readable, colorized list of valid block devices to write to. Omits /dev/loop* and the root device. Returns code 1 if no drives found
@@ -710,9 +1000,10 @@ list_devs() { #Output: human-readable, colorized list of valid block devices to 
   fi
   [ -z "$ROOT_DEV" ] && detect_root_dev
   local IFS=$'\n'
-  local exitcode=1
+  local device size exitcode=1
   for device in $(lsblk -I 8,179,259 -dno NAME | sed 's+^+/dev/+g' | grep -v loop | grep -vx "$ROOT_DEV") ;do
-    if [ $(lsblk -dnbo SIZE "$device") -gt 0 ];then
+    size="$(lsblk -dnbo SIZE "$device")" || continue
+    if [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -gt 0 ];then
       echo -e "\e[1m\e[97m${device}\e[0m - \e[92m$(lsblk -dno SIZE "$device")B\e[0m - \e[36m$(get_device_name "$device")\e[0m"
       exitcode=0
     fi
@@ -744,6 +1035,21 @@ lt-lt:Lithuanian (Lithuania)\nlv-lv:Latvian (Latvia)\nnb-no:Norwegian Bokmål (N
 sl-si:Slovenian (Slovenia)\nsr-latn-rs:Serbian (Latin, Serbia)\nsv-se:Swedish (Sweden)\nth-th:Thai (Thailand)\ntr-tr:Turkish (Turkey)\nuk-ua:Ukrainian (Ukraine)\nzh-cn:Chinese (Simplified, China)\nzh-tw:Chinese (Traditional, Taiwan)"
 }
 
+default_win_lang() { #Output: the host locale's matching Windows language code, or en-us.
+  local host_locale language_code
+  if is_macos ;then
+    host_locale="$(defaults read -g AppleLocale 2>/dev/null)"
+  else
+    host_locale="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+  fi
+  language_code="$(printf '%s' "$host_locale" | sed 's/@.*//' | sed 's/\..*//' | tr '_' '-' | tr '[:upper:]' '[:lower:]')"
+  if list_langs | awk -F: '{print $1}' | grep -qFx "$language_code" ;then
+    printf '%s\n' "$language_code"
+  else
+    printf '%s\n' 'en-us'
+  fi
+}
+
 list_bids() { #input: '10' or '11', Output: build IDs for ESD releases. Format: "$BID ($date)"
   if [ -z "$versions" ];then
     #Get list of major Windows ESD versions from worproject.com
@@ -765,7 +1071,8 @@ list_bids() { #input: '10' or '11', Output: build IDs for ESD releases. Format: 
 
 cpu_supports_bid() { #input: build id. Exit 0 if the target Pi's CPU can run this Windows build.
   #Pi3 (Cortex-A53) and Pi4 (Cortex-A72) are ARMv8.0. Builds past ARMV80_MAX_BUILD need ARMv8.1 atomics.
-  local major="$(echo "$1" | awk -F. '{print $1}')"
+  local major
+  major="$(echo "$1" | awk -F. '{print $1}')"
   [ -z "$major" ] && return 0
   if [ "$RPI_MODEL" == 3 ] || [ "$RPI_MODEL" == 4 ];then
     [ "$major" -gt "$ARMV80_MAX_BUILD" ] && return 1
@@ -800,15 +1107,6 @@ setup() { #run safety checks and install packages
     require_macos_tools
   fi
 
-  #check for internet connection
-  echo -n "Checking for internet connection... "
-  local errors
-  errors="$(command wget --spider github.com 2>&1)"
-  if [ $? != 0 ];then
-    error "No internet connection!\ngithub.com failed to respond.\nErrors: $errors"
-  fi
-  echo Done
-
   if [ "$(id -u)" == 0 ];then
     status "WoR-Flasher is not designed to be run as root.\nDoing so is known to cause problems."
     echo -n "Are you sure you want to continue? [y/N]"
@@ -824,24 +1122,43 @@ setup() { #run safety checks and install packages
   fi
 
   #Make sure modules exist for the running kernel - otherwise a kernel upgrade occurred and the user needs to reboot. See https://github.com/Botspot/wor-flasher/issues/35
-  if [ "$HOST_OS" == Linux ] && [ ! -d /lib/modules/$(uname -r) ];then
+  if [ "$HOST_OS" == Linux ] && [ ! -d "/lib/modules/$(uname -r)" ];then
     error "The running kernel ($(uname -r)) does not match any directory in /lib/modules.
 Usually this means you have not yet rebooted since upgrading the kernel.
 Try rebooting.
 If this error persists, contact Botspot - the WoR-flasher developer."
   fi
 
-  #install dependencies
+  #install dependencies before using them for setup checks
   if [ "$SKIP_PACKAGE_INSTALL" != 1 ];then
-    install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc parted dosfstools unzip git' || exit 1
+    install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc parted dosfstools unzip git pv' || exit 1
 
     #install exfat partition manipulation utility. exfatprogs replaces exfat-utils, but they cannot both be installed at once.
-    if package_available exfatprogs && ! package_installed exfat-utils ;then
-      install_packages exfatprogs || exit 1
-    else
-      install_packages exfat-utils || exit 1
+    if [ "$HOST_OS" == Linux ];then
+      if package_available exfatprogs && ! package_installed exfat-utils ;then
+        install_packages exfatprogs || exit 1
+      else
+        install_packages exfat-utils || exit 1
+      fi
     fi
   fi
+
+  if ! command -v wget >/dev/null ;then
+    error "Missing required dependency: wget.
+WoR-Flasher needs wget to verify GitHub connectivity and download files.
+Install wget, or leave SKIP_PACKAGE_INSTALL unset so WoR-Flasher can install dependencies automatically."
+  fi
+
+  #check for internet connection
+  echo -n "Checking for internet connection... "
+  local errors
+  errors="$(command wget --spider github.com 2>&1)"
+  if [ $? != 0 ];then
+    error "Could not reach github.com.
+Check your internet connection, DNS/proxy settings, or firewall, then run this script again.
+Errors: $errors"
+  fi
+  echo Done
 
   [ -z "$ROOT_DEV" ] && detect_root_dev
   return 0
@@ -860,7 +1177,7 @@ If this error persists, contact Botspot - the WoR-flasher developer."
 
 #Pinned versions. Used by default, or as a fallback when the GitHub API is unreachable.
 [ -z "$UEFI_VER_PI3" ] && UEFI_VER_PI3='v1.39'
-[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.52'
+[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.51'
 [ -z "$UEFI_VER_PI5" ] && UEFI_VER_PI5='v0.3'
 
 #Windows driver package. The upstream project is archived, so v0.17 is the final release.
@@ -871,7 +1188,7 @@ If this error persists, contact Botspot - the WoR-flasher developer."
 [ -z "$VERIFY_TLS" ] && VERIFY_TLS=1
 
 #Cache mode: 0 downloads components again every run, 1 reuses them while they are still the newest version, 2 reuses them without checking.
-[ -z "$USE_CACHE" ] && USE_CACHE=0
+[ -z "$USE_CACHE" ] && USE_CACHE=1
 
 #WoR PE-based installer. worproject.com redirects to a versioned asset on their GitHub mirror.
 [ -z "$PE_USE_LATEST" ] && PE_USE_LATEST=1
@@ -905,7 +1222,7 @@ IFS=$'\n'
 { #check for updates and auto-update unless disabled via NO_UPDATE
 if [ -e "$DIRECTORY" ] && [ "$NO_UPDATE" != 1 ] && command -v git >/dev/null && git -C "$DIRECTORY" rev-parse --git-dir >/dev/null 2>&1 ;then
   prepwd="$PWD"
-  cd "$DIRECTORY"
+  cd "$DIRECTORY" || error "Failed to open the WoR-flasher directory: $DIRECTORY"
   local_commit="$(git rev-parse HEAD)" #commit this local checkout at $DIRECTORY is on
   remote_commit="$(git ls-remote "$UPDATE_REPO_URL" "$UPDATE_REF" | awk 'NR == 1 {print $1}')" #latest commit on UPDATE_REPO_URL/UPDATE_REF
 
@@ -926,7 +1243,7 @@ if [ -e "$DIRECTORY" ] && [ "$NO_UPDATE" != 1 ] && command -v git >/dev/null && 
       fi
     fi
   fi
-  cd "$prepwd"
+  cd "$prepwd" || error "Failed to return to the original directory: $prepwd"
 fi
 }
 
@@ -946,12 +1263,14 @@ trap 'error "Interrupted."' INT TERM
 LANG=C
 LC_ALL=C
 LANGUAGE=C
+ANSI_CYAN=$'\e[96m'
+ANSI_RESET=$'\e[0m'
 
 setup || exit 1
 
 #Create folder to download everything to
 mkdir -p "$DL_DIR"
-cd "$DL_DIR"
+cd "$DL_DIR" || error "Failed to open the download directory: $DL_DIR"
 
 #unless specified otherwise, run this script in cli mode
 [ -z "$RUN_MODE" ] && RUN_MODE=cli #RUN_MODE=gui
@@ -961,8 +1280,9 @@ if [ "$USE_CACHE" != 0 ] && [ "$USE_CACHE" != 1 ] && [ "$USE_CACHE" != 2 ];then
 fi
 
 if [ "$USE_CACHE" == 0 ];then
-  status "USE_CACHE=0: deleting cached downloads so everything is fetched again"
+  status "USE_CACHE=0: clearing cached components so everything is fetched again"
   rm -rf "$PWD/peinstaller" "$PWD/driverpackage" "$PWD"/pi[345]-uefipackage
+  rm -rf "$PWD"/winfiles_* "$PWD"/winfiles_from_iso_*
   if [ ! -z "$DIRECTORY" ];then
     rm -rf "${DIRECTORY}/cache"
     mkdir -p "${DIRECTORY}/cache"
@@ -1029,8 +1349,8 @@ $([ $num_opts == 3 ] && echo 'Enter \e[96m1\e[0m, \e[96m2\e[0m or \e[96m3\e[0m: 
 
               #versions=''
               list_bids 10 >/dev/null #set $versions globally so it is not downloaded twice
-              list_bids_supported 11 | sed 's/ /'$(echo -e '\e[0m')' /g' | sed 's/^/Windows 11 '$(echo -e '\e[96m')'/g'
-              list_bids_supported 10 | sed 's/ /'$(echo -e '\e[0m')' /g' | sed 's/^/Windows 10 '$(echo -e '\e[96m')'/g'
+              list_bids_supported 11 | sed "s/ /${ANSI_RESET} /g" | sed "s/^/Windows 11 ${ANSI_CYAN}/g"
+              list_bids_supported 10 | sed "s/ /${ANSI_RESET} /g" | sed "s/^/Windows 10 ${ANSI_CYAN}/g"
 
               read -p $'\nFrom the list above, enter a Windows version number: ' BID
               if (list_bids_supported 11 ; list_bids_supported 10) | awk '{print $1}' | grep -qFx "$BID" ;then
@@ -1079,7 +1399,7 @@ $([ $num_opts == 3 ] && echo 'Enter \e[96m1\e[0m, \e[96m2\e[0m or \e[96m3\e[0m: 
                 break #exit "more options" menu
               fi
               ;;
-            $num_opts)
+            "$num_opts")
               #go back
               break
               ;;
@@ -1124,12 +1444,14 @@ fi
 
 { #choose language
 if [ -z "$WIN_LANG" ];then
+  default_language="$(default_win_lang)"
   #list languages and highlight the language codes
   echo
-  list_langs | sed 's/^/'$(echo -e '\e[96m')'/g' | sed 's/:/'$(echo -e '\e[0m')' - /g' | sort
+  list_langs | sed "s/^/${ANSI_CYAN}/g" | sed "s/:/${ANSI_RESET} - /g" | sort
 
   while true; do
-    read -p $'\nFrom the list above, enter a language: ' WIN_LANG
+    read -p $'\nFrom the list above, enter a language ['"$default_language"']: ' WIN_LANG
+    [ -z "$WIN_LANG" ] && WIN_LANG="$default_language"
 
     if list_langs | awk -F: '{print $1}' | grep -qFx "$WIN_LANG" ;then
       #if selected language matches line in language list
@@ -1246,22 +1568,24 @@ fi
 #fail fast, before any downloads, if macOS partitioning can't proceed later
 is_macos && { command -v sgdisk >/dev/null || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."; }
 
-echo "
-Input configuration:
-DL_DIR: $DL_DIR
-RUN_MODE: $RUN_MODE
-RPI_MODEL: $RPI_MODEL
-DEVICE: $DEVICE
-CAN_INSTALL_ON_SAME_DRIVE: $CAN_INSTALL_ON_SAME_DRIVE"
-[ ! -z "$SOURCE_FILE" ] && echo "SOURCE_FILE: $SOURCE_FILE"
-echo "BID: $BID
-WIN_LANG: $WIN_LANG"
-[ ! -z "$CONFIG_TXT" ] && echo "CONFIG_TXT: ⤵
-$(echo "$CONFIG_TXT" | grep . | sed 's/^/  > /g')
-CONFIG_TXT: ⤴"
-[ ! -z "$DRY_RUN" ] && echo "DRY_RUN: $DRY_RUN"
+[ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && install_mode_label='Install Windows onto this drive' || install_mode_label='Recovery drive'
+printf '\n\033[96m%s\033[0m - starting installation\n' "$WOR_APP_TITLE"
+echo "  Windows build:             $BID ($WIN_LANG)"
+echo "  Raspberry Pi model:        $RPI_MODEL"
+echo "  Target drive:              $DEVICE"
+echo "  Install mode:              $install_mode_label"
+echo "  CAN_INSTALL_ON_SAME_DRIVE: $CAN_INSTALL_ON_SAME_DRIVE"
+[ ! -z "$SOURCE_FILE" ] && echo "  Custom ISO:                $SOURCE_FILE"
+[ ! -z "$CONFIG_TXT" ] && echo "  Custom config.txt:         yes"
+[ ! -z "$DRY_RUN" ] && echo "  DRY_RUN:                   $DRY_RUN"
+echo "  USE_CACHE:                 $USE_CACHE"
+echo "  Download directory:       $DL_DIR"
 echo
 
+STEP_NUM=0
+[ "$RPI_MODEL" == 5 ] && STEP_TOTAL=7 || STEP_TOTAL=8
+
+phase "Preparing the WoR PE-based installer"
 if [ "$USE_CACHE" == 2 ] && [ -d "$PWD/peinstaller" ];then
   echo "Not downloading $PWD/peinstaller - using cache without checking for updates"
 else
@@ -1299,12 +1623,13 @@ else
       error "The unzip command failed to extract $PWD/WoR-PE_Package.zip"
     fi
     rm -f "$PWD/WoR-PE_Package.zip"
-    mark_cache "$PWD/peinstaller" "$EXPECTED_SHA256"
+    mark_cache "$PWD/peinstaller" "$EXPECTED_SHA256" || error "Failed to record PE installer cache integrity."
     echo
   fi
 fi
 
 if [ "$RPI_MODEL" != 5 ];then
+  phase "Preparing ARM64 drivers"
   if [ "$USE_CACHE" == 2 ] && [ -d "$PWD/driverpackage" ];then
     echo "Not downloading $PWD/driverpackage - using cache without checking for updates"
   else
@@ -1330,12 +1655,13 @@ if [ "$RPI_MODEL" != 5 ];then
       fi
 
       rm -f "$PWD/RPi${RPI_MODEL}_Windows_ARM64_Drivers.zip"
-      mark_cache "$PWD/driverpackage" "$URL"
+      mark_cache "$PWD/driverpackage" "$URL" || error "Failed to record driver cache integrity."
       echo
     fi
   fi
 fi
 
+phase "Preparing Pi${RPI_MODEL} UEFI firmware"
 if [ "$USE_CACHE" == 2 ] && [ -d "$PWD/pi${RPI_MODEL}-uefipackage" ];then
   echo "Not downloading $PWD/pi${RPI_MODEL}-uefipackage - using cache without checking for updates"
 else
@@ -1381,13 +1707,14 @@ else
     fi
 
     rm -f "$PWD/RPi${RPI_MODEL}_UEFI_Firmware.zip"
-    mark_cache "$PWD/pi${RPI_MODEL}-uefipackage" "$URL"
+    mark_cache "$PWD/pi${RPI_MODEL}-uefipackage" "$URL" || error "Failed to record UEFI cache integrity."
     echo
   fi
 fi
 
 { #Download Windows ESD if an ISO was not provided and one has not already been extracted
 
+phase "Preparing the Windows image"
 if [ ! -z "$SOURCE_FILE" ];then
   echo "Not downloading ESD image - using your ISO instead"
 
@@ -1438,28 +1765,28 @@ else #Download and extract ESD
     error "One of URL, SIZE, or SHA1/SHA256 variables is empty!\nURL: $URL\nSIZE: $SIZE\nSHA1: $SHA1\nSHA256: $SHA256\nHere's the full catalog output: '$catalog'"
   fi
 
-  if [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA1" ] && [ "$SHA1" == "$(echo "  - Checking validity of already downloaded image.esd" 1>&2 ; sha1_file "$SOURCE_FILE")" ];then
+  if [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA1" ] && [ "$SHA1" == "$(sha1_file_with_progress cached-esd "$SOURCE_FILE")" ];then
     echo "Not downloading $SOURCE_FILE - file exists"
-  elif [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA256" ] && [ "$SHA256" == "$(echo "  - Checking validity of already downloaded image.esd" 1>&2 ; sha256_file "$SOURCE_FILE")" ];then
+  elif [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA256" ] && [ "$SHA256" == "$(sha256_file_with_progress cached-esd "$SOURCE_FILE")" ];then
     echo "Not downloading $SOURCE_FILE - file exists"
   else
     status "Downloading Windows ESD image"
     wget "$URL" -O "$PWD/$winfiles/image.esd" || error "Failed to download ESD image"
-    status -n "Verifying download... "
+    status "Verifying downloaded image"
     if [ ! -z "$SHA1" ];then
-      LOCAL_SHA1="$(sha1_file "$SOURCE_FILE")"
+      LOCAL_SHA1="$(sha1_file_with_progress downloaded-esd "$SOURCE_FILE")"
       if [ "$SHA1" != "$LOCAL_SHA1" ];then
         rm -f "$SOURCE_FILE"
         error "\nSuccessfully downloaded ESD image $SOURCE_FILE, but it appears to be corrupted. Please run this script again.\n(Expected SHA1 hash is $SHA1, but downloaded file has SHA1 hash $LOCAL_SHA1"
       fi
     elif [ ! -z "$SHA256" ];then
-      LOCAL_SHA256="$(sha256_file "$SOURCE_FILE")"
+      LOCAL_SHA256="$(sha256_file_with_progress downloaded-esd "$SOURCE_FILE")"
       if [ "$SHA256" != "$LOCAL_SHA256" ];then
         rm -f "$SOURCE_FILE"
         error "\nSuccessfully downloaded ESD image $SOURCE_FILE, but it appears to be corrupted. Please run this script again.\n(Expected SHA256 hash is $SHA256, but downloaded file has SHA256 hash $LOCAL_SHA256"
       fi
     fi
-    echo_green "Done"
+    echo_green "Download verified"
   fi
 fi
 }
@@ -1470,23 +1797,23 @@ if [[ "$SOURCE_FILE" == *'.ESD' ]] || [[ "$SOURCE_FILE" == *'.esd' ]];then
 
   status "Extracting $(basename "$SOURCE_FILE") to $PWD"
   #Extract first volume containing boot files
-  errors="$(wimextract "$SOURCE_FILE" 1 boot efi --dest-dir="$PWD/bootpart" 2>&1)" || error "Failed to extract first partition of $SOURCE_FILE\nErrors:\n$errors"
+  wimextract "$SOURCE_FILE" 1 boot efi --dest-dir="$PWD/bootpart" || error "Failed to extract first partition of $SOURCE_FILE"
 
   #Create boot.wim file
   mkdir "$PWD/bootpart/sources"
   #Export WinPE & Setup editions to non-solid boot.wim
-  errors="$(wimexport "$SOURCE_FILE" 2 "$PWD/bootpart/sources/boot.wim" --compress=LZX 2>&1)" || error "Failed to export WinPE edition to $PWD/bootpart/sources/boot.wim\nErrors:\n$errors"
-  errors="$(wimexport "$SOURCE_FILE" 3 "$PWD/bootpart/sources/boot.wim" --compress=LZX --boot 2>&1)" || error "Failed to export Setup edition to $PWD/bootpart/sources/boot.wim\nErrors:\n$errors"
+  wimexport "$SOURCE_FILE" 2 "$PWD/bootpart/sources/boot.wim" --compress=LZX || error "Failed to export WinPE edition to $PWD/bootpart/sources/boot.wim"
+  wimexport "$SOURCE_FILE" 3 "$PWD/bootpart/sources/boot.wim" --compress=LZX --boot || error "Failed to export Setup edition to $PWD/bootpart/sources/boot.wim"
 
   #If using an external ESD file, make a copy before modifying it
   if [ "$SOURCE_FILE" != "$PWD/image.esd" ];then
-    cp "$SOURCE_FILE" "$PWD/image.esd" || error "Failed to copy the ESD to $PWD/image.esd"
+    copy_local_file_with_progress image.esd "$SOURCE_FILE" "$PWD/image.esd" || error "Failed to copy the ESD to $PWD/image.esd"
     SOURCE_FILE="$PWD/image.esd"
   fi
   #Remove first 3 partitions from ESD file
-  errors="$(wimdelete "$SOURCE_FILE" 1 --soft 2>&1)" || error "Failed to remove a partition from $SOURCE_FILE\nErrors:\n$errors"
-  errors="$(wimdelete "$SOURCE_FILE" 1 --soft 2>&1)" || error "Failed to remove a partition from $SOURCE_FILE\nErrors:\n$errors"
-  errors="$(wimdelete "$SOURCE_FILE" 1 --soft 2>&1)" || error "Failed to remove a partition from $SOURCE_FILE\nErrors:\n$errors" #remove --soft for this last one to minimize filesize
+  wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE"
+  wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE"
+  wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE" #remove --soft for this last one to minimize filesize
   mv -f "$SOURCE_FILE" "$PWD/install.wim" || error "Failed to rename $SOURCE_FILE to install.wim"
 
   touch "$PWD/alldone" #mark this folder of microsoft stuff as complete
@@ -1520,9 +1847,9 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
       sudo mount "$SOURCE_FILE" "$isomount"
       if [ $? != 0 ];then
         if [ "$modprobe_failed" == 1 ] && [ ! -d "/lib/modules/$(uname -r)" ];then
-          error "The 'udf' kernel module is required to mount the ISO file (uupdump/$(basename $(echo "$PWD/uupdump"/*.ISO))), but all kernel modules are missing! Most likely, you upgraded kernel packages and have not rebooted yet. Try rebooting."
+          error "The 'udf' kernel module is required to mount $SOURCE_FILE, but all kernel modules are missing. Most likely, you upgraded kernel packages and have not rebooted yet. Try rebooting."
         else
-          error "Failed to mount ISO file ($(echo "$PWD/uupdump"/*.ISO)) to $isomount"
+          error "Failed to mount ISO file $SOURCE_FILE to $isomount"
         fi
       fi
     fi
@@ -1531,13 +1858,8 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
 
   mkdir -p "$PWD"/bootpart
   status "Copying files from ISO file to $PWD:"
-  echo "  - Boot files"
-  cp -r "$PWD/isomount/boot" "$PWD"/bootpart || error "Failed to copy $PWD/isomount/boot to $PWD/bootpart"
-  echo "  - EFI files"
-  cp -r "$PWD/isomount/efi" "$PWD"/bootpart || error "Failed to copy $PWD/isomount/efi to $PWD/bootpart"
-  mkdir -p "$PWD"/bootpart/sources || error "Failed to make folder: $PWD/bootpart/sources"
-  echo "  - boot.wim"
-  cp "$PWD/isomount/sources/boot.wim" "$PWD"/bootpart/sources || error "Failed to copy $PWD/isomount/sources/boot.wim to $PWD/bootpart/sources"
+  echo "  - Startup environment"
+  copy_startup_environment_with_progress "$isomount" "$PWD/bootpart" local || error "Failed to copy the startup environment from $isomount"
   if [ -f "$PWD/isomount/sources/install.wim" ];then
     install_image="$PWD/isomount/sources/install.wim"
   elif [ -f "$PWD/isomount/sources/install.esd" ];then
@@ -1546,7 +1868,7 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
     error "The ISO file does not contain sources/install.wim or sources/install.esd. Use an official Windows ARM64 ISO."
   fi
   echo "  - $(basename "$install_image")"
-  cp "$install_image" "$PWD/install.wim" || error "Failed to copy $install_image to $PWD/install.wim"
+  copy_local_file_with_progress "$(basename "$install_image")" "$install_image" "$PWD/install.wim" || error "Failed to copy $install_image to $PWD/install.wim"
 
   touch "$PWD/alldone" #mark this folder of microsoft stuff as complete
 
@@ -1565,7 +1887,8 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
 fi
 
 if [ "$DRY_RUN" == 1 ];then
-  status "Exiting $(basename "$0") script now because the DRY_RUN variable was set to '1'."
+  status "Exiting the $WOR_APP_TITLE script now because DRY_RUN=1 was set."
+  cli_pause
   exit 0
 fi
 
@@ -1580,9 +1903,14 @@ if is_macos ;then
 fi
 
 echo
-status "Formatting $DEVICE - \e[93mThere is no turning back now."
+phase "Partitioning and formatting $DEVICE"
+printf '  There is no turning back now.\n' 1>&2
 sync
-sudo umount -ql $(get_partition "$DEVICE" all)
+partitions=()
+while IFS= read -r partition ;do
+  [ -n "$partition" ] && partitions+=("$partition")
+done < <(get_partition "$DEVICE" all)
+[ "${#partitions[@]}" -eq 0 ] || sudo umount -ql "${partitions[@]}"
 sync
 status "Creating partition table"
 sudo parted -s "$DEVICE" mklabel gpt || error "Failed to make GPT partition table on ${DEVICE}!"
@@ -1604,8 +1932,8 @@ PART1="$(get_partition "$DEVICE" 1)"
 PART2="$(get_partition "$DEVICE" 2)"
 echo "Partition 1: $PART1, Partition 2: $PART2"
 
-errors="$(sudo mkfs.fat -F 32 "$PART1" 2>&1)" || error "Failed to create FAT partition on $PART1\nErrors:\n$errors"
-errors="$(sudo mkfs.exfat "$PART2" 2>&1)" || error "Failed to create EXFAT partition on $PART2\nErrors:\n$errors"
+errors="$(sudo mkfs.fat -F 32 -n WOR_BOOT "$PART1" 2>&1)" || error "Failed to create FAT partition on $PART1\nErrors:\n$errors"
+errors="$(sudo mkfs.exfat -n WOR_INSTALL "$PART2" 2>&1)" || error "Failed to create EXFAT partition on $PART2\nErrors:\n$errors"
 
 mntpnt="/media/$USER/wor-flasher"
 status "Mounting ${DEVICE} device to $mntpnt"
@@ -1638,26 +1966,26 @@ fi
 register_mount_cleanup "$mntpnt/bootpart"
 register_mount_cleanup "$mntpnt/winpart"
 
-status "Copying files to $DEVICE:"
+phase "Copying files to $DEVICE:"
 echo "  - Startup environment"
-sudo cp -r "$PWD/$winfiles/bootpart"/* "$mntpnt"/bootpart || error "Failed to copy $PWD/$winfiles/bootpart to $mntpnt/bootpart"
+copy_startup_environment_with_progress "$PWD/$winfiles/bootpart" "$mntpnt/bootpart" || error "Failed to copy $PWD/$winfiles/bootpart to $mntpnt/bootpart"
 echo "  - Installation files"
-sudo cp "$PWD/$winfiles/install.wim" "$mntpnt"/winpart || error "Failed to copy $PWD/$winfiles/install.wim to $mntpnt/winpart"
+copy_file_with_progress install.wim "$PWD/$winfiles/install.wim" "$mntpnt/winpart/install.wim" || error "Failed to copy $PWD/$winfiles/install.wim to $mntpnt/winpart"
 echo "  - EFI files"
 sudo cp -r "$PWD/peinstaller/efi" "$mntpnt"/bootpart || error "Failed to copy $PWD/peinstaller/efi to $mntpnt/bootpart"
 
 echo "  - PE installer"
-errors="$(sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add peinstaller/winpe/2 /" 2>&1)" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim\nErrors:\n$errors"
+sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add peinstaller/winpe/2 /" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim"
 
 if [ "$RPI_MODEL" == 5 ];then
   #no wor drivers available for pi5, so make a dummy file to allow boot
   echo "  - ARM64 drivers"
   echo -n > "$PWD/critical"
-  errors="$(sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add critical /drivers/critical" 2>&1)" || error "The wimupdate command failed to add $PWD/critical to boot.wim\nErrors:\n$errors"
+  sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add critical /drivers/critical" || error "The wimupdate command failed to add $PWD/critical to boot.wim"
   rm "$PWD/critical"
 else
   echo "  - ARM64 drivers"
-  errors="$(sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add driverpackage /drivers" 2>&1)" || error "The wimupdate command failed to add $PWD/driverpackage to boot.wim\nErrors:\n$errors"
+  sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add driverpackage /drivers" || error "The wimupdate command failed to add $PWD/driverpackage to boot.wim"
 fi
 
 echo "  - UEFI firmware"
@@ -1675,9 +2003,7 @@ if [ $RPI_MODEL == 3 ];then
   sudo dd if=$PWD/peinstaller/pi3/gptpatch.img of="$DEVICE" conv=fsync || error "The 'dd' command failed to flash $PWD/peinstaller/pi3/gptpatch.img to $DEVICE"
 fi
 
-status -n "Allowing pending writes to finish... "
-sync
-echo_green "Done"
+verify_written_image "$DEVICE" "$PART1" "$PART2" "$mntpnt/bootpart" "$mntpnt/winpart" "$PWD/$winfiles/install.wim"
 
 status "Ejecting drive $DEVICE"
 sudo umount "$PART1" || echo_red "Warning: the umount command failed to unmount all partitions within $DEVICE"
@@ -1686,4 +2012,5 @@ sudo umount -q "$mntpnt"/bootpart &>/dev/null
 sudo umount -q "$mntpnt"/winpart &>/dev/null
 sudo eject "$DEVICE" &>/dev/null
 sudo rmdir "$mntpnt"/bootpart "$mntpnt"/winpart || echo_red "Warning: Failed to remove the mountpoint folder: $mntpnt"
-status "$(basename "$0") script has completed."
+phase "$WOR_APP_TITLE script has completed."
+cli_pause

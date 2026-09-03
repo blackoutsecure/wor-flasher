@@ -103,20 +103,73 @@ static_checks() {
     && pass "all temporary mounts use the shared cleanup handler" \
     || fail "a temporary mount bypasses the shared cleanup handler"
 
+  grep -qF 'if ! sudo -v >/dev/null 2>&1;then' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Administrator authentication failed or was canceled.' "$REPO_DIR/install-wor.sh" \
+    && pass "macOS checks administrator access before partitioning" \
+    || fail "macOS does not check administrator access before partitioning"
+
+  grep -qF 'rm -rf "$PWD"/winfiles_* "$PWD"/winfiles_from_iso_*' "$REPO_DIR/install-wor.sh" \
+    && pass "USE_CACHE=0 clears extracted Windows image caches" \
+    || fail "USE_CACHE=0 leaves extracted Windows image caches in place"
+
+  grep -qF '[ -z "$USE_CACHE" ] && USE_CACHE=1' "$REPO_DIR/install-wor.sh" \
+    && pass "validated cache reuse is the default" \
+    || fail "validated cache reuse is not the default"
+
+  grep -qF 'USE_CACHE:                 $USE_CACHE' "$REPO_DIR/install-wor.sh" \
+    && pass "startup summary shows cache policy" \
+    || fail "startup summary does not show cache policy"
+
   grep -qF 'sources/install.esd' "$REPO_DIR/install-wor.sh" \
     && pass "ISO import accepts install.esd media" \
     || fail "ISO import does not accept install.esd media"
+
+  grep -qF 'mkfs.fat -F 32 -n WOR_BOOT' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'mkfs.exfat -n WOR_INSTALL' "$REPO_DIR/install-wor.sh" \
+    && pass "Linux writes stable partition labels" \
+    || fail "Linux does not write stable partition labels"
+
+  grep -qF 'for formula in aria2 cabextract jq wget wimlib gptfdisk pv' "$REPO_DIR/install-wor.sh" \
+    && grep -qF "git pv' || exit 1" "$REPO_DIR/install-wor.sh" \
+    && pass "supported hosts install the progress utility" \
+    || fail "a supported host does not install the progress utility"
+
+  grep -qF 'copy_startup_environment_with_progress' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'copy_local_file_with_progress "$(basename "$install_image")"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sha1_file_with_progress downloaded-esd' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sha256_file_with_progress downloaded-esd' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'errors="$(wimextract' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'errors="$(wimexport' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'errors="$(wimdelete' "$REPO_DIR/install-wor.sh" \
+    && pass "long image operations stream progress" \
+    || fail "a long image operation still hides progress"
+
+  awk '/#install dependencies before using them/{deps=NR} /#check for internet connection/{net=NR} END{exit !(deps && net && deps < net)}' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Missing required dependency: wget.' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'No internet connection!' "$REPO_DIR/install-wor.sh" \
+    && pass "dependency checks run before internet check with specific wget error" \
+    || fail "dependency checks do not run before internet check or wget error is misleading"
 
   grep -qF "'.DiskSize // .TotalSize // .Size'" "$REPO_DIR/install-wor.sh" \
     && pass "Darwin drive sizing supports current diskutil metadata" \
     || fail "Darwin drive sizing does not support current diskutil metadata"
 
+  grep -qF 'darwin_apfs_volume_names()' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'diskutil apfs list -plist' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Labels: %s' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'labels = labels ? labels ", " $0 : $0' "$REPO_DIR/install-wor.sh" \
+    && pass "Darwin device choices include user-facing disk labels" \
+    || fail "Darwin device choices do not include disk labels"
+
   grep -qF 'MACOS_ASKPASS="$(mktemp)"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'register_file_cleanup "$MACOS_ASKPASS"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'Formatting " & targetDevice & " - There is no turning back now.' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Formatting " & targetDevice & return & return & "There is no turning back now.' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'WOR_FLASH_TARGET="$DEVICE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'RUN_MODE=%q' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "name: 'WorErrorController'" "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'app.requestUserAttention($.NSInformationalRequest)' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'display alert' "$REPO_DIR/install-wor.sh" \
     && pass "macOS GUI shows a native password dialog instead of a terminal prompt" \
     || fail "macOS GUI does not use a native password dialog"
 
@@ -124,30 +177,64 @@ static_checks() {
     && grep -qF 'macos_show_announcement()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'announcement.png' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Proceed with WoR-Flasher' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Check out BVM' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const isMessageMode = choices.length === 0' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const imageView = $.NSImageView' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const iconPath = ObjC.unwrap(args.objectAtIndex(12))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const cancelValue = ObjC.unwrap(args.objectAtIndex(14))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'app.setApplicationIconImage' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"$DIRECTORY/logo.png")' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'function writeResult(value)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'fileHandleWithStandardOutput.writeData(data)' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'echo -e "\\\\e[91m' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'console.log(selectedValue)' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows version' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "'Windows 11'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Raspberry Pi model' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'cancel button name backButton' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "ObjC.import('AppKit')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'NSWindowStyleMaskClosable' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'windowWillClose:' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'app.activateIgnoringOtherApps(true)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'app.requestUserAttention($.NSInformationalRequest)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "NSButton.buttonWithTitleTargetAction(cancelLabel, controller, 'cancelClicked:')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows language' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'buttons {"Back", "Refresh"}' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "macos_choose '' 'No external, physical, writable drive was found. Connect a removable drive, then click Refresh.' __REFRESH__ Back" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'darwin_list_device_choices' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'Refresh detected devices' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF '[ "$device_choice" == '\''Refresh detected devices'\'' ]' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const actionValue = ObjC.unwrap(args.objectAtIndex(9))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "NSButton.buttonWithTitleTargetAction(actionLabel, controller, 'actionClicked:')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Back Refresh __REFRESH__' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'Refresh detected devices' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'tkinter' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose installation mode' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'buttons {"Cancel", "Back", "Flash"}' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'on error number -128' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "macos_choose '' \"\$confirm_summary\" Flash Back Cancel Cancel '' Flash" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '[ "$confirmation" == Cancel ] && exit 0' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF '2>/dev/null <<'"'"'APPLESCRIPT' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "macos_choose '' \"\$plain\" OK" "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'display alert' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'display dialog' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'All data on the target drive will be erased.' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'completion_script="$(mktemp)"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'osascript "$completion_script"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'installer_status=$?' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "name: 'WorCompletionController'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'osascript -l JavaScript - "$completion_text"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'tell application "Terminal" to close front window' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'exit "$installer_status"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'installer_status=${PIPESTATUS[0]}' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'WOR_GUI_ERROR_MARKER=%q' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'CONFIG_TXT=%q' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "terminal_runner=\"\$(mktemp)\"" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "printf -v terminal_launch_command 'exec /bin/bash %q'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'do script (item 1 of argv)' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'choose from list' "$REPO_DIR/install-wor-gui.sh" \
     && pass "macOS GUI collects choices and hands off to the Terminal CLI" \
     || fail "macOS GUI handoff is missing"
+
+  [ "$(grep -cF 'device_tree_address=0x3e0000' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && [ "$(grep -cF 'device_tree_end=0x400000' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && pass "Pi 4 GUI config matches the current UEFI memory range" \
+    || fail "Pi 4 GUI config uses stale device-tree addresses"
+  grep -qF "UEFI_VER_PI4='v1.51'" "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF "UEFI_VER_PI4='v1.52'" "$REPO_DIR/install-wor.sh" \
+    && pass "Pi 4 avoids UEFI v1.52 microSD boot regression" \
+    || fail "Pi 4 uses UEFI v1.52, which does not boot reliably from microSD"
 }
 
 make_disk() { #Input: size, name. Output: loop device path
@@ -200,14 +287,15 @@ seed_bootable_winfiles() { #Input: build id. Creates a small, valid WinPE fixtur
   fixture_one="$TEST_DIR/boot-wim-index-one"
   fixture_two="$TEST_DIR/boot-wim-index-two"
   rm -rf "$winfiles" "$fixture_one" "$fixture_two"
-  mkdir -p "$winfiles/bootpart/sources" "$winfiles/bootpart/EFI/BOOT" "$fixture_one" "$fixture_two" "$TEST_DL_DIR/peinstaller/winpe/2"
+  mkdir -p "$winfiles/bootpart/sources" "$winfiles/bootpart/efi/boot" "$winfiles/bootpart/boot" "$fixture_one" "$fixture_two" "$TEST_DL_DIR/peinstaller/winpe/2"
   printf 'first boot image\n' > "$fixture_one/fixture.txt"
   printf 'second boot image\n' > "$fixture_two/fixture.txt"
   printf 'PE installer fixture\n' > "$TEST_DL_DIR/peinstaller/winpe/2/fixture.txt"
-  printf 'fallback bootloader fixture\n' > "$winfiles/bootpart/EFI/BOOT/BOOTAA64.EFI"
+  printf 'fallback bootloader fixture\n' > "$winfiles/bootpart/efi/boot/bootaa64.efi"
   wimcapture "$fixture_one" "$winfiles/bootpart/sources/boot.wim" boot-one >/dev/null
   wimappend "$fixture_two" "$winfiles/bootpart/sources/boot.wim" boot-two >/dev/null
-  touch "$winfiles/install.wim" "$winfiles/alldone"
+  wimcapture "$fixture_one" "$winfiles/install.wim" install >/dev/null
+  touch "$winfiles/alldone"
 }
 
 run_with_timeout() {
@@ -218,27 +306,26 @@ run_with_timeout() {
   fi
 }
 
-run_flasher() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
+run_flasher_with_dry_run() { #Input: dry-run flag, then VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
+  local dry_run="$1"
+  shift
   local output_file
   progress "running install-wor.sh with $(printf '%s ' "$@")"
   progress "live installer output follows (timeout: ${TEST_COMMAND_TIMEOUT}s)"
   output_file="$TEST_DIR/flasher-output.log"
   #stdin is closed so an unexpected prompt (e.g. the root-user confirmation) fails fast instead of hanging
-  (cd "$TEST_DIR" && run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" </dev/null) 2>&1 | tee "$output_file" 1>&2
+  (cd "$TEST_DIR" && run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN="$dry_run" SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" </dev/null) 2>&1 | tee "$output_file" 1>&2
   LAST_CODE="${PIPESTATUS[0]}"
   LAST_OUT="$(<"$output_file")"
   progress "install-wor.sh finished with exit $LAST_CODE"
 }
 
+run_flasher() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
+  run_flasher_with_dry_run 1 "$@"
+}
+
 run_flasher_real() { #Input: VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
-  local output_file
-  progress "running install-wor.sh with $(printf '%s ' "$@")"
-  progress "live installer output follows (timeout: ${TEST_COMMAND_TIMEOUT}s)"
-  output_file="$TEST_DIR/flasher-output.log"
-  (cd "$TEST_DIR" && run_with_timeout env ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=0 SKIP_PACKAGE_INSTALL="${SKIP_PACKAGE_INSTALL:-0}" "$@" "$REPO_DIR/install-wor.sh" </dev/null) 2>&1 | tee "$output_file" 1>&2
-  LAST_CODE="${PIPESTATUS[0]}"
-  LAST_OUT="$(<"$output_file")"
-  progress "install-wor.sh finished with exit $LAST_CODE"
+  run_flasher_with_dry_run 0 "$@"
 }
 
 run_flasher_interrupted() { #Input: seconds to wait before SIGINT, then VAR=VALUE pairs. Sets LAST_OUT and LAST_CODE.
@@ -394,6 +481,17 @@ DIRECTORY="$REPO_DIR"
 #shellcheck disable=SC1090
 source "$REPO_DIR/install-wor.sh" source >/dev/null 2>&1
 
+progress_test_dir="$(mktemp -d)"
+printf 'progress helper fixture\n' > "$progress_test_dir/source"
+original_sudo_function="$(declare -f sudo)"
+sudo() { "$@"; }
+copy_file_with_progress test-copy "$progress_test_dir/source" "$progress_test_dir/destination" 2>/dev/null \
+  && [ "$(sha256_file "$progress_test_dir/source")" == "$(sha256_file_with_progress test-hash "$progress_test_dir/destination" 2>/dev/null)" ] \
+  && pass "copy and checksum progress helpers preserve file contents" \
+  || fail "copy or checksum progress helper corrupted its output"
+eval "$original_sudo_function"
+rm -rf "$progress_test_dir"
+
 for pair in '19045.1234:Windows 10' '22631.2861:Windows 11' ;do
   bid="${pair%%:*}"; want="${pair#*:}"
   [[ "$(get_os_name "$bid")" == "$want"* ]] && pass "get_os_name $bid -> $want" || fail "get_os_name $bid"
@@ -422,14 +520,26 @@ if command -v jq >/dev/null ;then
   is_safe_target_device /dev/disk2 && pass "Darwin accepts an external physical writable disk" || fail "Darwin rejected an external physical writable disk"
   is_safe_target_device /dev/disk0 && fail "Darwin accepted the startup disk" || pass "Darwin rejects the startup disk"
   [ "$(darwin_list_device_paths)" == /dev/disk2 ] && pass "Darwin GUI lists safe external disks" || fail "Darwin GUI listed an unexpected disk"
-  [ "$(darwin_list_device_choices)" == $'/dev/disk2\t64000000000\tUSB Drive\tVolumes: WOR_BOOT, WOR_INSTALL' ] \
+  [ "$(darwin_list_device_choices)" == $'/dev/disk2\t59.6 GB   USB Drive   Labels: WOR_BOOT, WOR_INSTALL   Volumes: WOR_BOOT, WOR_INSTALL' ] \
     && pass "Darwin GUI lists detected volumes" || fail "Darwin GUI did not show detected volume details"
+  [ "$(darwin_partition_by_volume_name /dev/disk2 WOR_BOOT)" == /dev/disk2s1 ] \
+    && [ "$(darwin_partition_by_volume_name /dev/disk2 WOR_INSTALL)" == /dev/disk2s2 ] \
+    && pass "Darwin resolves formatted partitions by volume name" \
+    || fail "Darwin used fixed partition numbers instead of volume names"
   grep -qF 'sgdisk_bin="$(command -v sgdisk)"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF -e '-t 1:ef00 -c 1:WOR_BOOT' "$REPO_DIR/install-wor.sh" \
-    && grep -qF -e '-t 2:0700 -c 2:WOR_INSTALL' "$REPO_DIR/install-wor.sh" \
+    && grep -qF -- '-n "1:0:+${boot_size_mb}M" -t 1:ef00 -c 1:WOR_BOOT' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '[ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && install_size_mb=18000 || install_size_mb=6000' "$REPO_DIR/install-wor.sh" \
+    && grep -qF -- '-n "2:0:+${install_size_mb}M" -t 2:0700 -c 2:WOR_INSTALL' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF -- '-n 2:0:0' "$REPO_DIR/install-wor.sh" \
+    && grep -qF -- '-A 1:set:63 -A 2:set:63' "$REPO_DIR/install-wor.sh" \
+    && grep -qF -- '-A 1:clear:63 -A 2:clear:63' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'boot_size_mb=$((boot_payload_kb / 1024 + 512))' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'diskutil partitionDisk' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'diskutil unmountDisk force "$DEVICE" >/dev/null || error "Failed to unmount newly created partitions on $DEVICE."' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'raw_part2="/dev/r${PART2#/dev/}"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'newfs_exfat -v WOR_INSTALL "$raw_part2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'newfs_exfat -R -v WOR_INSTALL "$raw_part2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'less than 1 GiB remains unallocated for the Windows target partition' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'verify_written_image "$DEVICE" "$PART1" "$PART2" "$boot_mount" "$win_mount"' "$REPO_DIR/install-wor.sh" \
     && pass "Darwin creates WOR_BOOT as a real EFI System Partition" \
     || fail "Darwin does not type WOR_BOOT as an EFI System Partition"
   DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","WritableMedia":true,"TotalSize":64000000000,"MediaName":"USB Drive"}'
@@ -497,6 +607,7 @@ for model in $(tr ' ' '\n' <<<"$TEST_MODELS") ;do
 
   for folder in peinstaller "pi${model}-uefipackage" ;do
     [ -f "$TEST_DL_DIR/$folder/.wor-flasher-version" ] && pass "Pi $model stamped $folder" || fail "Pi $model left $folder unstamped"
+    [ -s "$TEST_DL_DIR/$folder/.wor-flasher-sha256" ] && pass "Pi $model checksummed $folder" || fail "Pi $model left $folder without an integrity manifest"
   done
 done
 
@@ -506,10 +617,14 @@ info "== Cache modes =="
 run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=0
 run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=1
 expect_output "USE_CACHE=1 reuses a current cache" "cached copy is up to date"
+printf 'tampered\n' >> "$TEST_DL_DIR/pi4-uefipackage/RPI_EFI.fd"
+run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=1
+expect_output "USE_CACHE=1 refreshes modified cached content" "Downloading Pi4 UEFI firmware"
 info "== Linux boot partition layout =="
 seed_bootable_winfiles "$GOOD_BID"
 run_flasher_real BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
 expect_ok "Pi 4 real loop-device flash completes"
+expect_output "Pi 4 verifies the written image" "Written image verified successfully"
 
 boot_partition="$(get_partition "$DEV_INSTALL" 1)"
 partition_count="$(parted -ms "$DEV_INSTALL" unit s print | awk -F: '$1 ~ /^[0-9]+$/ { count++ } END { print count + 0 }')"

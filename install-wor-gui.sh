@@ -3,18 +3,23 @@
 #Written by Botspot
 #This script is a GUI front-end for the install-wor.sh script
 
+#shared app title, used for window titles and dialog titles across this file and install-wor.sh
+: "${WOR_APP_TITLE:=Windows on Raspberry}"
+
 gui_error_dialog() { #Input: error message
   local plain
   plain="$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
-  if command -v zenity >/dev/null ;then
+  if command -v osascript >/dev/null ;then
+    macos_choose '' "$plain" OK '' '' '' '' OK >/dev/null 2>&1
+  elif command -v yad >/dev/null ;then
+    yad --center --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" --text="$plain"
+  elif command -v zenity >/dev/null ;then
     zenity --error --title "$(basename "$0")" --width 360 --text "$plain"
-  elif command -v osascript >/dev/null ;then
-    osascript -e 'on run argv' -e 'display alert (item 1 of argv) message (item 2 of argv) as critical' -e 'end run' "$(basename "$0")" "$plain" >/dev/null
   fi
 }
 
 error() { #Input: error message
-  echo -e "\\e[91m$1\\e[39m"
+  printf '\033[91m%b\033[39m\n' "$1"
   gui_error_dialog "$1"
   exit 1
 }
@@ -32,48 +37,289 @@ open_url() { #Input: url
 }
 
 loading_dialog() { #display a dialog to say something is loading
+  local dialog_pid
   (echo '# ' ; sleep infinity) | yad "${yadflags[@]}" --height=0 \
     --progress --pulsate --title="$1" --text="$1" --no-buttons &
-  trap "kill $! 2>/dev/null" EXIT
+  dialog_pid=$!
+  trap 'kill "$dialog_pid" 2>/dev/null' EXIT
 
   sleep infinity
 }
 
-macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label. Output: selected choice.
-  osascript - "$1" "$2" "$3" "${4:-Cancel}" 2>/dev/null <<'APPLESCRIPT'
-on run argv
-  set choicesText to item 1 of argv
-  set promptText to item 2 of argv
-  set defaultChoice to item 3 of argv
-  set backButton to item 4 of argv
-  set choices to paragraphs of choicesText
-  set response to choose from list choices with title "Windows on Raspberry" with prompt promptText default items {defaultChoice} OK button name "Next" cancel button name backButton
-  if response is false then error number -128
-  return item 1 of response
-end run
-APPLESCRIPT
+stop_loader() {
+  [ -z "${loader_pid:-}" ] || kill "$loader_pid" 2>/dev/null
+  loader_pid=''
+}
+
+macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label, optional action label/value, optional image path/next label/icon path/title/cancel value. Output: selected choice or action value.
+  local result
+  result="$(osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$DIRECTORY/logo.png}" "${10:-$WOR_APP_TITLE}" "${11:-}" <<'JXA'
+ObjC.import('AppKit')
+ObjC.import('stdlib')
+ObjC.import('Foundation')
+
+const args = $.NSProcessInfo.processInfo.arguments
+const rawChoices = ObjC.unwrap(args.objectAtIndex(4))
+const choices = rawChoices.length > 0 ? rawChoices.split('\n') : []
+const promptText = ObjC.unwrap(args.objectAtIndex(5))
+const defaultChoice = ObjC.unwrap(args.objectAtIndex(6))
+const cancelLabel = ObjC.unwrap(args.objectAtIndex(7))
+const actionLabel = ObjC.unwrap(args.objectAtIndex(8))
+const actionValue = ObjC.unwrap(args.objectAtIndex(9))
+const imagePath = ObjC.unwrap(args.objectAtIndex(10))
+const nextLabel = ObjC.unwrap(args.objectAtIndex(11))
+const iconPath = ObjC.unwrap(args.objectAtIndex(12))
+const appTitle = ObjC.unwrap(args.objectAtIndex(13))
+const cancelValue = ObjC.unwrap(args.objectAtIndex(14))
+//a message screen has no selectable rows; it may still show an image (e.g. the welcome screen)
+const isMessageMode = choices.length === 0
+
+function writeResult(value) {
+  const data = $(value + '\n').dataUsingEncoding($.NSUTF8StringEncoding)
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(data)
+}
+
+if (ObjC.unwrap($.NSProcessInfo.processInfo.environment.objectForKey('WOR_CHOOSER_TEST') || '') === '1') {
+  writeResult(defaultChoice || choices[0])
+  $.NSApplication.sharedApplication.terminate(null)
+}
+
+const app = $.NSApplication.sharedApplication
+$.NSProcessInfo.processInfo.processName = appTitle
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+if (iconPath.length > 0) {
+  app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
+}
+let tableView
+let window
+let selectedValue = null
+//set below, before the modal runs; read by linkClicked: when the user clicks the link button
+let linkMatch = null
+
+const Controller = ObjC.registerSubclass({
+  name: 'WorChooserController',
+  superclass: 'NSObject',
+  methods: {
+    'numberOfRowsInTableView:': {
+      types: ['NSInteger', ['id']],
+      implementation: function() {
+        return choices.length
+      }
+    },
+    'tableView:objectValueForTableColumn:row:': {
+      types: ['id', ['id', 'id', 'NSInteger']],
+      implementation: function(_tableView, _tableColumn, row) {
+        return $(choices[row])
+      }
+    },
+    'nextClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        if (isMessageMode) {
+          selectedValue = defaultChoice
+          app.stopModalWithCode($.NSOKButton)
+          window.orderOut(null)
+          return
+        }
+        const row = tableView.selectedRow
+        if (row >= 0 && row < choices.length) {
+          selectedValue = choices[row]
+          app.stopModalWithCode($.NSOKButton)
+          window.orderOut(null)
+        }
+      }
+    },
+    'cancelClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        selectedValue = cancelValue.length > 0 ? cancelValue : null
+        app.stopModalWithCode($.NSCancelButton)
+        window.orderOut(null)
+      }
+    },
+    'actionClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        selectedValue = actionValue
+        app.stopModalWithCode($.NSOKButton)
+        window.orderOut(null)
+      }
+    },
+    'windowWillClose:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        selectedValue = null
+        app.stopModalWithCode($.NSCancelButton)
+      }
+    },
+    'linkClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        if (!linkMatch) return
+        const url = linkMatch[0]
+        const pasteboard = $.NSPasteboard.generalPasteboard
+        pasteboard.clearContents
+        pasteboard.setStringForType($(url), $.NSPasteboardTypeString)
+        $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($(url)))
+      }
+    }
+  }
+})
+
+const controller = $.WorChooserController.alloc.init
+const width = 760
+const height = 500
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskResizable
+window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
+window.title = appTitle
+window.minSize = $.NSMakeSize(640, 260)
+window.setDelegate(controller)
+window.center
+
+const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
+content.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
+window.contentView = content
+
+const prompt = $.NSTextField.labelWithString(promptText)
+prompt.font = $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightMedium)
+prompt.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+let linkButton
+if (isMessageMode) {
+  prompt.setUsesSingleLineMode(false)
+  prompt.cell.setWraps(true)
+  prompt.cell.setScrollable(false)
+  //if the prompt mentions a URL, add a clickable button below it that opens the browser and copies the link
+  linkMatch = promptText.match(/https?:\/\/\S+/)
+  if (imagePath.length > 0) {
+    prompt.frame = $.NSMakeRect(20, 76, width - 40, 44)
+    const imageView = $.NSImageView.alloc.initWithFrame($.NSMakeRect(20, 140, width - 40, 320))
+    imageView.image = $.NSImage.alloc.initWithContentsOfFile($(imagePath))
+    imageView.imageScaling = $.NSImageScaleProportionallyUpOrDown
+    imageView.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
+    content.addSubview(imageView)
+  } else if (linkMatch) {
+    prompt.frame = $.NSMakeRect(20, 96, width - 40, height - 132)
+  } else {
+    prompt.frame = $.NSMakeRect(20, 72, width - 40, height - 112)
+  }
+  if (linkMatch) {
+    linkButton = $.NSButton.buttonWithTitleTargetAction('Open ' + linkMatch[0], controller, 'linkClicked:')
+    linkButton.bezelStyle = $.NSBezelStyleInline
+    linkButton.setBordered(false)
+    linkButton.contentTintColor = $.NSColor.linkColor
+    linkButton.sizeToFit
+    linkButton.frame = $.NSMakeRect(20, 54, width - 40, 18)
+    linkButton.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+  }
+  content.addSubview(prompt)
+  if (linkButton) content.addSubview(linkButton)
+} else {
+  prompt.frame = $.NSMakeRect(20, height - 52, width - 40, 24)
+  content.addSubview(prompt)
+}
+
+if (!isMessageMode) {
+  const scrollView = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, 72, width - 40, height - 132))
+  scrollView.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
+  scrollView.borderType = $.NSBezelBorder
+  scrollView.hasVerticalScroller = true
+
+  tableView = $.NSTableView.alloc.initWithFrame(scrollView.bounds)
+  tableView.setHeaderView(undefined)
+  tableView.rowHeight = 24
+  tableView.setDelegate(controller)
+  tableView.setDataSource(controller)
+  tableView.setTarget(controller)
+  tableView.setDoubleAction('nextClicked:')
+  tableView.setAllowsEmptySelection(false)
+  tableView.setUsesAlternatingRowBackgroundColors(true)
+
+  const column = $.NSTableColumn.alloc.initWithIdentifier('choice')
+  column.width = scrollView.contentSize.width
+  column.resizingMask = $.NSTableColumnAutoresizingMask
+  column.editable = false
+  tableView.addTableColumn(column)
+  scrollView.documentView = tableView
+  content.addSubview(scrollView)
+}
+
+//buttons are sized to their own text so any label (e.g. "Proceed with WoR-Flasher") fits without truncation
+const nextButton = $.NSButton.buttonWithTitleTargetAction(nextLabel, controller, 'nextClicked:')
+nextButton.bezelStyle = $.NSBezelStyleRounded
+nextButton.keyEquivalent = '\r'
+nextButton.sizeToFit
+let nextWidth = Math.max(96, nextButton.frame.size.width)
+nextButton.frame = $.NSMakeRect(width - 20 - nextWidth, 22, nextWidth, 32)
+nextButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxYMargin
+content.addSubview(nextButton)
+
+//a message screen only hides Cancel for the image-based welcome screen; an explicitly empty cancelLabel hides it everywhere else
+const showCancelButton = cancelLabel.length > 0 && !(isMessageMode && imagePath.length > 0)
+if (showCancelButton) {
+  const cancelButton = $.NSButton.buttonWithTitleTargetAction(cancelLabel, controller, 'cancelClicked:')
+  cancelButton.bezelStyle = $.NSBezelStyleRounded
+  cancelButton.keyEquivalent = '\u001b'
+  cancelButton.sizeToFit
+  const cancelWidth = Math.max(96, cancelButton.frame.size.width)
+  cancelButton.frame = $.NSMakeRect(width - 20 - nextWidth - 8 - cancelWidth, 22, cancelWidth, 32)
+  cancelButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxYMargin
+  content.addSubview(cancelButton)
+}
+
+if (actionLabel.length > 0) {
+  const actionButton = $.NSButton.buttonWithTitleTargetAction(actionLabel, controller, 'actionClicked:')
+  actionButton.bezelStyle = $.NSBezelStyleRounded
+  actionButton.sizeToFit
+  const actionWidth = Math.max(112, actionButton.frame.size.width)
+  actionButton.frame = $.NSMakeRect(20, 22, actionWidth, 32)
+  actionButton.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMaxYMargin
+  content.addSubview(actionButton)
+}
+
+if (!isMessageMode) {
+  const defaultIndex = Math.max(0, choices.indexOf(defaultChoice))
+  tableView.selectRowIndexesByExtendingSelection($.NSIndexSet.indexSetWithIndex(defaultIndex), false)
+  tableView.scrollRowToVisible(defaultIndex)
+}
+
+window.makeKeyAndOrderFront(null)
+if (!app.isActive) app.requestUserAttention($.NSInformationalRequest)
+app.activateIgnoringOtherApps(true)
+app.runModalForWindow(window)
+
+if (selectedValue === null) {
+  writeResult('__WOR_CANCEL__')
+  app.terminate(null)
+} else {
+  writeResult(selectedValue)
+  app.terminate(null)
+}
+JXA
+)"
+  if [ "$result" == __WOR_CANCEL__ ];then
+    return 1
+  fi
+  printf '%s\n' "$result"
 }
 
 macos_show_announcement() { #Output: proceed or bvm.
-  osascript - "$DIRECTORY/announcement.png" 2>/dev/null <<'APPLESCRIPT'
-on run argv
-  set announcementImage to POSIX file (item 1 of argv) as alias
-  set response to display dialog "Consider BVM for running Windows alongside Linux on Raspberry Pi." with title "Windows on Raspberry" buttons {"Cancel", "Check out BVM", "Proceed with WoR-Flasher"} default button "Proceed with WoR-Flasher" cancel button "Cancel" with icon announcementImage
-  return button returned of response
-end run
-APPLESCRIPT
+  local announcement_choices announcement_choice
+  announcement_choices=''
+  announcement_choice="$(macos_choose "$announcement_choices" 'Consider BVM for running Windows alongside Linux on Raspberry Pi. Learn more: https://github.com/Botspot/bvm' 'Proceed with WoR-Flasher' Cancel 'Check out BVM' 'Check out BVM' "$DIRECTORY/announcement.png" 'Proceed with WoR-Flasher' "$DIRECTORY/logo.png")" || return 1
+
+  case "$announcement_choice" in
+    'Proceed with WoR-Flasher' | 'Check out BVM') echo "$announcement_choice" ;;
+    *) return 1 ;;
+  esac
 }
 
 macos_choose_device() { #Input: newline-separated detected volume rows. Output: selected row or __REFRESH__.
   if [ -z "$1" ];then
-    osascript 2>/dev/null <<'APPLESCRIPT'
-  display dialog "No external, physical, writable drive was found. Connect a removable drive, then click Refresh." with title "Choose device to flash" buttons {"Back", "Refresh"} default button "Refresh" cancel button "Back"
-return "__REFRESH__"
-APPLESCRIPT
+    macos_choose '' 'No external, physical, writable drive was found. Connect a removable drive, then click Refresh.' __REFRESH__ Back '' '' '' Refresh >/dev/null 2>&1
+    echo "__REFRESH__"
   else
-    device_choices=$'Refresh detected devices\n'"$1"
-    device_choice="$(macos_choose "$device_choices" 'Choose the external drive and volumes to erase' "$(printf '%s\n' "$1" | head -n1)" Back)" || return 1
-    [ "$device_choice" == 'Refresh detected devices' ] && echo "__REFRESH__" || echo "$device_choice"
+    device_choice="$(macos_choose "$1" 'Choose the external drive and volumes to erase' "$(printf '%s\n' "$1" | head -n1)" Back Refresh __REFRESH__)" || return 1
+    echo "$device_choice"
   fi
 }
 
@@ -94,15 +340,15 @@ hdmi_drive=2
 hdmi_group=2
 hdmi_mode=87
 hdmi_cvt=1920 1200 60 6 0 0 0
-device_tree_address=0x1f0000
-device_tree_end=0x200000
+device_tree_address=0x3e0000
+device_tree_end=0x400000
 dtoverlay=miniuart-bt
 dtoverlay=upstream-pi4"
   fi
 }
 
 macos_start_cli() {
-  local device_choices device_capability device_choice install_mode mode_choices pi_choices step terminal_command terminal_launch_command terminal_runner windows_choices
+  local completion_jxa confirm_summary confirmation default_language device_choices device_capability device_choice error_marker install_mode language_choices mode_choices mode_label output_log pi_choices step terminal_env terminal_launch_command terminal_runner windows_choices
 
   windows_choices=$'Windows 11\nWindows 10'
   pi_choices=$'5\n4\n3'
@@ -122,7 +368,9 @@ macos_start_cli() {
         step=language
         ;;
       language)
-        WIN_LANG="$(macos_choose "$(list_langs | cut -d: -f1)" 'Choose Windows language' 'en-us' Back)" || { step=pi; continue; }
+        language_choices="$(list_langs | cut -d: -f1)"
+        default_language="$(default_win_lang)"
+        WIN_LANG="$(macos_choose "$language_choices" "Choose Windows language (default: $default_language)" "$default_language" Back)" || { step=pi; continue; }
         step=device
         ;;
       device)
@@ -146,23 +394,14 @@ macos_start_cli() {
         step=confirm
         ;;
       confirm)
-        confirmation="$(osascript - "$DEVICE" "$RPI_MODEL" "$BID" "$WIN_LANG" "$CAN_INSTALL_ON_SAME_DRIVE" 2>/dev/null <<'APPLESCRIPT'
-on run argv
-  set mode to item 5 of argv
-  if mode is "1" then
-    set mode to "Install Windows onto this drive"
-  else
-    set mode to "Recovery drive"
-  end if
-  try
-    set response to display dialog "Target drive: " & item 1 of argv & return & "Raspberry Pi: " & item 2 of argv & return & "Windows build: " & item 3 of argv & " (" & item 4 of argv & ")" & return & "Mode: " & mode & return & return & "All data on the target drive will be erased." with title "Windows on Raspberry" buttons {"Cancel", "Back", "Flash"} default button "Flash" cancel button "Cancel" with icon caution
-  on error number -128
-    return "Cancel"
-  end try
-  return button returned of response
-end run
-APPLESCRIPT
-        )" || exit 0
+        [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && mode_label='Install Windows onto this drive' || mode_label='Recovery drive'
+        confirm_summary="Target drive: $DEVICE
+Raspberry Pi: $RPI_MODEL
+Windows build: $BID ($WIN_LANG)
+Mode: $mode_label
+
+All data on the target drive will be erased."
+        confirmation="$(macos_choose '' "$confirm_summary" Flash Back Cancel Cancel '' Flash "$DIRECTORY/logo.png" "$WOR_APP_TITLE" Back)" || confirmation=Cancel
         [ "$confirmation" == Cancel ] && exit 0
         [ "$confirmation" == Flash ] && break
         step=mode
@@ -170,9 +409,115 @@ APPLESCRIPT
     esac
   done
 
-  printf -v terminal_command 'cd %q || exit $?; env DL_DIR=%q RPI_MODEL=%q BID=%q WIN_LANG=%q DEVICE=%q CAN_INSTALL_ON_SAME_DRIVE=%q CONFIG_TXT=%q DRY_RUN=%q RUN_MODE=%q %q; installer_status=$?; if [ "$installer_status" == 0 ]; then completion_text="Process completed successfully."; else completion_text="Process failed. See the terminal output above for details."; fi; completion_script="$(mktemp)"; printf "%%s\\n" "display dialog \\"$completion_text\\" with title \\"Windows on Raspberry\\" buttons {\\"OK\\"} default button \\"OK\\"" > "$completion_script"; osascript "$completion_script"; rm -f "$completion_script"; exit "$installer_status"' "$DIRECTORY" "$DL_DIR" "$RPI_MODEL" "$BID" "$WIN_LANG" "$DEVICE" "$CAN_INSTALL_ON_SAME_DRIVE" "$CONFIG_TXT" "$DRY_RUN" "$RUN_MODE" "$cli_script"
+  completion_jxa="$(cat <<'JXA'
+ObjC.import('AppKit')
+const args = $.NSProcessInfo.processInfo.arguments
+const message = ObjC.unwrap(args.objectAtIndex(4))
+const iconPath = ObjC.unwrap(args.objectAtIndex(5))
+const appTitle = ObjC.unwrap(args.objectAtIndex(6))
+
+const app = $.NSApplication.sharedApplication
+$.NSProcessInfo.processInfo.processName = appTitle
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+if (iconPath.length > 0) {
+  app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
+}
+
+let window
+const Controller = ObjC.registerSubclass({
+  name: 'WorCompletionController',
+  superclass: 'NSObject',
+  methods: {
+    'okClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        app.stopModalWithCode($.NSOKButton)
+        window.orderOut(null)
+      }
+    },
+    'windowWillClose:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        app.stopModalWithCode($.NSOKButton)
+      }
+    }
+  }
+})
+const controller = $.WorCompletionController.alloc.init
+
+const width = 560
+const height = 220
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable
+window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
+window.title = appTitle
+window.setDelegate(controller)
+window.center
+
+const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
+window.contentView = content
+
+const label = $.NSTextField.labelWithString(message)
+label.frame = $.NSMakeRect(20, 70, width - 40, height - 100)
+label.font = $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightMedium)
+label.setUsesSingleLineMode(false)
+label.cell.setWraps(true)
+label.cell.setScrollable(false)
+content.addSubview(label)
+
+const okButton = $.NSButton.buttonWithTitleTargetAction('OK', controller, 'okClicked:')
+okButton.bezelStyle = $.NSBezelStyleRounded
+okButton.keyEquivalent = '\r'
+okButton.sizeToFit
+const okWidth = Math.max(96, okButton.frame.size.width)
+okButton.frame = $.NSMakeRect(width - 20 - okWidth, 22, okWidth, 32)
+content.addSubview(okButton)
+
+window.makeKeyAndOrderFront(null)
+if (!app.isActive) app.requestUserAttention($.NSInformationalRequest)
+app.activateIgnoringOtherApps(true)
+app.runModalForWindow(window)
+app.terminate(null)
+JXA
+)"
+
+  error_marker="$(mktemp)" || error "Failed to create a GUI error marker."
+  output_log="$(mktemp)" || error "Failed to create a terminal output log."
+  rm -f "$error_marker"
+  printf -v terminal_env 'DL_DIR=%q RPI_MODEL=%q BID=%q WIN_LANG=%q DEVICE=%q CAN_INSTALL_ON_SAME_DRIVE=%q CONFIG_TXT=%q DRY_RUN=%q RUN_MODE=%q WOR_GUI_ERROR_MARKER=%q' \
+    "$DL_DIR" "$RPI_MODEL" "$BID" "$WIN_LANG" "$DEVICE" "$CAN_INSTALL_ON_SAME_DRIVE" "$CONFIG_TXT" "$DRY_RUN" "$RUN_MODE" "$error_marker"
   terminal_runner="$(mktemp)" || error "Failed to create a temporary Terminal runner."
-  printf '%s\n%s\n%s\n' '#!/bin/bash' 'trap '\''rm -f "$0"'\'' EXIT' "$terminal_command" > "$terminal_runner"
+  {
+    printf '%s\n' '#!/bin/bash'
+    printf '%s\n' 'trap '\''rm -f "$0"'\'' EXIT'
+    printf 'output_log=%q\n' "$output_log"
+    printf 'error_marker=%q\n' "$error_marker"
+    printf 'clear\n'
+    printf 'cd %q || exit $?\n' "$DIRECTORY"
+    printf 'env %s %q 2>&1 | tee "$output_log"\n' "$terminal_env" "$cli_script"
+    printf 'installer_status=${PIPESTATUS[0]}\n'
+    printf 'if [ "$installer_status" == 0 ]; then\n'
+    printf '  completion_text="Process completed successfully."\n'
+    printf 'else\n'
+    printf '  if [ -e "$error_marker" ]; then\n'
+    printf '    osascript -e '\''tell application "Terminal" to close front window'\'' >/dev/null 2>&1\n'
+    printf '    exit "$installer_status"\n'
+    printf '  fi\n'
+    printf '  clean_output="$(sed $'"'"'s/\033\\[[0-9;]*[A-Za-z]//g; s/\\033\\[[0-9;]*[A-Za-z]//g; s/\r//g'"'"' "$output_log" | tail -n 18)"\n'
+    printf '  completion_text="The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).\n\n$clean_output"\n'
+    printf '  rm -f "$output_log" "$error_marker"\n'
+    printf '  osascript -l JavaScript - "$completion_text" %q %q <<'"'"'JXA'"'"'\n' "$DIRECTORY/logo.png" "$WOR_APP_TITLE"
+    printf '%s\n' "$completion_jxa"
+    printf 'JXA\n'
+    printf '  osascript -e '\''tell application "Terminal" to close front window'\'' >/dev/null 2>&1\n'
+    printf '  exit "$installer_status"\n'
+    printf 'fi\n'
+    printf 'osascript -l JavaScript - "$completion_text" %q %q <<'"'"'JXA'"'"'\n' "$DIRECTORY/logo.png" "$WOR_APP_TITLE"
+    printf '%s\n' "$completion_jxa"
+    printf 'JXA\n'
+    printf 'rm -f "$output_log" "$error_marker"\n'
+    printf 'osascript -e '\''tell application "Terminal" to close front window'\'' >/dev/null 2>&1\n'
+    printf 'exit "$installer_status"\n'
+  } > "$terminal_runner"
   chmod +x "$terminal_runner" || error "Failed to make the temporary Terminal runner executable."
   printf -v terminal_launch_command 'exec /bin/bash %q' "$terminal_runner"
   osascript - "$terminal_launch_command" <<'APPLESCRIPT' >/dev/null
@@ -207,6 +552,7 @@ if [ ! -f "$cli_script" ];then
 fi
 
 if [ "$(uname -s)" == Darwin ];then
+  #shellcheck disable=SC1090
   source "$cli_script" source
   setup || exit 1
   announcement_choice="$(macos_show_announcement)" || exit 0
@@ -219,13 +565,14 @@ if [ "$(uname -s)" == Darwin ];then
 fi
 
 #source the script to acquire necessary functions
+#shellcheck disable=SC1090
 source "$cli_script" source #by sourcing, this script checks for and applies updates.
 
 #run safety checks and install packages
 setup || exit 1
 
 #this array stores flags that are used in all yad windows - saves on the typing and makes it easy to change an attribute on all dialogs from one place.
-yadflags=(--center --width=400 --height=250 --window-icon="$DIRECTORY/logo.png" --title="Windows on Raspberry" --separator='\n')
+yadflags=(--center --width=400 --height=250 --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" --separator='\n')
 
 #display BVM announcement
 yad "${yadflags[@]}" --buttons-layout=spread \
@@ -255,7 +602,7 @@ if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
     'Windows 11' | 'Windows 10')
       loading_dialog "Finding best $WINDOWS_VER image version..." &
       loader_pid=$!
-      trap "kill $loader_pid 2>/dev/null" EXIT
+      trap stop_loader EXIT
 
       list_bids 10 >/dev/null #set $versions globally so it is not downloaded twice
       if [ "$WINDOWS_VER" == 'Windows 11' ];then
@@ -264,7 +611,7 @@ if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
         BID="$(get_bid 10)" || exit 1
       fi
 
-      kill $loader_pid 2>/dev/null
+      stop_loader
       ;;
 
     'More options')
@@ -535,7 +882,7 @@ Choose this if:
           #install More RAM
           loading_dialog "Setting up RAM..." &
           loader_pid=$!
-          trap "kill $loader_pid 2>/dev/null" EXIT
+          trap stop_loader EXIT
 
           if [ -f "$HOME/pi-apps/manage" ];then
             #if Pi-Apps installed to default location, install More RAM from there
@@ -556,7 +903,7 @@ Choose this if:
             fi
           fi
           #installation complete, so close pulsating progress bar dialog
-          kill $loader_pid 2>/dev/null
+          stop_loader
 
           #edge case: if user had installed More RAM before and disabled the /zram folder, enable it now
           if [ "$exitcode" == 0 ] && [ ! -d /zram ];then
@@ -626,8 +973,8 @@ hdmi_drive=2
 hdmi_group=2
 hdmi_mode=87
 hdmi_cvt=1920 1200 60 6 0 0 0
-device_tree_address=0x1f0000
-device_tree_end=0x200000
+device_tree_address=0x3e0000
+device_tree_end=0x400000
 dtoverlay=miniuart-bt
 dtoverlay=upstream-pi4"
 
@@ -655,6 +1002,7 @@ window_text="- Target drive: <b>$DEVICE</b> ($(lsblk -dno SIZE "$DEVICE" | tr -d
 
 #by default, if a windows image exists, don't delete it to rebuild it
 rm_img=FALSE
+existing_img_chk=()
 
 while true;do #repeat the Installation Overview window until Flash button clicked
 
@@ -826,13 +1174,13 @@ echo "Launching install-wor.sh in a separate terminal"
 #Terminals like lxterminal and gnome-terminal reuse an existing process, so an exported
 #environment does not reach the new window. Write the values to a file instead and source
 #it there. declare -p quotes everything correctly, so no value can break out of the string.
-export DIRECTORY cli_script DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE
+export DIRECTORY cli_script DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE WOR_APP_TITLE
 export RUN_MODE=gui
 env_file="$(mktemp)" || error "Failed to create a temporary file"
 trap 'rm -f "$env_file"' EXIT
-declare -p DIRECTORY cli_script DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE RUN_MODE > "$env_file"
+declare -p DIRECTORY cli_script DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE WOR_APP_TITLE RUN_MODE > "$env_file"
 
-#run the install-wor.sh script in a terminal. If it succeeds, the "Next steps" window opens. If it fails, the terminal stays open forever until you close it.
+#run the Windows on Raspberry script in a terminal, then show a dismissible result window.
 "$DIRECTORY/terminal-run" 'source "'"$env_file"'"
 rm -f "'"$env_file"'"
 "$cli_script"
@@ -845,10 +1193,8 @@ fi
 
 if [ "$exitcode" == 0 ];then
   #display "next steps" window
-  yad --center --window-icon="$DIRECTORY/logo.png" --title="Windows on Raspberry" \
+  yad --center --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" \
     --image="$DIRECTORY/next-steps.png" --button=Close:0
-else
-  sleep infinity
 fi' "Running $(basename "$cli_script")"
 
 echo "The terminal running install-wor.sh has been closed."

@@ -36,8 +36,8 @@ temp_pid_file="$temp_pid_dir/pid"
 trap 'rm -rf "$temp_pid_dir"' EXIT
 
 #prepend a line that records the terminal's PID so this script can wait for it
-commands="echo "\$""\$" > $temp_pid_file
-$commands"
+printf -v quoted_pid_file '%q' "$temp_pid_file"
+commands="printf '%s\\n' \"\$\$\" > $quoted_pid_file"$'\n'"$commands"
 
 if command -v lxterminal >/dev/null ;then
   lxterminal --title="$title" -e bash -c "$commands" &
