@@ -34,7 +34,7 @@ case "$(uname -s)" in
   Darwin)
     command -v osascript >/dev/null || { skip "macOS GUI walkthrough needs osascript"; summary; }
     pass "macOS native GUI is available"
-    [ -f "$REPO_DIR/partnership.svg" ] || die "macOS GUI walkthrough needs partnership.svg"
+    [ -f "$REPO_DIR/partnership.png" ] || die "macOS GUI walkthrough needs partnership.png"
     pass "macOS welcome image is available"
     ;;
   *)

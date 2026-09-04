@@ -147,8 +147,8 @@ if (iconPath.length > 0) {
 let tableView
 let window
 let selectedValue = null
-//set below, before the modal runs; read by linkClicked: when the user clicks the link button
-let linkMatch = null
+//set below, before the modal runs; read by linkClicked: when the user clicks a link button
+let linkMatches = []
 
 const Controller = ObjC.registerSubclass({
   name: 'WorChooserController',
@@ -209,8 +209,9 @@ const Controller = ObjC.registerSubclass({
     'linkClicked:': {
       types: ['void', ['id']],
       implementation: function() {
-        if (!linkMatch) return
-        const url = linkMatch[0]
+        const linkIndex = Number(sender.tag)
+        if (!linkMatches[linkIndex]) return
+        const url = linkMatches[linkIndex][0]
         const pasteboard = $.NSPasteboard.generalPasteboard
         pasteboard.clearContents
         pasteboard.setStringForType($(url), $.NSPasteboardTypeString)
@@ -272,8 +273,10 @@ if (isMessageMode) {
   prompt.setUsesSingleLineMode(false)
   prompt.cell.setWraps(true)
   prompt.cell.setScrollable(false)
-  //if the prompt mentions a URL, add a clickable button below it that opens the browser and copies the link
-  linkMatch = promptText.match(/https?:\/\/\S+/)
+  //Partnership announcements use named link buttons; other messages retain a generic URL button.
+  linkMatches = promptText.includes('Botspot and Blackout Secure')
+    ? [['https://github.com/Botspot', 'Botspot'], ['https://blackoutsecure.app', 'Blackout Secure']]
+    : (promptText.match(/https?:\/\/\S+/) ? [[promptText.match(/https?:\/\/\S+/)[0], 'Open link']] : [])
   if (imagePath.length > 0) {
     prompt.frame = $.NSMakeRect(20, 76, width - 40, 44)
     const imageView = $.NSImageView.alloc.initWithFrame($.NSMakeRect(20, 140, width - 40, 320))
@@ -281,22 +284,30 @@ if (isMessageMode) {
     imageView.imageScaling = $.NSImageScaleProportionallyUpOrDown
     imageView.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
     content.addSubview(imageView)
-  } else if (linkMatch) {
+  } else if (linkMatches.length > 0) {
     prompt.frame = $.NSMakeRect(20, 96, width - 40, height - 132)
   } else {
     prompt.frame = $.NSMakeRect(20, 72, width - 40, height - 112)
   }
-  if (linkMatch) {
-    linkButton = $.NSButton.buttonWithTitleTargetAction('Open ' + linkMatch[0], controller, 'linkClicked:')
-    linkButton.bezelStyle = $.NSBezelStyleInline
-    linkButton.setBordered(false)
-    linkButton.contentTintColor = $.NSColor.linkColor
-    linkButton.sizeToFit
-    linkButton.frame = $.NSMakeRect(20, 54, width - 40, 18)
-    linkButton.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+  if (linkMatches.length > 0) {
+    linkButton = []
+    linkMatches.forEach(function(link, index) {
+      const button = $.NSButton.buttonWithTitleTargetAction(link[1], controller, 'linkClicked:')
+      button.bezelStyle = $.NSBezelStyleInline
+      button.setBordered(false)
+      button.contentTintColor = $.NSColor.linkColor
+      button.tag = index
+      button.sizeToFit
+      const totalWidth = linkMatches.reduce(function(total, item) { return total + item[1].length * 8 + 24 }, 0)
+      const buttonWidth = Math.max(120, button.frame.size.width)
+      const startX = (width - totalWidth) / 2
+      button.frame = $.NSMakeRect(startX + index * (totalWidth / linkMatches.length), 54, buttonWidth, 22)
+      button.autoresizingMask = $.NSViewMinYMargin
+      linkButton.push(button)
+    })
   }
   content.addSubview(prompt)
-  if (linkButton) content.addSubview(linkButton)
+  if (linkButton) linkButton.forEach(function(button) { content.addSubview(button) })
 } else {
   prompt.frame = $.NSMakeRect(20, height - 52, width - 40, 24)
   content.addSubview(prompt)
@@ -333,8 +344,8 @@ nextButton.bezelStyle = $.NSBezelStyleRounded
 nextButton.keyEquivalent = '\r'
 nextButton.sizeToFit
 let nextWidth = Math.max(96, nextButton.frame.size.width)
-nextButton.frame = $.NSMakeRect(width - 20 - nextWidth, 22, nextWidth, 32)
-nextButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxYMargin
+nextButton.frame = $.NSMakeRect((width - nextWidth) / 2, 22, nextWidth, 32)
+nextButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxXMargin | $.NSViewMaxYMargin
 content.addSubview(nextButton)
 
 //a message screen only hides Cancel for the image-based welcome screen; an explicitly empty cancelLabel hides it everywhere else
@@ -394,10 +405,10 @@ JXA
 macos_show_announcement() { #Output: proceed or project partner.
   local announcement_choices announcement_choice
   announcement_choices=''
-  announcement_choice="$(macos_choose "$announcement_choices" 'This fork is maintained in partnership with Botspot and Blackout Secure. It keeps the original upstream project visible while adding macOS support, safer verification, better native GUI behaviour and broader testing. Learn more: https://blackoutsecure.app' 'Proceed with WoR-Flasher' Cancel 'Open Blackout Secure' 'Open Blackout Secure' "$DIRECTORY/partnership.svg" 'Proceed with WoR-Flasher' "$DIRECTORY/logo.png")" || return 1
+  announcement_choice="$(macos_choose "$announcement_choices" 'Botspot and Blackout Secure are working together to keep WoR-Flasher useful, supported and moving forward for the Windows on Raspberry Pi community. Click either name to learn more.' 'Proceed with WoR-Flasher' Cancel '' '' "$DIRECTORY/partnership.png" 'Proceed with WoR-Flasher' "$DIRECTORY/logo.png")" || return 1
 
   case "$announcement_choice" in
-    'Proceed with WoR-Flasher' | 'Open Blackout Secure') echo "$announcement_choice" ;;
+    'Proceed with WoR-Flasher') echo "$announcement_choice" ;;
     *) return 1 ;;
   esac
 }
@@ -1182,10 +1193,6 @@ Full log: $saved_log"
 if is_macos ;then
   setup || exit 1
   announcement_choice="$(macos_show_announcement)" || exit 0
-  if [ "$announcement_choice" == 'Open Blackout Secure' ];then
-    open_url 'https://blackoutsecure.app'
-    exit 0
-  fi
   macos_start_cli
   exit $?
 fi
@@ -1197,15 +1204,10 @@ setup || exit 1
 yadflags=(--center --width=400 --height=250 --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" --separator='\n')
 
 #display partnership announcement
-yad "${yadflags[@]}" --buttons-layout=spread \
-    --image="$DIRECTORY/partnership.svg" \
-    --text=$'This fork is maintained in partnership with Botspot and Blackout Secure.\nIt keeps the original author visible while adding macOS support, safer verification, native GUI polish and a broader test suite.' \
-    --button='<b>Proceed with WoR-Flasher</b>':1 \
-    --button='<b>Open Blackout Secure</b>':0
-if [ "$?" == 0 ];then
-  open_url 'https://blackoutsecure.app'
-  exit 0
-fi
+yad "${yadflags[@]}" --buttons-layout=center \
+  --image="$DIRECTORY/partnership.png" \
+  --text=$'&lt;a href="https://github.com/Botspot"&gt;Botspot&lt;/a&gt; and &lt;a href="https://blackoutsecure.app"&gt;Blackout Secure&lt;/a&gt; are working together to keep WoR-Flasher useful, supported and moving forward for the Windows on Raspberry Pi community.\nOngoing maintenance, support and improvements help make Windows installation from Linux and macOS more reliable.' \
+  --button='<b>Proceed with WoR-Flasher</b>':0
 
 { #choose destination RPi model and windows build ID
 if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
