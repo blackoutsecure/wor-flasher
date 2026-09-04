@@ -15,7 +15,7 @@
 [![Blackout Secure](https://img.shields.io/badge/maintained%20by-Blackout%20Secure-0a7ea4?style=for-the-badge&labelColor=555555&logo=shieldsdotio&logoColor=ffffff)](https://blackoutsecure.app)
 
 > [!NOTE]
-> Blackout Secure is proud to partner with [Botspot](https://github.com/Botspot) and the [Windows on R](https://worproject.com/) communities as part of this endeavour. Together, we are carrying the project forward while keeping Botspot's original authorship, project direction, and upstream community connections visible. If a fix also applies to the upstream project at [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), please consider sending it there as well.
+> [Blackout Secure](https://blackoutsecure.app) is proud to partner with [Botspot](https://github.com/Botspot) and the [Windows on R](https://worproject.com/) communities as part of this endeavour. Together, we are carrying the project forward while keeping Botspot's original authorship, project direction, and upstream community connections visible. If a fix also applies to the upstream project at [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), please consider sending it there as well.
 
 Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi from Linux or macOS.
 
