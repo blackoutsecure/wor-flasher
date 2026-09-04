@@ -654,6 +654,10 @@ configure_pe_prefinalize() { #Stages the answer file and WoR-PE's prefinalize ho
 
   mkdir -p "$scripts_dir" || return 1
   unattend_xml > "$scripts_dir/unattend.xml" || return 1
+  #the specialize action runs on the installed OS, so its script has to travel there too
+  if [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ];then
+    read_config_template pi4-ram-unlock.ps1 > "$scripts_dir/Pi4Disable3GB.ps1" || return 1
+  fi
   #batch files are parsed by cmd.exe, which needs CRLF line endings
   read_config_template prefinalize.cmd | sed 's/$/\r/' > "$scripts_dir/prefinalize.cmd" || return 1
   remark_pe_cache

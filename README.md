@@ -154,30 +154,30 @@ Sourcing with the `source` argument makes the engine's functions available witho
 
 Every prompt has a matching environment variable.
 
-| Variable                    | Default               | Function                                                                                    |
-| --------------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
-| `DL_DIR`                    | `~/wor-flasher-files` | Where components are downloaded and Windows images are extracted                            |
-| `RPI_MODEL`                 | _ask_                 | Target Raspberry Pi: `3`, `4` or `5`                                                        |
-| `BID`                       | _ask_                 | Exact Windows build ID, e.g. `22631.2861`                                                   |
-| `WIN_LANG`                  | _ask_                 | Windows language code, e.g. `en-us`                                                         |
-| `DEVICE`                    | _ask_                 | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                               |
-| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                 | `1` to install Windows onto the target itself, `0` to make recovery media for another drive |
-| `SOURCE_FILE`               | unset                 | Path to an existing Windows ARM64 ISO, instead of downloading                               |
-| `CONFIG_TXT`                | shipped template      | Body of `config.txt` written to the boot partition                                          |
-| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                   | `0` leaves the UEFI firmware package's own `config.txt` in place                            |
-| `OOBE_NETWORK_BYPASS`       | `1`                   | `0` requires the standard network-connected Windows setup flow                              |
-| `PI4_AUTO_DISABLE_3GB`      | `1`                   | Pi 4 only. `0` keeps the 3 GB RAM limit                                                     |
-| `UEFI_USE_LATEST`           | `0`                   | `1` queries GitHub for the newest UEFI firmware instead of the pinned version               |
-| `DRIVERS_USE_LATEST`        | `1`                   | `0` uses the pinned driver package version                                                  |
-| `SKIP_IMAGE_VERIFICATION`   | `0`                   | `1` skips post-flash verification. Not recommended                                          |
-| `HIDE_EMPTY_DRIVES`         | `1`                   | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
-| `USE_CACHE`                 | `1`                   | See [Download cache](#download-cache)                                                       |
-| `DRY_RUN`                   | `0`                   | `1` runs every step except writing to the drive                                             |
+| Variable                    | Default                | Function                                                                                    |
+| --------------------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
+| `DL_DIR`                    | `~/wor-flasher-files`  | Where components are downloaded and Windows images are extracted                            |
+| `RPI_MODEL`                 | _ask_                  | Target Raspberry Pi: `3`, `4` or `5`                                                        |
+| `BID`                       | _ask_                  | Exact Windows build ID, e.g. `22631.2861`                                                   |
+| `WIN_LANG`                  | _ask_                  | Windows language code, e.g. `en-us`                                                         |
+| `DEVICE`                    | _ask_                  | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                               |
+| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                  | `1` to install Windows onto the target itself, `0` to make recovery media for another drive |
+| `SOURCE_FILE`               | unset                  | Path to an existing Windows ARM64 ISO, instead of downloading                               |
+| `CONFIG_TXT`                | shipped template       | Body of `config.txt` written to the boot partition                                          |
+| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                    | `0` leaves the UEFI firmware package's own `config.txt` in place                            |
+| `OOBE_NETWORK_BYPASS`       | `1`                    | `0` requires the standard network-connected Windows setup flow                              |
+| `PI4_AUTO_DISABLE_3GB`      | `1`                    | Pi 4 only. `0` keeps the 3 GB RAM limit                                                     |
+| `UEFI_USE_LATEST`           | `0`                    | `1` queries GitHub for the newest UEFI firmware instead of the pinned version               |
+| `DRIVERS_USE_LATEST`        | `1`                    | `0` uses the pinned driver package version                                                  |
+| `SKIP_IMAGE_VERIFICATION`   | `0`                    | `1` skips post-flash verification. Not recommended                                          |
+| `HIDE_EMPTY_DRIVES`         | `1`                    | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
+| `USE_CACHE`                 | `1`                    | See [Download cache](#download-cache)                                                       |
+| `DRY_RUN`                   | `0`                    | `1` runs every step except writing to the drive                                             |
 | `WOR_LOG_FILE`              | `$DL_DIR/last-run.log` | Where a failed run's log is kept                                                            |
-| `VERIFY_TLS`                | `1`                   | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                |
-| `NO_UPDATE`                 | `1`                   | `0` opts in to the self-updater. See [Updating](#updating)                                  |
-| `RUN_MODE`                  | `cli`                 | `gui` makes the engine show graphical error dialogs                                         |
-| `SKIP_PACKAGE_INSTALL`      | unset                 | `1` assumes dependencies are already present                                                |
+| `VERIFY_TLS`                | `1`                    | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                |
+| `NO_UPDATE`                 | `1`                    | `0` opts in to the self-updater. See [Updating](#updating)                                  |
+| `RUN_MODE`                  | `cli`                  | `gui` makes the engine show graphical error dialogs                                         |
+| `SKIP_PACKAGE_INSTALL`      | unset                  | `1` assumes dependencies are already present                                                |
 
 Example:
 

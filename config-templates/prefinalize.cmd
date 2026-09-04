@@ -35,6 +35,25 @@ if errorlevel 1 (
 )
 
 call :RaiseEvent LogInfo, "Answer file installed to %pantherDir%\unattend.xml"
+
+::
+:: The Pi 4 RAM-unlock action runs during specialize, on the installed OS. Copying it there too
+:: means it does not depend on the installation media still being visible and lettered by then.
+::
+set ramUnlockSource=%~dp0Pi4Disable3GB.ps1
+set scriptsDir=%WOR_DISK_WINDOWSPARTITION%\Windows\Setup\Scripts
+
+if not exist "%ramUnlockSource%" goto :end
+
+if not exist "%scriptsDir%\" mkdir "%scriptsDir%"
+
+copy /y "%ramUnlockSource%" "%scriptsDir%\Pi4Disable3GB.ps1" >nul
+if errorlevel 1 (
+  call :RaiseEvent LogWarn, "Could not install the Pi 4 RAM unlock; the 3 GB limit will stay enabled."
+  goto :end
+)
+
+call :RaiseEvent LogInfo, "Pi 4 RAM unlock installed to %scriptsDir%\Pi4Disable3GB.ps1"
 goto :end
 
 :: RaiseEvent Type, Data

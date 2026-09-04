@@ -912,6 +912,34 @@ rc=1" ] \
     && pass "the batch template is stored with LF, so the CR is added exactly once" \
     || fail "the batch template has CRLF in the repo, or .gitattributes does not pin it"
 
+  #the specialize action runs on the installed OS, where the media may no longer be lettered, so the
+  #script it invokes has to be copied into Windows too - the answer file alone is not enough
+  ram_hook_dir="$(mktemp -d)"
+  mkdir -p "$ram_hook_dir/peinstaller/winpe/2"
+  printf 'stub\n' > "$ram_hook_dir/peinstaller/winpe/2/setup.exe"
+  ram_hook_out="$(cd "$ram_hook_dir" && env -u CONFIG_TXT NO_UPDATE=1 DIRECTORY="$REPO_DIR" bash -c '
+    source "$DIRECTORY/install-wor.sh" source >/dev/null 2>&1
+    RPI_MODEL=4; PI4_AUTO_DISABLE_3GB=1; OOBE_NETWORK_BYPASS=0
+    configure_pe_prefinalize
+    [ -s peinstaller/winpe/2/scripts/Pi4Disable3GB.ps1 ] && echo script-staged
+    grep -qF "Setup\\Scripts" peinstaller/winpe/2/scripts/prefinalize.cmd && echo hook-copies-it
+    #a model without the 3 GB limit must not carry the action at all
+    RPI_MODEL=5
+    configure_pe_prefinalize
+    [ -e peinstaller/winpe/2/scripts/Pi4Disable3GB.ps1 ] || echo not-staged-for-pi5
+  ')"
+  rm -rf "$ram_hook_dir"
+  for ram_hook_expected in script-staged hook-copies-it not-staged-for-pi5 ;do
+    printf '%s\n' "$ram_hook_out" | grep -qx "$ram_hook_expected" || missing_ram_hook="$missing_ram_hook $ram_hook_expected"
+  done
+  #a RunSynchronousCommand that exits non-zero fails Windows Setup outright, so it must swallow its own errors
+  [ -z "$missing_ram_hook" ] \
+    && grep -qF 'Setup\Scripts\Pi4Disable3GB.ps1' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
+    && grep -qF '; exit 0"' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
+    && ! grep -qF 'exit 1' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
+    && pass "the Pi 4 RAM unlock reaches the installed OS and cannot fail Windows setup" \
+    || fail "the RAM unlock is not delivered to the installed OS:$missing_ram_hook"
+
   #a table of contents that points at a heading which no longer exists is worse than none
   broken_anchors=''
   while read -r anchor ;do

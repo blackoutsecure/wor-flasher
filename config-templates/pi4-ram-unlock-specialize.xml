@@ -3,7 +3,7 @@
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>1</Order>
-          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$s = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root 'Pi4Disable3GB.ps1' } | Where-Object { Test-Path $_ } | Select-Object -First 1; if (-not $s) { exit 1 }; &amp; $s"</Path>
+          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path $env:windir 'Temp\Pi4Disable3GB.log'; try { $c = @((Join-Path $env:windir 'Setup\Scripts\Pi4Disable3GB.ps1')) + (Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root 'Pi4Disable3GB.ps1' }); $s = $c | Where-Object { Test-Path $_ } | Select-Object -First 1; if ($s) { &amp; $s; Set-Content $log ('ran ' + $s) } else { Set-Content $log ('not found: ' + ($c -join ', ')) } } catch { Set-Content $log ('failed: ' + $_.Exception.Message) }; exit 0"</Path>
           <WillReboot>Always</WillReboot>
         </RunSynchronousCommand>
       </RunSynchronous>
