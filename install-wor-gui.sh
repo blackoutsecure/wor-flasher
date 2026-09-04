@@ -391,13 +391,13 @@ JXA
   printf '%s\n' "$result"
 }
 
-macos_show_announcement() { #Output: proceed or bvm.
+macos_show_announcement() { #Output: proceed or project partner.
   local announcement_choices announcement_choice
   announcement_choices=''
-  announcement_choice="$(macos_choose "$announcement_choices" 'Consider BVM for running Windows alongside Linux on Raspberry Pi. Learn more: https://github.com/Botspot/bvm' 'Proceed with WoR-Flasher' Cancel 'Check out BVM' 'Check out BVM' "$DIRECTORY/announcement.png" 'Proceed with WoR-Flasher' "$DIRECTORY/logo.png")" || return 1
+  announcement_choice="$(macos_choose "$announcement_choices" 'This fork is maintained in partnership with Botspot and Blackout Secure. It keeps the original upstream project visible while adding macOS support, safer verification, better native GUI behaviour and broader testing. Learn more: https://blackoutsecure.app' 'Proceed with WoR-Flasher' Cancel 'Open Blackout Secure' 'Open Blackout Secure' "$DIRECTORY/partnership.svg" 'Proceed with WoR-Flasher' "$DIRECTORY/logo.png")" || return 1
 
   case "$announcement_choice" in
-    'Proceed with WoR-Flasher' | 'Check out BVM') echo "$announcement_choice" ;;
+    'Proceed with WoR-Flasher' | 'Open Blackout Secure') echo "$announcement_choice" ;;
     *) return 1 ;;
   esac
 }
@@ -1182,8 +1182,8 @@ Full log: $saved_log"
 if is_macos ;then
   setup || exit 1
   announcement_choice="$(macos_show_announcement)" || exit 0
-  if [ "$announcement_choice" == 'Check out BVM' ];then
-    open_url 'https://github.com/Botspot/bvm'
+  if [ "$announcement_choice" == 'Open Blackout Secure' ];then
+    open_url 'https://blackoutsecure.app'
     exit 0
   fi
   macos_start_cli
@@ -1196,13 +1196,14 @@ setup || exit 1
 #this array stores flags that are used in all yad windows - saves on the typing and makes it easy to change an attribute on all dialogs from one place.
 yadflags=(--center --width=400 --height=250 --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" --separator='\n')
 
-#display BVM announcement
+#display partnership announcement
 yad "${yadflags[@]}" --buttons-layout=spread \
-    --image="$DIRECTORY/announcement.png" \
+    --image="$DIRECTORY/partnership.svg" \
+    --text=$'This fork is maintained in partnership with Botspot and Blackout Secure.\nIt keeps the original author visible while adding macOS support, safer verification, native GUI polish and a broader test suite.' \
     --button='<b>Proceed with WoR-Flasher</b>':1 \
-    --button='<b>Check out the BVM project</b>':0
+    --button='<b>Open Blackout Secure</b>':0
 if [ "$?" == 0 ];then
-  open_url 'https://github.com/Botspot/bvm'
+  open_url 'https://blackoutsecure.app'
   exit 0
 fi
 
@@ -1210,7 +1211,7 @@ fi
 if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
   output="$(yad "${yadflags[@]}" --height=0 --form --columns=2 \
     --image="$DIRECTORY/logo-full.png" \
-    --text=$'<big><b>Welcome to Windows on Raspberry!</b></big>\nThis wizard will help you easily install the full desktop version of Windows on your Raspberry Pi computer.' \
+    --text=$'<big><b>Welcome to WoR-Flasher</b></big>\nThis Blackout Secure fork keeps Botspot\'s upstream project visible while adding macOS support, safer image verification, native GUI polish and a broader maintenance/test pipeline for Raspberry Pi Windows installs.' \
     --field="Install":CB "Windows 11!Windows 10!More options" \
     --field="on a":CB "Pi5!Pi4/Pi400!Pi3/Pi2_v1.2" \
     --button='<b>Next</b>':0)"

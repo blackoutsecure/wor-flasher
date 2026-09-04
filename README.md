@@ -16,13 +16,13 @@
 
 Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi from Linux or macOS.
 
+> [!NOTE]
+> This project is maintained through a partnership between [Botspot](https://github.com/Botspot), the original author, and [Blackout Secure](https://blackoutsecure.app/). Blackout Secure is helping carry the maintenance work while keeping Botspot's authorship, project direction and upstream community connections visible. If a fix also applies to [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), please send it upstream too.
+
 WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and available drivers, writes the target drive, and verifies the finished result. It automates the manual process described in worproject's [How to install from other OSes](https://worproject.com/guides/how-to-install/from-other-os) guide.
 
 > [!WARNING]
 > Flashing erases the selected drive. Check the device carefully, keep the computer powered, and do not remove the drive until verification and ejection finish.
-
-> [!NOTE]
-> This project is maintained through a partnership between [Botspot](https://github.com/Botspot), the original author, and [Blackout Secure](https://blackoutsecure.app). Blackout Secure is helping carry the maintenance work while keeping Botspot's authorship, project direction and upstream community connections visible. If a fix also applies to [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), please send it upstream too.
 
 ---
 

@@ -205,9 +205,10 @@ static_checks() {
 
   grep -qF 'macos_start_cli()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'macos_show_announcement()' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'announcement.png' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'partnership.svg' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Proceed with WoR-Flasher' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'Check out BVM' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Open Blackout Secure' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Botspot and Blackout Secure' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const isMessageMode = choices.length === 0' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const imageView = $.NSImageView' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const iconPath = ObjC.unwrap(args.objectAtIndex(12))' "$REPO_DIR/install-wor-gui.sh" \
