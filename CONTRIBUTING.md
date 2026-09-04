@@ -114,7 +114,8 @@ Use the [issue templates][issues]. Include:
 
 - Host OS and version, and Raspberry Pi model.
 - The exact command or GUI choices you used.
-- `$DL_DIR/last-run.log` if the flash failed — the GUI keeps it there for exactly this.
+- `$DL_DIR/last-run.log` if the flash failed — the GUI keeps it there for exactly this. Set
+  `WOR_LOG_FILE` to put it somewhere else.
 - What you expected, and what happened instead.
 
 For real-time help, the [Botspot Software Discord][botspot-discord] is the best place

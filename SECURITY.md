@@ -52,7 +52,8 @@ whole disk. The interesting failure modes follow from that:
   credential keep-alive run while the user's timestamp is live.
 - **Command or argument injection** through a filename, drive label, environment
   variable or `config.txt` body that reaches a shell, `osascript`, or `yad`.
-- **Secrets in the logs.** Failures keep `$DL_DIR/last-run.log`; it must never contain a
+- **Secrets in the logs.** Failures keep a log at `$DL_DIR/last-run.log`, or wherever
+  `WOR_LOG_FILE` points; it must never contain a
   password.
 
 ## What we do not consider a vulnerability

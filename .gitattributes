@@ -3,8 +3,11 @@
 
 *.sh text eol=lf
 terminal-run text eol=lf
-config_txt_tips text eol=lf
 *.md text eol=lf
+
+# Stored with LF even though cmd.exe needs CRLF: install-wor.sh appends the CR when it
+# writes the file into boot.wim, and a CRLF copy here would produce CRCRLF
+*.cmd text eol=lf
 
 # Binary assets
 *.png binary

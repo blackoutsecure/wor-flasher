@@ -2,6 +2,9 @@
 cache/
 wget-log*
 
+# Run logs. WOR_LOG_FILE defaults under DL_DIR, but that can be pointed anywhere
+*.log
+
 # Working directory for tests/run-tests.sh: loopback disk images and downloads
 .test-workspace/
 

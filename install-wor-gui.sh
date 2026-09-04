@@ -78,8 +78,9 @@ installer_showed_own_error() { #Exit 0 if install-wor.sh already displayed its o
 }
 
 gui_save_failure_log() { #Output: where the installer log was kept. The dialog only shows a tail, and the GUI has no terminal to fall back on.
-  local saved_log="$DL_DIR/last-run.log"
-  mkdir -p "$DL_DIR" 2>/dev/null
+  local saved_log
+  saved_log="$(wor_log_file)"
+  mkdir -p "$(dirname "$saved_log")" 2>/dev/null
   mv "$output_log" "$saved_log" 2>/dev/null || saved_log="$output_log"
   echo "Installer log saved to $saved_log" 1>&2
   echo "$saved_log"

@@ -173,6 +173,7 @@ Every prompt has a matching environment variable.
 | `HIDE_EMPTY_DRIVES`         | `1`                   | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
 | `USE_CACHE`                 | `1`                   | See [Download cache](#download-cache)                                                       |
 | `DRY_RUN`                   | `0`                   | `1` runs every step except writing to the drive                                             |
+| `WOR_LOG_FILE`              | `$DL_DIR/last-run.log` | Where a failed run's log is kept                                                            |
 | `VERIFY_TLS`                | `1`                   | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                |
 | `NO_UPDATE`                 | `1`                   | `0` opts in to the self-updater. See [Updating](#updating)                                  |
 | `RUN_MODE`                  | `cli`                 | `gui` makes the engine show graphical error dialogs                                         |
@@ -284,7 +285,7 @@ Check what you are running with `./install-wor.sh --version`.
 
 ## Troubleshooting
 
-If a flash fails from the GUI, the full log is kept at `$DL_DIR/last-run.log` and the path is shown in the error dialog. Attach it to any bug report.
+If a flash fails from the GUI, the full log is kept at `$DL_DIR/last-run.log` — or wherever `WOR_LOG_FILE` points — and the path is shown in the error dialog. It is also listed on the confirmation screen before you start. Attach it to any bug report.
 
 <details>
 <summary><b>Rainbow screen</b></summary>

@@ -476,7 +476,7 @@ static_checks() {
     || fail "a credential is collected in more than one place, so the user is asked twice"
 
   #a failed flash must leave the log behind; the GUI has no terminal to fall back on
-  grep -qF 'saved_log="$DL_DIR/last-run.log"' "$REPO_DIR/install-wor-gui.sh" \
+  grep -qF 'saved_log="$(wor_log_file)"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Installer log saved to $saved_log' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(grep -cF 'saved_log="$(gui_save_failure_log)"' "$REPO_DIR/install-wor-gui.sh")" == 3 ] \
     && pass "a failed run keeps its installer log for diagnosis" \
@@ -635,14 +635,14 @@ shared_function_checks() {
 
   #the CLI banner and both GUI overviews must describe a run from one place, or they drift apart
   summary_labels="$(run_in_engine 'settings_summary | cut -f1 | tr "\n" ","')"
-  [ "$summary_labels" == 'WoR-Flasher version,Target drive,Target hardware,Operating system,Installation mode,Offline OOBE,Pi 4 RAM unlock,UEFI firmware,Windows ARM64 drivers,Custom config.txt,Hide empty drives,Verify written image,Downloaded files,Dry run,Download directory,' ] \
+  [ "$summary_labels" == 'WoR-Flasher version,Target drive,Target hardware,Operating system,Installation mode,Offline OOBE,Pi 4 RAM unlock,UEFI firmware,Windows ARM64 drivers,Custom config.txt,Hide empty drives,Verify written image,Downloaded files,Dry run,Download directory,Log file,' ] \
     && [ "$(run_in_engine 'settings_summary | awk -F"\t" "NF != 2" | wc -l | tr -d " "')" == 0 ] \
     && pass "settings_summary emits one tab-separated label/value pair per setting" \
     || fail "settings_summary is missing settings or emits malformed lines: $summary_labels"
 
   #every toggle the Advanced Options windows offer has to be visible on the confirmation screen
   [ "$(run_in_engine 'DRY_RUN=1 SKIP_IMAGE_VERIFICATION=1 USE_CACHE=2 APPLY_CUSTOM_CONFIG_TXT=0 UEFI_USE_LATEST=1 DRIVERS_USE_LATEST=0 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 HIDE_EMPTY_DRIVES=0 settings_summary | tail -n +2 | cut -f2 | tr "\n" "|"')" \
-       == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-us) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|" ] \
+       == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-us) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|/tmp/wor-test-dl/last-run.log|" ] \
     && pass "every Advanced Options toggle changes what the confirmation screens show" \
     || fail "a setting is not reflected in settings_summary"
 
@@ -880,6 +880,37 @@ rc=1" ] \
     && grep -qF 'unattend_xml > "$scripts_dir/unattend.xml"' "$REPO_DIR/install-wor.sh" \
     && pass "the media copies and the prefinalize copy of the answer file share one builder" \
     || fail "the answer file is built in more than one place"
+
+  #one variable decides where the log goes, and it is resolved on use: the Linux GUI can still
+  #change DL_DIR after this script has been sourced
+  [ "$(run_in_engine 'wor_log_file')" == '/tmp/wor-test-dl/last-run.log' ] \
+    && [ "$(run_in_engine 'WOR_LOG_FILE=/tmp/elsewhere.log; wor_log_file')" == '/tmp/elsewhere.log' ] \
+    && [ "$(run_in_engine 'DL_DIR=/tmp/moved-later; wor_log_file')" == '/tmp/moved-later/last-run.log' ] \
+    && [ "$(grep -cF 'last-run.log' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
+    && pass "one variable decides where the run log goes, resolved when it is needed" \
+    || fail "the log path is hardcoded, or does not follow DL_DIR and WOR_LOG_FILE"
+
+  #logs and caches are generated beside the scripts; none of it may ever be committed
+  if command -v git >/dev/null && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
+    tracked_junk="$(git -C "$REPO_DIR" ls-files | grep -E '(^|/)(cache/|wget-log|.*\.log$)' || true)"
+    unignored=''
+    for junk_path in cache/x wget-log some.log .test-workspace/x ;do
+      #-q takes a single pathname only, so ask about them one at a time
+      (cd "$REPO_DIR" && git check-ignore -q "$junk_path") || unignored="$unignored $junk_path"
+    done
+    [ -z "$tracked_junk" ] && [ -z "$unignored" ] \
+      && pass "generated logs and caches are ignored and none are tracked" \
+      || fail "generated files are tracked ($tracked_junk) or not ignored ($unignored)"
+  else
+    skip "git is unavailable; cannot check that generated files are ignored"
+  fi
+
+  #prefinalize.cmd is stored with LF and gains CRLF when written, so a CRLF copy here would give CRCRLF
+  ! grep -qU $'\r' "$REPO_DIR/config-templates/prefinalize.cmd" \
+    && grep -qF '*.cmd text eol=lf' "$REPO_DIR/.gitattributes" \
+    && ! grep -qF 'config_txt_tips' "$REPO_DIR/.gitattributes" \
+    && pass "the batch template is stored with LF, so the CR is added exactly once" \
+    || fail "the batch template has CRLF in the repo, or .gitattributes does not pin it"
 
   #a table of contents that points at a heading which no longer exists is worse than none
   broken_anchors=''

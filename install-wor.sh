@@ -1414,6 +1414,10 @@ describe_device() { #Input: device. Output: the path plus its size and model whe
   [ -n "$detail" ] && printf '%s (%s)\n' "$1" "$detail" || printf '%s\n' "$1"
 }
 
+wor_log_file() { #Output: where a failed run's log is kept. Resolved on use, since the Linux GUI can still change DL_DIR.
+  printf '%s\n' "${WOR_LOG_FILE:-$DL_DIR/last-run.log}"
+}
+
 settings_summary() { #Output: tab-separated "label<TAB>value" lines describing this run. One source of truth for the CLI banner and both GUI confirmation screens.
   printf 'WoR-Flasher version\t%s\n' "$WOR_FLASHER_VERSION"
   printf 'Target drive\t%s\n' "$(describe_device "$DEVICE")"
@@ -1431,6 +1435,7 @@ settings_summary() { #Output: tab-separated "label<TAB>value" lines describing t
   printf 'Downloaded files\t%s\n' "$(cache_mode_label "$USE_CACHE")"
   printf 'Dry run\t%s\n' "$([ "$DRY_RUN" == 1 ] && echo 'Yes (no changes will be written)' || echo 'No')"
   printf 'Download directory\t%s\n' "$DL_DIR"
+  printf 'Log file\t%s\n' "$(wor_log_file)"
   return 0
 }
 
@@ -1591,6 +1596,9 @@ Errors: $errors"
 
 #Determine the directory to download windows component files to
 [ -z "$DL_DIR" ] && DL_DIR="$HOME/wor-flasher-files"
+
+#Where a failed run's log is kept. Left unset so it follows DL_DIR even if the GUI changes that later;
+#set it to an absolute path to put the log somewhere else.
 
 #UEFI firmware selection.
 #Set UEFI_USE_LATEST=1 to query GitHub for the newest release instead of using the pinned versions below.
