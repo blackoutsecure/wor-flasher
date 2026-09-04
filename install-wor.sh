@@ -467,6 +467,22 @@ darwin_mount_iso() { #Input: ISO path. Sets ISO_MOUNTPOINT and ISO_DEVICE.
   ISO_DEVICE="$(plutil -convert json -o - - <<<"$details" | jq -er '."system-entities"[] | select(.["mount-point"] != null) | .["dev-entry"]' | head -n1)" || return 1
 }
 
+unattend_xml() { #Output: the answer file for this run, or nothing when neither customization is wanted.
+  local auto_disable_3gb=0
+  [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ] && auto_disable_3gb=1
+  [ "$OOBE_NETWORK_BYPASS" == 1 ] || [ "$auto_disable_3gb" == 1 ] || return 1
+
+  cat <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+EOF
+  [ "$auto_disable_3gb" == 1 ] && read_config_template pi4-ram-unlock-specialize.xml
+  [ "$OOBE_NETWORK_BYPASS" == 1 ] && read_config_template oobe-network-bypass.xml
+  cat <<'EOF'
+</unattend>
+EOF
+}
+
 install_windows_setup_configuration() { #Input: mounted boot partition, mounted installation partition.
   local auto_disable_3gb=0 destination
   [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ] && auto_disable_3gb=1
@@ -479,17 +495,7 @@ install_windows_setup_configuration() { #Input: mounted boot partition, mounted 
   fi
 
   for destination in "$1/Autounattend.xml" "$2/Autounattend.xml";do
-    {
-      cat <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
-EOF
-      [ "$auto_disable_3gb" == 1 ] && read_config_template pi4-ram-unlock-specialize.xml
-      [ "$OOBE_NETWORK_BYPASS" == 1 ] && read_config_template oobe-network-bypass.xml
-      cat <<'EOF'
-</unattend>
-EOF
-    } | sudo tee "$destination" >/dev/null
+    unattend_xml | sudo tee "$destination" >/dev/null
   done
 }
 
@@ -557,6 +563,7 @@ darwin_flash_device() {
   sudo cp -r "$PWD/peinstaller/efi" "$boot_mount" || error "Failed to copy EFI files to $boot_mount"
   echo "  - PE installer"
   configure_pe_settings_ini
+  configure_pe_prefinalize
   sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add peinstaller/winpe/2 /" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim"
 
   if [ "$RPI_MODEL" == 5 ];then
@@ -609,8 +616,15 @@ sha1_file() { #Input: file. Output: SHA1 hash
   fi
 }
 
+remark_pe_cache() { #Re-records the manifest after editing cached PE payload, or the next run treats the cache as corrupt and re-downloads.
+  local token
+  token="$(cat "$PWD/peinstaller/.wor-flasher-version" 2>/dev/null)"
+  [ -n "$token" ] && mark_cache "$PWD/peinstaller" "$token"
+  return 0
+}
+
 configure_pe_settings_ini() { #Sets HideEmptyDrives in the cached WoR-PE settings.ini before it's added to boot.wim.
-  local settings_ini="$PWD/peinstaller/winpe/2/settings.ini" tmp_ini token
+  local settings_ini="$PWD/peinstaller/winpe/2/settings.ini" tmp_ini
   [ -f "$settings_ini" ] || return 0
   tmp_ini="$(mktemp)" || return 1
   if grep -q '^HideEmptyDrives=' "$settings_ini";then
@@ -620,9 +634,28 @@ configure_pe_settings_ini() { #Sets HideEmptyDrives in the cached WoR-PE setting
     printf 'HideEmptyDrives=%s\n' "$HIDE_EMPTY_DRIVES" >> "$tmp_ini"
   fi
   mv "$tmp_ini" "$settings_ini"
-  #this edits cached payload, so re-record the manifest or the next run treats the cache as corrupt and re-downloads
-  token="$(cat "$PWD/peinstaller/.wor-flasher-version" 2>/dev/null)"
-  [ -n "$token" ] && mark_cache "$PWD/peinstaller" "$token"
+  remark_pe_cache
+  return 0
+}
+
+configure_pe_prefinalize() { #Stages the answer file and WoR-PE's prefinalize hook, which is what actually delivers it.
+  #WoR-PE applies install.wim with DISM instead of running Windows Setup's media flow, so nothing ever
+  #performs the implicit answer-file search that would find Autounattend.xml at the root of the media.
+  #Its documented prefinalize.cmd hook runs with the applied Windows partition still mounted, which is
+  #the only point where the answer file can be put somewhere the installed OS will read it.
+  local app_dir="$PWD/peinstaller/winpe/2" scripts_dir
+  [ -d "$app_dir" ] || return 0
+  scripts_dir="$app_dir/scripts"
+
+  #a stale hook left in the cache would keep applying settings the user has since turned off
+  rm -rf "$scripts_dir"
+  unattend_xml >/dev/null 2>&1 || { remark_pe_cache; return 0; }
+
+  mkdir -p "$scripts_dir" || return 1
+  unattend_xml > "$scripts_dir/unattend.xml" || return 1
+  #batch files are parsed by cmd.exe, which needs CRLF line endings
+  read_config_template prefinalize.cmd | sed 's/$/\r/' > "$scripts_dir/prefinalize.cmd" || return 1
+  remark_pe_cache
   return 0
 }
 
@@ -2439,6 +2472,7 @@ sudo cp -r "$PWD/peinstaller/efi" "$mntpnt"/bootpart || error "Failed to copy $P
 
 echo "  - PE installer"
 configure_pe_settings_ini
+configure_pe_prefinalize
 sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add peinstaller/winpe/2 /" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim"
 
 if [ "$RPI_MODEL" == 5 ];then

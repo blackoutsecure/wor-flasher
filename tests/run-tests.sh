@@ -833,6 +833,46 @@ rc=1" ] \
     && pass "the README credits the original author, this fork's maintainer and every upstream project" \
     || fail "the README is missing this attribution:$missing_attribution"
 
+  #WoR-PE applies install.wim with DISM rather than running Windows Setup's media flow, so nothing
+  #performs the implicit answer-file search and Autounattend.xml on the media root is never read.
+  #Windows then stops at "Let's connect you to a network". The documented prefinalize.cmd hook is
+  #the only point that can put the answer file where the installed OS looks for it.
+  pe_hook_dir="$(mktemp -d)"
+  mkdir -p "$pe_hook_dir/peinstaller/winpe/2"
+  printf 'stub\n' > "$pe_hook_dir/peinstaller/winpe/2/setup.exe"
+  pe_hook_out="$(cd "$pe_hook_dir" && env -u CONFIG_TXT NO_UPDATE=1 DIRECTORY="$REPO_DIR" bash -c '
+    source "$DIRECTORY/install-wor.sh" source >/dev/null 2>&1
+    RPI_MODEL=4; OOBE_NETWORK_BYPASS=1; PI4_AUTO_DISABLE_3GB=0
+    mark_cache "$PWD/peinstaller" token-v1
+    configure_pe_prefinalize
+    #the answer file has to reach the installed OS, and the hook must not invalidate the cache
+    grep -qF "<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>" peinstaller/winpe/2/scripts/unattend.xml && echo answer-staged
+    grep -qF "Windows\\Panther" peinstaller/winpe/2/scripts/prefinalize.cmd && echo targets-panther
+    grep -q "exit /b 0" peinstaller/winpe/2/scripts/prefinalize.cmd && echo always-exits-zero
+    grep -qU $'"'"'\r'"'"' peinstaller/winpe/2/scripts/prefinalize.cmd && echo crlf
+    cache_is_current "$PWD/peinstaller" token-v1 && echo cache-intact
+    #turning both customizations off must not leave a stale hook behind in the cache
+    OOBE_NETWORK_BYPASS=0; RPI_MODEL=5
+    configure_pe_prefinalize
+    [ -e peinstaller/winpe/2/scripts ] || echo stale-hook-removed
+  ')"
+  rm -rf "$pe_hook_dir"
+  for pe_hook_expected in answer-staged targets-panther always-exits-zero crlf cache-intact stale-hook-removed ;do
+    printf '%s\n' "$pe_hook_out" | grep -qx "$pe_hook_expected" || missing_pe_hook="$missing_pe_hook $pe_hook_expected"
+  done
+  [ -z "$missing_pe_hook" ] \
+    && [ "$(grep -cF 'configure_pe_prefinalize' "$REPO_DIR/install-wor.sh")" == 3 ] \
+    && pass "the offline-OOBE answer file is delivered through WoR-PE's prefinalize hook" \
+    || fail "the answer file would never be read, so Windows stops at the network screen:$missing_pe_hook"
+
+  #both the media copies and the hook copy have to come from one builder, or they can disagree
+  [ "$(run_in_engine 'OOBE_NETWORK_BYPASS=1; RPI_MODEL=5; unattend_xml | grep -c "HideWirelessSetupInOOBE"')" == 1 ] \
+    && [ "$(run_in_engine 'OOBE_NETWORK_BYPASS=0; PI4_AUTO_DISABLE_3GB=0; RPI_MODEL=5; unattend_xml >/dev/null 2>&1; echo $?')" == 1 ] \
+    && grep -qF 'unattend_xml | sudo tee "$destination"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'unattend_xml > "$scripts_dir/unattend.xml"' "$REPO_DIR/install-wor.sh" \
+    && pass "the media copies and the prefinalize copy of the answer file share one builder" \
+    || fail "the answer file is built in more than one place"
+
   #a table of contents that points at a heading which no longer exists is worse than none
   broken_anchors=''
   while read -r anchor ;do
