@@ -940,6 +940,20 @@ rc=1" ] \
     && pass "the Pi 4 RAM unlock reaches the installed OS and cannot fail Windows setup" \
     || fail "the RAM unlock is not delivered to the installed OS:$missing_ram_hook"
 
+  #the answer file is concatenated from fragments, and Windows silently ignores one that is not
+  #well-formed - so a bad escape or a missing newline between fragments would fail invisibly
+  if command -v python3 >/dev/null ;then
+    answer_passes="$(run_in_engine 'RPI_MODEL=4; PI4_AUTO_DISABLE_3GB=1; OOBE_NETWORK_BYPASS=1; unattend_xml' \
+      | python3 -c 'import sys,xml.dom.minidom
+d = xml.dom.minidom.parseString(sys.stdin.read())
+print(",".join(s.getAttribute("pass") for s in d.getElementsByTagName("settings")))' 2>/dev/null)"
+    [ "$answer_passes" == 'specialize,oobeSystem' ] \
+      && pass "the generated answer file is well-formed XML with both passes" \
+      || fail "the generated answer file is malformed or missing a pass: '$answer_passes'"
+  else
+    skip "python3 is unavailable; cannot check that the answer file is well-formed"
+  fi
+
   #a table of contents that points at a heading which no longer exists is worse than none
   broken_anchors=''
   while read -r anchor ;do
