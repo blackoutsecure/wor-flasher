@@ -46,11 +46,12 @@ kill_process_tree() { #Input: pid. Stops it and everything it started; most of t
   kill -TERM "$pid" 2>/dev/null || command sudo -n kill -TERM "$pid" 2>/dev/null
 }
 
-gui_start_installer() { #Starts install-wor.sh in the background. Sets error_marker, output_log, progress_file, done_marker and installer_pid.
+gui_start_installer() { #Starts install-wor.sh in the background and waits for it to authenticate. Sets error_marker, output_log, progress_file, done_marker, auth_marker and installer_pid.
   error_marker="$(mktemp)" || error "Failed to create a GUI error marker."
   output_log="$(mktemp)" || error "Failed to create an install log."
   progress_file="$(mktemp)" || error "Failed to create a progress file."
   done_marker="$(mktemp -u)"
+  auth_marker="$(mktemp -u)"
   #start with a clean marker; the installer creates it only if an error occurs
   rm -f "$error_marker"
 
@@ -58,10 +59,17 @@ gui_start_installer() { #Starts install-wor.sh in the background. Sets error_mar
   export_installer_settings
   export WOR_GUI_ERROR_MARKER="$error_marker"
   export WOR_GUI_PROGRESS_FILE="$progress_file"
+  export WOR_GUI_AUTH_MARKER="$auth_marker"
 
   #the job records its own status: a subshell cannot wait on a sibling, so waiting there returned 127 at once
   { "$cli_script" > "$output_log" 2>&1; echo $? > "$done_marker"; } &
   installer_pid=$!
+
+  #the installer asks for the password itself, and that dialog cannot render in front of a progress
+  #window, so do not open one until it has been answered. An early failure lands on the done marker.
+  while [ ! -e "$auth_marker" ] && [ ! -f "$done_marker" ] ;do
+    sleep 0.3
+  done
 }
 
 installer_showed_own_error() { #Exit 0 if install-wor.sh already displayed its own native error dialog.
@@ -679,7 +687,7 @@ JXA
 }
 
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation default_language device_choices device_capability device_choice done_marker abort_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log pi_choices progress_file progress_jxa saved_log step windows_choices
+  local completion_jxa confirm_summary confirmation default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log pi_choices progress_file progress_jxa saved_log step windows_choices
 
   windows_choices=$'Windows 11\nWindows 10'
   pi_choices=$'5\n4\n3'
@@ -1119,14 +1127,7 @@ JXA
 
   abort_marker="$(mktemp -u)"
 
-  #authenticate first: the progress window holds the front, and a password dialog cannot get past it
-  if [ "$DRY_RUN" != 1 ] && ! sudo -v ;then
-    error "Administrator authentication failed or was canceled. Enter the correct macOS password and try again."
-  fi
-
   gui_start_installer
-  #a flash can outlast the sudo timestamp, and by then no dialog could reach the front to renew it
-  ( while kill -0 "$installer_pid" 2>/dev/null ;do command sudo -n -v >/dev/null 2>&1; sleep 30; done ) &
 
   osascript -l JavaScript - "$progress_file" "$done_marker" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
 
@@ -1135,7 +1136,7 @@ JXA
     #most of the work runs under sudo, so the tree has to come down with the credential we already hold
     kill_process_tree "$installer_pid"
     wait "$installer_pid" 2>/dev/null
-    rm -f "$progress_file" "$done_marker" "$abort_marker" "$error_marker"
+    rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker" "$error_marker"
     saved_log="$(gui_save_failure_log)"
     osascript -l JavaScript - "Flashing was stopped before it finished.
 
@@ -1151,7 +1152,7 @@ Full log: $saved_log" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" <<<"$completion_jxa
 
   installer_status="$(cat "$done_marker" 2>/dev/null)"
   [ -z "$installer_status" ] && installer_status=1
-  rm -f "$progress_file" "$done_marker" "$abort_marker"
+  rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker"
 
   if [ "$installer_status" == 0 ];then
     rm -f "$output_log" "$error_marker"
@@ -1791,7 +1792,7 @@ exitcode="$(cat "$done_marker" 2>/dev/null)"
 
 kill "$tail_pid" "$yad_pid" 2>/dev/null
 wait "$tail_pid" "$yad_pid" 2>/dev/null
-rm -f "$progress_fifo" "$progress_file" "$done_marker"
+rm -f "$progress_fifo" "$progress_file" "$done_marker" "$auth_marker"
 
 #clear zram - avoid leaving files occupying space in /zram
 if [ "$DL_DIR" == /zram ];then

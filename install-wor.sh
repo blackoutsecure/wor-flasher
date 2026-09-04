@@ -503,8 +503,9 @@ darwin_flash_device() {
   is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
   local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device raw_part1 raw_part2 attempt
   sgdisk_bin="$(command -v sgdisk)" || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."
-  #the GUI already authenticated before opening its progress window; only ask again if that credential is gone
-  if ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1 ;then
+  #GUI mode authenticated at startup, while a dialog could still reach the front; prompting from here
+  #would put it behind the progress window, where it can never be answered
+  if ! command sudo -n -v >/dev/null 2>&1 && { [ "$RUN_MODE" == gui ] || ! sudo -v >/dev/null 2>&1; };then
     error "Administrator authentication failed or was canceled. Enter the correct macOS password and try again."
   fi
   raw_device="/dev/r${DEVICE#/dev/}"
@@ -1505,6 +1506,21 @@ export_installer_settings() { #Exports every collected setting, so the installer
   export "${WOR_INSTALLER_SETTINGS[@]}"
 }
 
+gui_preauthenticate() { #Collects the admin credential once, before the GUI covers the screen with its progress window.
+  #This has to happen in the process that will actually use sudo: a credential obtained in the GUI is
+  #recorded against that process's terminal, and the installer runs as a separate job.
+  if [ "$DRY_RUN" != 1 ];then
+    sudo -v || error "Administrator authentication failed or was canceled. Enter the correct macOS password and try again."
+    #a flash outlasts the sudo timestamp, and by then no dialog could reach the front to renew it
+    ( while kill -0 "$$" 2>/dev/null ;do command sudo -n -v >/dev/null 2>&1; sleep 30; done ) &
+  fi
+  #the front-end waits for this before opening its progress window
+  if [ -n "$WOR_GUI_AUTH_MARKER" ];then
+    touch "$WOR_GUI_AUTH_MARKER" 2>/dev/null
+    sync 2>/dev/null || true
+  fi
+}
+
 setup() { #run safety checks and install packages
   require_linux_host
 
@@ -1752,6 +1768,9 @@ ANSI_CYAN=$'\e[96m'
 ANSI_RESET=$'\e[0m'
 
 setup || exit 1
+
+#ask for the password while the screen is still clear; the GUI holds its progress window back until this returns
+[ "$RUN_MODE" == gui ] && gui_preauthenticate
 
 #Create folder to download everything to
 mkdir -p "$DL_DIR"

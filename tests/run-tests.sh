@@ -108,7 +108,7 @@ static_checks() {
     && pass "all temporary mounts use the shared cleanup handler" \
     || fail "a temporary mount bypasses the shared cleanup handler"
 
-  grep -qF 'if ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1 ;then' "$REPO_DIR/install-wor.sh" \
+  grep -qF 'if ! command sudo -n -v >/dev/null 2>&1 && { [ "$RUN_MODE" == gui ] || ! sudo -v >/dev/null 2>&1; };then' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Administrator authentication failed or was canceled.' "$REPO_DIR/install-wor.sh" \
     && pass "macOS checks administrator access before partitioning" \
     || fail "macOS does not check administrator access before partitioning"
@@ -309,6 +309,7 @@ static_checks() {
     && [ -f "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" ] \
     && [ -f "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" ] \
     && [ -f "$REPO_DIR/config-templates/oobe-network-bypass.xml" ] \
+    && [ -f "$REPO_DIR/config-templates/prefinalize.cmd" ] \
     && grep -qF 'read_config_template() {' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'sync_repo_template' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'raw.githubusercontent.com' "$REPO_DIR/install-wor.sh" \
@@ -317,7 +318,7 @@ static_checks() {
 
   #these must be committed: a fresh clone without them silently writes a blank config.txt and the Pi will not boot
   if command -v git >/dev/null && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
-    [ "$(git -C "$REPO_DIR" ls-files config-templates/ | wc -l | tr -d ' ')" == 6 ] \
+    [ "$(git -C "$REPO_DIR" ls-files config-templates/ | wc -l | tr -d ' ')" == 7 ] \
       && grep -qF 'This file ships with WoR-Flasher and is required to write a bootable drive.' "$REPO_DIR/install-wor.sh" \
       && pass "config-templates/ files are tracked by git and a missing one aborts instead of writing a blank config.txt" \
       || fail "config-templates/ files are untracked, or a missing template does not abort"
@@ -453,19 +454,26 @@ static_checks() {
     && pass "both GUIs record the installer exit status from the job itself, not a sibling wait" \
     || fail "a GUI still waits on a sibling process, so it reports completion immediately"
 
-  #the macOS password dialog cannot render in front of the progress window, so authenticate before it opens
-  macos_auth_line="$(grep -n 'if \[ "$DRY_RUN" != 1 \] && ! sudo -v ;then' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
-  macos_progress_line="$(grep -n '<<<"$progress_jxa"' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
-  [ -n "$macos_auth_line" ] && [ -n "$macos_progress_line" ] \
-    && [ "$macos_auth_line" -lt "$macos_progress_line" ] \
-    && grep -qF 'command sudo -n -v >/dev/null 2>&1; sleep 30' "$REPO_DIR/install-wor-gui.sh" \
-    && pass "macOS authenticates before the progress window and keeps the credential alive" \
-    || fail "macOS asks for the password behind the progress window, where it cannot be answered"
+  #the password dialog cannot render in front of the progress window, so the installer authenticates
+  #itself and the front-end holds the window back until it has. Asking in the GUI instead would ask
+  #twice: a credential is recorded against the terminal of the process that collected it, and the
+  #installer runs as a separate job.
+  gui_auth_wait_line="$(grep -n 'while \[ ! -e "\$auth_marker" \] && \[ ! -f "\$done_marker" \] ;do' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
+  macos_progress_line="$(grep -n '<<<"\$progress_jxa"' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
+  [ -n "$gui_auth_wait_line" ] && [ -n "$macos_progress_line" ] \
+    && [ "$gui_auth_wait_line" -lt "$macos_progress_line" ] \
+    && grep -qF 'export WOR_GUI_AUTH_MARKER="$auth_marker"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'gui_preauthenticate() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '[ "$RUN_MODE" == gui ] && gui_preauthenticate' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'command sudo -n -v >/dev/null 2>&1; sleep 30' "$REPO_DIR/install-wor.sh" \
+    && pass "the installer authenticates once, before the progress window opens, and keeps it alive" \
+    || fail "the password is asked for behind the progress window, or asked for twice"
 
-  #having authenticated once, the engine must not prompt a second time behind the progress window
-  grep -qF 'if ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1 ;then' "$REPO_DIR/install-wor.sh" \
-    && pass "the flash reuses the GUI credential instead of asking for the password twice" \
-    || fail "the engine re-prompts for a password the GUI already collected"
+  #exactly one place may prompt: the GUI collecting a credential of its own was the second dialog users saw
+  [ "$(grep -cE '(^|[^n]) *sudo -v' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
+    && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 1 ] \
+    && pass "the flash asks for the password once, in the process that uses it" \
+    || fail "a credential is collected in more than one place, so the user is asked twice"
 
   #a failed flash must leave the log behind; the GUI has no terminal to fall back on
   grep -qF 'saved_log="$DL_DIR/last-run.log"' "$REPO_DIR/install-wor-gui.sh" \
