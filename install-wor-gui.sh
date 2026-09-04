@@ -1132,6 +1132,9 @@ JXA
 
   osascript -l JavaScript - "$progress_file" "$done_marker" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
 
+  #Command-Q or a crashed/killed osascript can bypass the JXA abort handler. Never leave the flash unattended.
+  [ -f "$done_marker" ] || touch "$abort_marker"
+
   if [ -e "$abort_marker" ];then
     status "Aborting at your request"
     #most of the work runs under sudo, so the tree has to come down with the credential we already hold

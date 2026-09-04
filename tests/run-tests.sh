@@ -559,9 +559,10 @@ static_checks() {
   ! printf '%s' "$progress_block" | grep -qF '$.exit(0)' \
     && printf '%s' "$progress_block" | grep -qF 'if (confirmAbort()) app.stopModalWithCode($.NSCancelButton)' \
     && [ "$(grep -c '        \$.exit(0)' "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
+    && grep -qF '[ -f "$done_marker" ] || touch "$abort_marker"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'wait "$installer_pid" 2>/dev/null' "$REPO_DIR/install-wor-gui.sh" \
-    && pass "quitting mid-flash confirms first and the shell still collects the real exit status" \
-    || fail "quitting mid-flash reports a bogus failure or leaves the flash running"
+    && pass "quitting mid-flash confirms first and any unexpected window exit stops the installer" \
+    || fail "quitting mid-flash reports a bogus failure or leaves the installer running"
 
   #the completion dialog has an "Open Log" button that extracts the log path and opens it in the default editor
   completion_block="$(sed -n "/^  completion_jxa=\"\$(cat <<'JXA'\$/,/^JXA\$/p" "$REPO_DIR/install-wor-gui.sh")"
@@ -840,7 +841,8 @@ rc=1" ] \
     grep -qF "$attribution" "$REPO_DIR/README.md" || missing_attribution="$missing_attribution $attribution"
   done
   [ -z "$missing_attribution" ] \
-    && grep -qF 'github: [Botspot]' "$REPO_DIR/.github/FUNDING.yml" \
+    && grep -qF 'github: [Botspot, blackoutsecure]' "$REPO_DIR/.github/FUNDING.yml" \
+    && grep -qF 'https://github.com/sponsors/blackoutsecure' "$REPO_DIR/README.md" \
     && pass "the README credits the original author, this fork's maintainer and every upstream project" \
     || fail "the README is missing this attribution:$missing_attribution"
 
