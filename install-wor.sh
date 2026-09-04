@@ -10,6 +10,12 @@
 #
 #Version history
 #---------------
+#1.0.1 - Pi 4 UEFI pinned to v1.50, the only release where both the Ethernet MAC and microSD
+#          boot work. v1.51 (the previous pin) and v1.52 report a MAC of 00:00:00:00:00:00,
+#          leaving Windows on an APIPA address with no DHCP; v1.53 fixes that but still does
+#          not boot from microSD. See pftf/RPi4 issues 283 and 285.
+#        Pi 4 RAM unlock and the offline-OOBE answer file now reach the installed OS through
+#          WoR-PE's prefinalize hook; the media-root copies alone were never read.
 #1.0.0 - First versioned release of this fork.
 #        macOS host support: diskutil/hdiutil drive discovery, sgdisk GPT partitioning that keeps
 #          WOR_BOOT as partition 1 (an extra ESP made the Pi 4 fall back to PXE boot), and a native
@@ -35,7 +41,7 @@
 #        out of the drive list, and SHA-256 hashed ESD image handling.
 
 #Single source of truth for this fork's version. Reported by '--version'.
-WOR_FLASHER_VERSION='1.0.0'
+WOR_FLASHER_VERSION='1.0.1'
 
 #shared app title, used for window titles and dialog titles across this file and install-wor-gui.sh
 : "${WOR_APP_TITLE:=Windows on Raspberry}"
@@ -1624,7 +1630,10 @@ fi
 
 #Pinned versions. Used by default, or as a fallback when the GitHub API is unreachable.
 [ -z "$UEFI_VER_PI3" ] && UEFI_VER_PI3='v1.39'
-[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.51'
+#Pi 4 stays on v1.50: it is the only release where both the Ethernet MAC and microSD boot work.
+#v1.51 and v1.52 report a MAC of 00:00:00:00:00:00 (pftf/RPi4#283), leaving Windows on an APIPA
+#address with no DHCP. v1.53 fixed that but still will not boot from microSD, as do v1.52 (pftf/RPi4#285).
+[ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.50'
 [ -z "$UEFI_VER_PI5" ] && UEFI_VER_PI5='v0.3'
 
 #Windows driver package. The upstream project is archived, so v0.17 is the final release.

@@ -1,6 +1,6 @@
 # ![WoR-Flasher icon](logo.png) WoR-Flasher
 
-[![Version](https://img.shields.io/badge/version-1.0.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
+[![Version](https://img.shields.io/badge/version-1.0.1-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
 [![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=555555&logo=githubactions&logoColor=ffffff&color=0a7ea4&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
 [![License](https://img.shields.io/badge/license-GPL--3.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnu&logoColor=ffffff)](LICENSE)
 [![Platform](https://img.shields.io/badge/host-Linux%20%7C%20macOS-0a7ea4?style=for-the-badge&labelColor=555555&logo=linux&logoColor=ffffff)](#requirements)
@@ -306,9 +306,27 @@ On Pi 3 or Pi 4, use Windows 11 build `22631.2861` or another compatible `22631.
 <details>
 <summary><b>PXE boot, or no local boot option</b></summary>
 
-Reflash with the default pinned UEFI firmware and wait for `Written image verified successfully`. Pi 4 UEFI v1.52 has a known microSD boot regression, so WoR-Flasher pins v1.51.
+Reflash with the default pinned UEFI firmware and wait for `Written image verified successfully`. WoR-Flasher pins Pi 4 UEFI to v1.50, because v1.52 and v1.53 do not boot from microSD ([pftf/RPi4#285](https://github.com/pftf/RPi4/issues/285)). Avoid `UEFI_USE_LATEST=1` on a Pi 4 for the same reason.
 
 During first boot, Windows Setup creates Windows Boot Manager. If an installed system has lost that entry, open `Boot Maintenance Manager > Boot Options > Add Boot Option`, select `EFI\Microsoft\Boot\bootmgfw.efi`, and place it above the network boot entries.
+
+</details>
+
+<details>
+<summary><b>Ethernet does not work, and the MAC address is all zeros</b></summary>
+
+In Windows, `ipconfig /all` shows the Broadcom GENET adapter with a physical address of `00-00-00-00-00-00` and only an APIPA address (`169.254.x.x`). The driver is fine; the UEFI firmware never gave it a MAC.
+
+This affects Pi 4 UEFI **v1.51 and v1.52** ([pftf/RPi4#283](https://github.com/pftf/RPi4/issues/283)). WoR-Flasher now pins v1.50, which is unaffected, so reflashing with the default settings fixes it. Do not work around it with `UEFI_USE_LATEST=1`: v1.53 fixes the MAC but does not boot from microSD.
+
+To fix an existing installation without reflashing, either update the firmware on the boot partition using the [boot partition mount utility](https://worproject.com/downloads#boot-partition-mount-utility), or set a MAC by hand in `Device Manager` > the adapter > `Advanced` > `Network Address`.
+
+</details>
+
+<details>
+<summary><b>Several "Unknown device" entries in Device Manager</b></summary>
+
+Expected. No Windows drivers exist for some Pi hardware - the CYW43455 Wi-Fi, the camera interface, and VCHIQ among others. See the [driver status table](https://github.com/worproject/RPi-Windows-Drivers#status) for what is and is not supported. Wi-Fi in particular will not work; use Ethernet or a supported USB adapter.
 
 </details>
 
@@ -372,6 +390,9 @@ CI runs ShellCheck plus the suite on Ubuntu and macOS, and a one-model dry-run i
 
 Upstream has never published a git tag or a GitHub release, so this fork keeps its own version line. The same history is repeated at the top of [`install-wor.sh`](install-wor.sh).
 
+- **1.0.1**
+  - **Pi 4 UEFI pinned to v1.50**, the only release where both the Ethernet MAC and microSD boot work. v1.51 (the previous pin) and v1.52 report a MAC of `00:00:00:00:00:00`, leaving Windows with no DHCP ([pftf/RPi4#283](https://github.com/pftf/RPi4/issues/283)); v1.53 fixes that but still does not boot from microSD ([pftf/RPi4#285](https://github.com/pftf/RPi4/issues/285)).
+  - The Pi 4 RAM unlock and the offline-OOBE answer file now reach the installed OS through WoR-PE's prefinalize hook. The media-root copies alone were never read, because WoR-PE applies `install.wim` with DISM rather than running Windows Setup's media flow.
 - **1.0.0** — First versioned release of this fork.
   - **macOS host support**: `diskutil`/`hdiutil` drive discovery, and `sgdisk` GPT partitioning that keeps `WOR_BOOT` as partition 1. An extra ESP made the Pi 4 fall back to PXE boot.
   - **A native macOS interface**: AppKit/JXA wizard, progress window, Advanced Options window and error dialogs.
@@ -379,7 +400,7 @@ Upstream has never published a git tag or a GitHub release, so this fork keeps i
   - **Post-flash verification** of partitions, filesystems, boot files, WIM images and the copied `install.wim` checksum.
   - **Offline Windows OOBE** via a shipped `Autounattend.xml`, on by default.
   - **Automatic Pi 4 3 GB RAM unlock** after the WoR-PE reboot, including the BCD `truncatememory` cap.
-  - **Pinned, overridable UEFI firmware and driver versions.** Pi 4 stays on UEFI v1.51; v1.52 does not boot reliably from microSD.
+  - **Pinned, overridable UEFI firmware and driver versions.** Pi 4 stays on UEFI v1.50, the only release where both the Ethernet MAC and microSD boot work.
   - **Cache modes with SHA-256 payload manifests**, a free-space preflight, and `HideEmptyDrives` written into the cached WoR-PE `settings.ini`.
   - **Editable `config.txt` from `config-templates/`**, applied by the CLI and the GUI alike.
   - **One engine, two front-ends**: `install-wor-gui.sh` sources `install-wor.sh` and adds only windows. A function defined in both files now fails a test.

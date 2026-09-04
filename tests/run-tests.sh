@@ -262,10 +262,13 @@ static_checks() {
     && grep -qF 'set_default_config_txt' "$REPO_DIR/install-wor-gui.sh" \
     && pass "Pi 4 GUI config matches the current UEFI memory range" \
     || fail "Pi 4 GUI config uses stale device-tree addresses"
-  grep -qF "UEFI_VER_PI4='v1.51'" "$REPO_DIR/install-wor.sh" \
+  #v1.51/v1.52 report a zero MAC (pftf/RPi4#283); v1.52/v1.53 do not boot from microSD (pftf/RPi4#285)
+  grep -qF "UEFI_VER_PI4='v1.50'" "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF "UEFI_VER_PI4='v1.51'" "$REPO_DIR/install-wor.sh" \
     && ! grep -qF "UEFI_VER_PI4='v1.52'" "$REPO_DIR/install-wor.sh" \
-    && pass "Pi 4 avoids UEFI v1.52 microSD boot regression" \
-    || fail "Pi 4 uses UEFI v1.52, which does not boot reliably from microSD"
+    && ! grep -qF "UEFI_VER_PI4='v1.53'" "$REPO_DIR/install-wor.sh" \
+    && pass "Pi 4 pins the only UEFI release with a working MAC address and microSD boot" \
+    || fail "Pi 4 pins a UEFI release with a zero Ethernet MAC or a microSD boot regression"
 
   grep -qF '#Raspberry Pi 4 only; this setting is ignored for every other model.' "$REPO_DIR/install-wor.sh" \
     && grep -qF '[ -z "$PI4_AUTO_DISABLE_3GB" ] && PI4_AUTO_DISABLE_3GB=1' "$REPO_DIR/install-wor.sh" \
@@ -803,8 +806,8 @@ rc=1" ] \
     || fail "the version is missing, malformed, or not reported: '$version'"
 
   #the version history and the README must not describe different releases
-  grep -qF "#$version - First versioned release of this fork." "$REPO_DIR/install-wor.sh" \
-    && grep -qF "**$version** — First versioned release of this fork." "$REPO_DIR/README.md" \
+  grep -qE "^#$version - \S" "$REPO_DIR/install-wor.sh" \
+    && grep -qE "^- \*\*$version\*\*" "$REPO_DIR/README.md" \
     && grep -qF "version-$version-" "$REPO_DIR/README.md" \
     && pass "the version history in install-wor.sh, the README and the version badge all agree" \
     || fail "the version history or the README badge is out of step with WOR_FLASHER_VERSION"
