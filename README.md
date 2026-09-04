@@ -1,5 +1,7 @@
 # ![WoR-Flasher icon](logo.png) WoR-Flasher
 
+![Maintainer partnership banner](partnership.svg)
+
 [![Version](https://img.shields.io/badge/version-1.0.1-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
 [![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=555555&logo=githubactions&logoColor=ffffff&color=0a7ea4&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
 [![License](https://img.shields.io/badge/license-GPL--3.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnu&logoColor=ffffff)](LICENSE)
@@ -9,9 +11,10 @@
 [![Upstream](https://img.shields.io/github/stars/Botspot/wor-flasher?style=for-the-badge&labelColor=555555&logo=github&logoColor=ffffff&color=0a7ea4&label=upstream)](https://github.com/Botspot/wor-flasher)
 [![Discord](https://img.shields.io/badge/Discord-Botspot%20Software-5865F2?style=for-the-badge&labelColor=555555&logo=discord&logoColor=ffffff)](https://discord.gg/RXSTvaUvuu)
 [![Sponsor](https://img.shields.io/badge/sponsor-Botspot-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/Botspot)
+[![Sponsor](https://img.shields.io/badge/sponsor-Blackout%20Secure-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/blackoutsecure)
 [![Blackout Secure](https://img.shields.io/badge/maintained%20by-Blackout%20Secure-0a7ea4?style=for-the-badge&labelColor=555555&logo=shieldsdotio&logoColor=ffffff)](https://blackoutsecure.app)
 
-Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi, from Linux or macOS.
+Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi from Linux or macOS.
 
 WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and available drivers, writes the target drive, and verifies the finished result. It automates the manual process described in worproject's [How to install from other OSes](https://worproject.com/guides/how-to-install/from-other-os) guide.
 
@@ -19,7 +22,7 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
 > Flashing erases the selected drive. Check the device carefully, keep the computer powered, and do not remove the drive until verification and ejection finish.
 
 > [!NOTE]
-> This is the [Blackout Secure fork](https://github.com/blackoutsecure/wor-flasher) of [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher). It adds macOS host support, native progress windows, post-flash verification and a test suite. Upstream [is looking for a maintainer](https://github.com/Botspot/wor-flasher#-this-repository-is-looking-for-a-maintainer) — if a fix here also applies there, please send it upstream too.
+> This project is maintained through a partnership between [Botspot](https://github.com/Botspot), the original author, and [Blackout Secure](https://blackoutsecure.app). Blackout Secure is helping carry the maintenance work while keeping Botspot's authorship, project direction and upstream community connections visible. If a fix also applies to [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), please send it upstream too.
 
 ---
 
@@ -45,6 +48,8 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Support](#support)
+- [Maintainer partnership](#maintainer-partnership)
+- [What this fork adds](#what-this-fork-adds)
 - [Related resources](#related-resources)
 - [Versions](#versions)
 - [Contributing](#contributing)
@@ -376,6 +381,31 @@ CI runs ShellCheck plus the suite on Ubuntu and macOS, and a one-model dry-run i
 | [worproject.com contact](https://worproject.com/contact)                              | The WoR developers directly                      |
 | [Security policy](SECURITY.md)                                                        | Anything that should not be public               |
 
+## Maintainer partnership
+
+WoR-Flasher is a community project created by **[Botspot](https://github.com/Botspot)**. **[Blackout Secure](https://blackoutsecure.app)** is partnering with Botspot to help maintain this fork, improve its documentation and testing, and make the tool more useful for people working with Raspberry Pi, Windows on Raspberry and cross-platform development.
+
+Blackout Secure is a cybersecurity, secure application development, cloud and AI security consultancy. Its open-source work focuses on practical automation, privacy-conscious tooling and dependable developer workflows. Learn more at [blackoutsecure.app](https://blackoutsecure.app), browse the organization's projects at [github.com/blackoutsecure](https://github.com/blackoutsecure), or find Dr Bill McIlhargey through [Linktree](https://linktr.ee/billmcilhargey).
+
+This partnership is intended to strengthen the wider community around [Botspot's projects](https://github.com/Botspot), [Windows on Raspberry](https://worproject.com/) and the people who use them. It is not a replacement for upstream credit or governance: fixes that belong in the original project should continue to be proposed to [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher).
+
+## What this fork adds
+
+The upstream project remains the foundation. Compared with the original upstream script, this maintained fork adds:
+
+| Area                  | Added capability                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hosts                 | macOS support alongside Debian-based Linux, including `diskutil`, `hdiutil`, `sgdisk`, native password handling and safe external-drive detection                        |
+| Interfaces            | Native AppKit/JXA windows on macOS, `yad` progress on Linux, Advanced Options on both, and an explicit `install-wor.sh --gui` entry point                                |
+| Installer flow        | One shared `install-wor.sh` engine with the GUI as a presentation layer, so validation, settings, downloads and flashing do not drift between front-ends                 |
+| Progress and failures | File-backed progress reporting, real installer exit codes, abort handling, durable error markers and retained failure logs with a configurable `WOR_LOG_FILE` path       |
+| Safety                | Boot-drive protection, free-space preflight, cached-payload SHA-256 manifests, written-image verification and clearer cache modes                                        |
+| Windows setup         | Offline-OOBE support and the Pi 4 RAM-unlock action delivered to the installed OS through WoR-PE's `prefinalize.cmd` hook, rather than only copying files to media roots |
+| Firmware and drivers  | Tested Pi 4 UEFI pinning, including the v1.50 choice that avoids both the v1.51 zero-MAC bug and the v1.52/v1.53 microSD boot regression                                 |
+| Quality               | Cross-platform static checks, ShellCheck, loopback-drive integration tests, XML validation, mutation-tested anti-drift checks and macOS/Linux CI                         |
+
+These additions are maintained in cooperation with Botspot and are intended to flow upstream where they are useful to the original project.
+
 ## Related resources
 
 - [worproject.com](https://worproject.com/) — the upstream WoR-PE installer, UEFI firmware and drivers that WoR-Flasher assembles
@@ -424,7 +454,7 @@ The short version: if your fix also applies to [Botspot/wor-flasher](https://git
 | :------------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------: |
 | [<img src="https://avatars.githubusercontent.com/u/54716352?v=4" width="64"><br>Botspot](https://github.com/Botspot) | [<img src="https://avatars.githubusercontent.com/u/44128563?v=4" width="64"><br>NoozAbooz](https://github.com/NoozAbooz) | [<img src="https://avatars.githubusercontent.com/u/70802936?v=4" width="64"><br>Itai-Nelken](https://github.com/Itai-Nelken) | [<img src="https://avatars.githubusercontent.com/u/176234?v=4" width="64"><br>larskanis](https://github.com/larskanis) | [<img src="https://avatars.githubusercontent.com/u/2014596?v=4" width="64"><br>Marcinoo97](https://github.com/Marcinoo97) | [<img src="https://avatars.githubusercontent.com/u/71036629?v=4" width="64"><br>ryanfortner](https://github.com/ryanfortner) |
 
-**This fork** is maintained by **[Blackout Secure](https://blackoutsecure.app)** — **Dr Bill McIlhargey** ([links](https://linktr.ee/billmcilhargey)) — who contributed the macOS host support, the native progress and Advanced Options windows, post-flash verification, the shared-engine refactor and the test suite.
+**Maintainer partnership.** **[Blackout Secure](https://blackoutsecure.app)** — represented here by **Dr Bill McIlhargey** ([links](https://linktr.ee/billmcilhargey)) — is partnering with **[Botspot](https://github.com/Botspot)** to help maintain and improve this project. Blackout Secure's contributions include macOS host support, native progress and Advanced Options windows, post-flash verification, the shared-engine refactor, documentation, community health files and the expanded test suite.
 
 **Upstream projects** this tool assembles, each with its own authors and license:
 
