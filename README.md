@@ -14,10 +14,10 @@
 [![Sponsor](https://img.shields.io/badge/sponsor-Blackout%20Secure-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/blackoutsecure)
 [![Blackout Secure](https://img.shields.io/badge/maintained%20by-Blackout%20Secure-0a7ea4?style=for-the-badge&labelColor=555555&logo=shieldsdotio&logoColor=ffffff)](https://blackoutsecure.app)
 
-Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi from Linux or macOS.
-
 > [!NOTE]
-> This project is maintained through a partnership between [Botspot](https://github.com/Botspot), the original author, and [Blackout Secure](https://blackoutsecure.app/). Blackout Secure is helping carry the maintenance work while keeping Botspot's authorship, project direction and upstream community connections visible. If a fix also applies to [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), please send it upstream too.
+> Blackout Secure is proud to partner with [Botspot](https://github.com/Botspot) and the [Windows on R](https://worproject.com/) communities as part of this endeavour. Together, we are carrying the project forward while keeping Botspot's original authorship, project direction, and upstream community connections visible. If a fix also applies to the upstream project at [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), please consider sending it there as well.
+
+Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi from Linux or macOS.
 
 WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and available drivers, writes the target drive, and verifies the finished result. It automates the manual process described in worproject's [How to install from other OSes](https://worproject.com/guides/how-to-install/from-other-os) guide.
 
