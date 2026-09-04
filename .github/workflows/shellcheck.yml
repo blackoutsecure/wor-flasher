@@ -56,6 +56,11 @@ jobs:
       - name: Check syntax with the macOS system Bash
         run: /bin/bash -n install-wor.sh install-wor-gui.sh terminal-run tests/*.sh
 
+      # bash -n accepts a mis-parsed heredoc, so the suite must also run here to catch
+      # structural breakage in the macOS-only JXA code paths
+      - name: Run the test suite on macOS
+        run: ./tests/run-tests.sh
+
   dry-run-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 30

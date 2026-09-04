@@ -6,23 +6,25 @@
 #shared app title, used for window titles and dialog titles across this file and install-wor.sh
 : "${WOR_APP_TITLE:=Windows on Raspberry}"
 
-gui_error_dialog() { #Input: error message
-  local plain
-  plain="$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
-  if command -v osascript >/dev/null ;then
-    macos_choose '' "$plain" OK '' '' '' '' OK >/dev/null 2>&1
-  elif command -v yad >/dev/null ;then
-    yad --center --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" --text="$plain"
-  elif command -v zenity >/dev/null ;then
-    zenity --error --title "$(basename "$0")" --width 360 --text "$plain"
-  fi
-}
+export RUN_MODE=gui #this variable is detected by install-wor.sh to display gui error messages
 
-error() { #Input: error message
-  printf '\033[91m%b\033[39m\n' "$1"
-  gui_error_dialog "$1"
+#Determine the directory that contains this script
+[ -z "$DIRECTORY" ] && DIRECTORY="$(cd "$(dirname "$0")" && pwd -P)"
+
+#This script and cli-based install-wor.sh must be in the same directory. Source it before anything else
+#so every shared behaviour - error dialogs, status output, drive detection, the settings summary - comes
+#from the installer itself and can never drift out of step with what actually gets flashed.
+#Nothing above this point may call a shared function, so failures here are reported by hand.
+cli_script="$DIRECTORY/install-wor.sh"
+if [ ! -d "$DIRECTORY" ] || [ ! -f "$cli_script" ];then
+  printf '\033[91m%b\033[0m\n' "No script found named install-wor.sh\nBoth scripts must be in the same directory." 1>&2
   exit 1
-}
+fi
+#shellcheck disable=SC1090
+source "$cli_script" source #by sourcing, this script checks for and applies updates.
+
+echo "DIRECTORY: $DIRECTORY"
+echo "DL_DIR: $DL_DIR"
 
 open_url() { #Input: url
   if command -v x-www-browser >/dev/null ;then
@@ -34,6 +36,49 @@ open_url() { #Input: url
   else
     error "Failed to locate a browser opener for $1"
   fi
+}
+
+kill_process_tree() { #Input: pid. Stops it and everything it started; most of the flash runs under sudo.
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null) ;do
+    kill_process_tree "$child"
+  done
+  kill -TERM "$pid" 2>/dev/null || command sudo -n kill -TERM "$pid" 2>/dev/null
+}
+
+gui_start_installer() { #Starts install-wor.sh in the background. Sets error_marker, output_log, progress_file, done_marker and installer_pid.
+  error_marker="$(mktemp)" || error "Failed to create a GUI error marker."
+  output_log="$(mktemp)" || error "Failed to create an install log."
+  progress_file="$(mktemp)" || error "Failed to create a progress file."
+  done_marker="$(mktemp -u)"
+  #start with a clean marker; the installer creates it only if an error occurs
+  rm -f "$error_marker"
+
+  #No separate terminal is spawned, so the installer inherits this process's exported environment directly.
+  export_installer_settings
+  export WOR_GUI_ERROR_MARKER="$error_marker"
+  export WOR_GUI_PROGRESS_FILE="$progress_file"
+
+  #the job records its own status: a subshell cannot wait on a sibling, so waiting there returned 127 at once
+  { "$cli_script" > "$output_log" 2>&1; echo $? > "$done_marker"; } &
+  installer_pid=$!
+}
+
+installer_showed_own_error() { #Exit 0 if install-wor.sh already displayed its own native error dialog.
+  #the marker has to exist and be non-empty: an empty file means the write never actually landed
+  [ -e "$error_marker" ] && [ -s "$error_marker" ]
+}
+
+gui_save_failure_log() { #Output: where the installer log was kept. The dialog only shows a tail, and the GUI has no terminal to fall back on.
+  local saved_log="$DL_DIR/last-run.log"
+  mkdir -p "$DL_DIR" 2>/dev/null
+  mv "$output_log" "$saved_log" 2>/dev/null || saved_log="$output_log"
+  echo "Installer log saved to $saved_log" 1>&2
+  echo "$saved_log"
+}
+
+gui_log_tail() { #Input: log path. Output: the last lines, with terminal escapes and carriage returns removed.
+  sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g' "$1" | tail -n 18
 }
 
 loading_dialog() { #display a dialog to say something is loading
@@ -162,11 +207,41 @@ const Controller = ObjC.registerSubclass({
         pasteboard.setStringForType($(url), $.NSPasteboardTypeString)
         $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($(url)))
       }
+    },
+    //right-click Quit from the Dock/app-switcher sends terminate: to NSApp; since this window is
+    //hosted by osascript rather than a full NSApplicationMain run loop, that does not otherwise exit the process
+    'handleQuitEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        $.exit(0)
+      }
+    },
+    'pumpEvents:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.dateWithTimeIntervalSinceNow(0.01))
+      }
+    },
+    //clicking the Dock icon sends aevt/rapp; without a handler a minimised window can never come back
+    'handleReopenEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        if (window.isMiniaturized) window.deminiaturize(null)
+        window.makeKeyAndOrderFront(null)
+        app.activateIgnoringOtherApps(true)
+      }
+    },
+    'applicationShouldTerminate:': {
+      types: ['NSUInteger', ['id']],
+      implementation: function() {
+        $.exit(0)
+      }
     }
   }
 })
 
 const controller = $.WorChooserController.alloc.init
+app.setDelegate(controller)
 const width = 760
 const height = 500
 const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskResizable
@@ -285,6 +360,11 @@ if (!isMessageMode) {
 window.makeKeyAndOrderFront(null)
 if (!app.isActive) app.requestUserAttention($.NSInformationalRequest)
 app.activateIgnoringOtherApps(true)
+//the Dock Quit item sends an aevt/quit Apple Event that a modal session would otherwise never see
+$.NSAppleEventManager.sharedAppleEventManager.setEventHandlerAndSelectorForEventClassAndEventID(controller, 'handleQuitEvent:withReplyEvent:', 0x61657674, 0x71756974)
+$.NSAppleEventManager.sharedAppleEventManager.setEventHandlerAndSelectorForEventClassAndEventID(controller, 'handleReopenEvent:withReplyEvent:', 0x61657674, 0x72617070)
+const pumpTimer = $.NSTimer.timerWithTimeIntervalTargetSelectorUserInfoRepeats(0.25, controller, 'pumpEvents:', $(), true)
+$.NSRunLoop.currentRunLoop.addTimerForMode(pumpTimer, $.NSModalPanelRunLoopMode)
 app.runModalForWindow(window)
 
 if (selectedValue === null) {
@@ -323,32 +403,283 @@ macos_choose_device() { #Input: newline-separated detected volume rows. Output: 
   fi
 }
 
-macos_set_default_config_txt() {
-  if [ -z "$CONFIG_TXT" ] && [ "$RPI_MODEL" == 4 ];then
-    CONFIG_TXT="
-
-# don't change anything below this point #
-arm_64bit=1
-arm_boost=1
-enable_uart=1
-uart_2ndstage=1
-enable_gic=1
-armstub=RPI_EFI.fd
-disable_commandline_tags=1
-disable_overscan=1
-hdmi_drive=2
-hdmi_group=2
-hdmi_mode=87
-hdmi_cvt=1920 1200 60 6 0 0 0
-device_tree_address=0x3e0000
-device_tree_end=0x400000
-dtoverlay=miniuart-bt
-dtoverlay=upstream-pi4"
+macos_advanced_options() { #Reads/updates OOBE_NETWORK_BYPASS, PI4_AUTO_DISABLE_3GB, UEFI_USE_LATEST, DRIVERS_USE_LATEST, SKIP_IMAGE_VERIFICATION, DRY_RUN, APPLY_CUSTOM_CONFIG_TXT, USE_CACHE, CONFIG_TXT.
+  local advanced_jxa checkbox_spec result status line i uefi_pinned pi4_applicable pi4_label config_scope
+  uefi_pinned="$(uefi_pinned_version)"
+  #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4, so don't offer it as a live choice elsewhere
+  [ "$RPI_MODEL" == 4 ] && pi4_applicable=1 || pi4_applicable=0
+  if [ "$pi4_applicable" == 1 ];then
+    pi4_label='Automatically disable the Pi 4 3 GB RAM limit after install'
+  else
+    pi4_label="Automatically disable the Pi 4 3 GB RAM limit after install (not applicable to the Pi $RPI_MODEL)"
   fi
+  #in recovery mode this config.txt boots the installer media; WoR-PE writes the target drive's own copy
+  [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && config_scope='applied to the boot partition' || config_scope='applied to the recovery media, not the installed Windows drive'
+  checkbox_spec="Allow Windows setup to continue without a network connection	$OOBE_NETWORK_BYPASS	1
+$pi4_label	$([ "$pi4_applicable" == 1 ] && echo "$PI4_AUTO_DISABLE_3GB" || echo 0)	$pi4_applicable
+Use the latest UEFI firmware instead of the tested pinned version ($uefi_pinned)	$UEFI_USE_LATEST	1
+Use the latest Windows ARM64 drivers instead of the pinned version ($DRIVER_VER)	$DRIVERS_USE_LATEST	1
+Skip verifying the written image after flashing (not recommended)	$SKIP_IMAGE_VERIFICATION	1
+Skip flashing the device (dry run)	$DRY_RUN	1"
+
+  advanced_jxa="$(cat <<'JXA'
+ObjC.import('AppKit')
+ObjC.import('Foundation')
+ObjC.import('stdlib')
+const args = $.NSProcessInfo.processInfo.arguments
+const checkboxSpec = ObjC.unwrap(args.objectAtIndex(4))
+const configTxtDefault = ObjC.unwrap(args.objectAtIndex(5))
+const applyConfigDefault = ObjC.unwrap(args.objectAtIndex(6))
+const iconPath = ObjC.unwrap(args.objectAtIndex(7))
+const appTitle = ObjC.unwrap(args.objectAtIndex(8))
+const configScope = ObjC.unwrap(args.objectAtIndex(9))
+const cacheModeDefault = ObjC.unwrap(args.objectAtIndex(10))
+
+const rows = checkboxSpec.split('\n').map(function(line) {
+  const parts = line.split('\t')
+  return { label: parts[0], checked: parts[1] === '1', enabled: parts[2] !== '0' }
+})
+
+const app = $.NSApplication.sharedApplication
+$.NSProcessInfo.processInfo.processName = appTitle
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+if (iconPath.length > 0) {
+  app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
+}
+
+//without a menu bar, Cmd+C/V/X/A have no Edit menu item to route to and just beep
+const mainMenu = $.NSMenu.alloc.init
+const editMenuItem = $.NSMenuItem.alloc.init
+mainMenu.addItem(editMenuItem)
+const editMenu = $.NSMenu.alloc.initWithTitle('Edit')
+editMenuItem.submenu = editMenu
+editMenu.addItemWithTitleActionKeyEquivalent('Cut', 'cut:', 'x')
+editMenu.addItemWithTitleActionKeyEquivalent('Copy', 'copy:', 'c')
+editMenu.addItemWithTitleActionKeyEquivalent('Paste', 'paste:', 'v')
+editMenu.addItemWithTitleActionKeyEquivalent('Select All', 'selectAll:', 'a')
+app.mainMenu = mainMenu
+
+let window, textView, scrollView, applyConfigCheckbox, cachePopup
+let checkboxes = []
+let confirmed = false
+
+function updateConfigEditableState() {
+  const enabled = applyConfigCheckbox.state == 1
+  textView.editable = enabled
+  scrollView.alphaValue = enabled ? 1.0 : 0.5
+}
+
+const Controller = ObjC.registerSubclass({
+  name: 'WorAdvancedController',
+  superclass: 'NSObject',
+  methods: {
+    'okClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        confirmed = true
+        app.stopModalWithCode($.NSOKButton)
+        window.orderOut(null)
+      }
+    },
+    'cancelClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        confirmed = false
+        app.stopModalWithCode($.NSCancelButton)
+        window.orderOut(null)
+      }
+    },
+    'applyConfigToggled:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        updateConfigEditableState()
+      }
+    },
+    'windowWillClose:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        confirmed = false
+        app.stopModalWithCode($.NSCancelButton)
+      }
+    },
+    //right-click Quit from the Dock/app-switcher sends terminate: to NSApp; since this window is
+    //hosted by osascript rather than a full NSApplicationMain run loop, that does not otherwise exit the process
+    'handleQuitEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        $.exit(0)
+      }
+    },
+    'pumpEvents:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.dateWithTimeIntervalSinceNow(0.01))
+      }
+    },
+    //clicking the Dock icon sends aevt/rapp; without a handler a minimised window can never come back
+    'handleReopenEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        if (window.isMiniaturized) window.deminiaturize(null)
+        window.makeKeyAndOrderFront(null)
+        app.activateIgnoringOtherApps(true)
+      }
+    },
+    'applicationShouldTerminate:': {
+      types: ['NSUInteger', ['id']],
+      implementation: function() {
+        $.exit(0)
+      }
+    }
+  }
+})
+const controller = $.WorAdvancedController.alloc.init
+app.setDelegate(controller)
+
+const width = 640
+const rowHeight = 26
+const height = (rows.length + 1) * rowHeight + 20 + 220 + 140 + rowHeight + 8
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskResizable
+window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
+window.title = 'Advanced Options'
+window.minSize = $.NSMakeSize(520, 420)
+window.setDelegate(controller)
+window.center
+
+const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
+content.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
+window.contentView = content
+
+let y = height - 40
+for (let i = 0; i < rows.length; i++) {
+  const checkbox = $.NSButton.checkboxWithTitleTargetAction(rows[i].label, undefined, undefined)
+  checkbox.frame = $.NSMakeRect(20, y, width - 40, 20)
+  checkbox.state = rows[i].checked ? 1 : 0
+  checkbox.enabled = rows[i].enabled
+  checkbox.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+  content.addSubview(checkbox)
+  checkboxes.push(checkbox)
+  y -= rowHeight
+}
+
+applyConfigCheckbox = $.NSButton.checkboxWithTitleTargetAction('Apply the customized config.txt below (unchecked uses the firmware\u2019s default config.txt)', controller, 'applyConfigToggled:')
+applyConfigCheckbox.frame = $.NSMakeRect(20, y, width - 40, 20)
+applyConfigCheckbox.state = applyConfigDefault === '1' ? 1 : 0
+applyConfigCheckbox.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+content.addSubview(applyConfigCheckbox)
+y -= rowHeight
+
+//USE_CACHE has three values, so it needs a menu rather than a checkbox
+const cacheLabel = $.NSTextField.labelWithString('Downloaded files:')
+cacheLabel.font = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightMedium)
+cacheLabel.frame = $.NSMakeRect(20, y - 2, 120, 20)
+cacheLabel.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
+content.addSubview(cacheLabel)
+cachePopup = $.NSPopUpButton.alloc.initWithFramePullsDown($.NSMakeRect(146, y - 6, width - 166, 26), false)
+cachePopup.addItemWithTitle('Re-download everything, ignoring the cache')
+cachePopup.addItemWithTitle('Reuse cached files when they still match (recommended)')
+cachePopup.addItemWithTitle('Trust the cache without checking it')
+cachePopup.selectItemAtIndex(cacheModeDefault === '0' ? 0 : (cacheModeDefault === '2' ? 2 : 1))
+cachePopup.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+content.addSubview(cachePopup)
+y -= rowHeight + 8
+
+const configLabel = $.NSTextField.labelWithString('config.txt (' + configScope + '):')
+configLabel.font = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightMedium)
+configLabel.frame = $.NSMakeRect(20, y - 4, width - 40, 20)
+configLabel.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+content.addSubview(configLabel)
+y -= rowHeight
+
+scrollView = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(20, 60, width - 40, y - 60))
+scrollView.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
+scrollView.wantsLayer = true
+scrollView.borderType = $.NSBezelBorder
+scrollView.hasVerticalScroller = true
+textView = $.NSTextView.alloc.initWithFrame(scrollView.bounds)
+textView.font = $.NSFont.userFixedPitchFontOfSize(12)
+textView.string = $(configTxtDefault)
+textView.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
+scrollView.documentView = textView
+content.addSubview(scrollView)
+updateConfigEditableState()
+
+const okButton = $.NSButton.buttonWithTitleTargetAction('OK', controller, 'okClicked:')
+okButton.bezelStyle = $.NSBezelStyleRounded
+okButton.keyEquivalent = '\r'
+okButton.sizeToFit
+const okWidth = Math.max(96, okButton.frame.size.width)
+okButton.frame = $.NSMakeRect(width - 20 - okWidth, 20, okWidth, 32)
+okButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxYMargin
+content.addSubview(okButton)
+
+const cancelButton = $.NSButton.buttonWithTitleTargetAction('Back', controller, 'cancelClicked:')
+cancelButton.bezelStyle = $.NSBezelStyleRounded
+cancelButton.keyEquivalent = '\u001b'
+cancelButton.sizeToFit
+const cancelWidth = Math.max(96, cancelButton.frame.size.width)
+cancelButton.frame = $.NSMakeRect(width - 20 - okWidth - 8 - cancelWidth, 20, cancelWidth, 32)
+cancelButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxYMargin
+content.addSubview(cancelButton)
+
+window.makeKeyAndOrderFront(null)
+if (!app.isActive) app.requestUserAttention($.NSInformationalRequest)
+app.activateIgnoringOtherApps(true)
+//the Dock Quit item sends an aevt/quit Apple Event that a modal session would otherwise never see
+$.NSAppleEventManager.sharedAppleEventManager.setEventHandlerAndSelectorForEventClassAndEventID(controller, 'handleQuitEvent:withReplyEvent:', 0x61657674, 0x71756974)
+$.NSAppleEventManager.sharedAppleEventManager.setEventHandlerAndSelectorForEventClassAndEventID(controller, 'handleReopenEvent:withReplyEvent:', 0x61657674, 0x72617070)
+const pumpTimer = $.NSTimer.timerWithTimeIntervalTargetSelectorUserInfoRepeats(0.25, controller, 'pumpEvents:', $(), true)
+$.NSRunLoop.currentRunLoop.addTimerForMode(pumpTimer, $.NSModalPanelRunLoopMode)
+app.runModalForWindow(window)
+
+function writeResult(lines) {
+  const data = $(lines.join('\n') + '\n').dataUsingEncoding($.NSUTF8StringEncoding)
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(data)
+}
+
+if (!confirmed) {
+  writeResult(['CANCEL'])
+  app.terminate(null)
+}
+
+const out = ['OK']
+for (let i = 0; i < checkboxes.length; i++) {
+  out.push(checkboxes[i].state == 1 ? '1' : '0')
+}
+out.push(applyConfigCheckbox.state == 1 ? '1' : '0')
+out.push(String(cachePopup.indexOfSelectedItem))
+out.push('---CONFIG_TXT---')
+out.push(ObjC.unwrap(textView.string))
+writeResult(out)
+app.terminate(null)
+JXA
+)"
+
+  result="$(osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" <<<"$advanced_jxa" 2>/dev/null)"
+  status="$(printf '%s\n' "$result" | sed -n '1p')"
+  [ "$status" == OK ] || return 1
+
+  i=0
+  while IFS= read -r line;do
+    i=$((i+1))
+    case "$i" in
+      1) OOBE_NETWORK_BYPASS="$line" ;;
+      2) [ "$pi4_applicable" == 1 ] && PI4_AUTO_DISABLE_3GB="$line" ;;
+      3) UEFI_USE_LATEST="$line" ;;
+      4) DRIVERS_USE_LATEST="$line" ;;
+      5) SKIP_IMAGE_VERIFICATION="$line" ;;
+      6) DRY_RUN="$line" ;;
+      7) APPLY_CUSTOM_CONFIG_TXT="$line" ;;
+      #the popup reports its index, which lines up with USE_CACHE's 0/1/2
+      8) [ "$line" == 0 ] || [ "$line" == 1 ] || [ "$line" == 2 ] && USE_CACHE="$line" ;;
+    esac
+  done < <(printf '%s\n' "$result" | sed -n '2,9p')
+
+  CONFIG_TXT="$(printf '%s\n' "$result" | sed -n '/^---CONFIG_TXT---$/,$p' | tail -n +2)"
 }
 
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation default_language device_choices device_capability device_choice error_marker install_mode language_choices mode_choices mode_label output_log pi_choices step terminal_env terminal_launch_command terminal_runner windows_choices
+  local completion_jxa confirm_summary confirmation default_language device_choices device_capability device_choice done_marker abort_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log pi_choices progress_file progress_jxa saved_log step windows_choices
 
   windows_choices=$'Windows 11\nWindows 10'
   pi_choices=$'5\n4\n3'
@@ -364,11 +695,11 @@ macos_start_cli() {
         list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
         [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
         [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
-        macos_set_default_config_txt
+        set_default_config_txt
         step=language
         ;;
       language)
-        language_choices="$(list_langs | cut -d: -f1)"
+        language_choices="$(list_langs_preferred | cut -d: -f1)"
         default_language="$(default_win_lang)"
         WIN_LANG="$(macos_choose "$language_choices" "Choose Windows language (default: $default_language)" "$default_language" Back)" || { step=pi; continue; }
         step=device
@@ -394,15 +725,17 @@ macos_start_cli() {
         step=confirm
         ;;
       confirm)
-        [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && mode_label='Install Windows onto this drive' || mode_label='Recovery drive'
-        confirm_summary="Target drive: $DEVICE
-Raspberry Pi: $RPI_MODEL
-Windows build: $BID ($WIN_LANG)
-Mode: $mode_label
+        confirm_summary="$(settings_summary_plain)
 
-All data on the target drive will be erased."
-        confirmation="$(macos_choose '' "$confirm_summary" Flash Back Cancel Cancel '' Flash "$DIRECTORY/logo.png" "$WOR_APP_TITLE" Back)" || confirmation=Cancel
+All data on the target drive will be erased.
+
+To continue, click Flash. To review or change these settings, click Advanced. To cancel, click Back or close this window."
+        confirmation="$(macos_choose '' "$confirm_summary" Flash Back 'Advanced...' Advanced '' Flash "$DIRECTORY/logo.png" "$WOR_APP_TITLE" Back)" || confirmation=Cancel
         [ "$confirmation" == Cancel ] && exit 0
+        if [ "$confirmation" == Advanced ];then
+          macos_advanced_options
+          continue
+        fi
         [ "$confirmation" == Flash ] && break
         step=mode
         ;;
@@ -411,6 +744,7 @@ All data on the target drive will be erased."
 
   completion_jxa="$(cat <<'JXA'
 ObjC.import('AppKit')
+ObjC.import('stdlib')
 const args = $.NSProcessInfo.processInfo.arguments
 const message = ObjC.unwrap(args.objectAtIndex(4))
 const iconPath = ObjC.unwrap(args.objectAtIndex(5))
@@ -428,6 +762,24 @@ const Controller = ObjC.registerSubclass({
   name: 'WorCompletionController',
   superclass: 'NSObject',
   methods: {
+    'openLogClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        if (logPath.length > 0) {
+          $.NSWorkspace.sharedWorkspace.openFileWithApplication($(logPath), $())
+        }
+      }
+    },
+    'copyLogClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        if (logPath.length > 0) {
+          const pb = $.NSPasteboard.generalPasteboard
+          pb.clearContents
+          pb.setStringForType($(logPath), $.NSPasteboardTypeString)
+        }
+      }
+    },
     'okClicked:': {
       types: ['void', ['id']],
       implementation: function() {
@@ -440,13 +792,43 @@ const Controller = ObjC.registerSubclass({
       implementation: function() {
         app.stopModalWithCode($.NSOKButton)
       }
+    },
+    //right-click Quit from the Dock/app-switcher sends terminate: to NSApp; since this window is
+    //hosted by osascript rather than a full NSApplicationMain run loop, that does not otherwise exit the process
+    'handleQuitEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        $.exit(0)
+      }
+    },
+    'pumpEvents:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.dateWithTimeIntervalSinceNow(0.01))
+      }
+    },
+    //clicking the Dock icon sends aevt/rapp; without a handler a minimised window can never come back
+    'handleReopenEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        if (window.isMiniaturized) window.deminiaturize(null)
+        window.makeKeyAndOrderFront(null)
+        app.activateIgnoringOtherApps(true)
+      }
+    },
+    'applicationShouldTerminate:': {
+      types: ['NSUInteger', ['id']],
+      implementation: function() {
+        $.exit(0)
+      }
     }
   }
 })
 const controller = $.WorCompletionController.alloc.init
+app.setDelegate(controller)
 
-const width = 560
-const height = 220
+const width = 600
+const height = 240
 const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable
 window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
 window.title = appTitle
@@ -464,96 +846,335 @@ label.cell.setWraps(true)
 label.cell.setScrollable(false)
 content.addSubview(label)
 
-const okButton = $.NSButton.buttonWithTitleTargetAction('OK', controller, 'okClicked:')
-okButton.bezelStyle = $.NSBezelStyleRounded
-okButton.keyEquivalent = '\r'
-okButton.sizeToFit
-const okWidth = Math.max(96, okButton.frame.size.width)
-okButton.frame = $.NSMakeRect(width - 20 - okWidth, 22, okWidth, 32)
-content.addSubview(okButton)
+//extract the log file path if present (after "Full log: ") and create clickable buttons
+let logPath = ''
+const logMatch = message.match(/Full log: (.+)$/)
+if (logMatch) {
+  logPath = logMatch[1].trim()
+}
+
+let okButton, openButton, copyButton
+const buttonGap = 8
+if (logPath.length > 0) {
+  openButton = $.NSButton.buttonWithTitleTargetAction('Open Log', controller, 'openLogClicked:')
+  openButton.bezelStyle = $.NSBezelStyleRounded
+  openButton.sizeToFit
+  const openWidth = Math.max(96, openButton.frame.size.width)
+  openButton.frame = $.NSMakeRect(20, 22, openWidth, 32)
+  content.addSubview(openButton)
+
+  copyButton = $.NSButton.buttonWithTitleTargetAction('Copy', controller, 'copyLogClicked:')
+  copyButton.bezelStyle = $.NSBezelStyleRounded
+  copyButton.sizeToFit
+  const copyWidth = Math.max(80, copyButton.frame.size.width)
+  copyButton.frame = $.NSMakeRect(20 + openWidth + buttonGap, 22, copyWidth, 32)
+  content.addSubview(copyButton)
+
+  okButton = $.NSButton.buttonWithTitleTargetAction('OK', controller, 'okClicked:')
+  okButton.bezelStyle = $.NSBezelStyleRounded
+  okButton.keyEquivalent = '\r'
+  okButton.sizeToFit
+  const okWidth = Math.max(96, okButton.frame.size.width)
+  okButton.frame = $.NSMakeRect(width - 20 - okWidth, 22, okWidth, 32)
+  content.addSubview(okButton)
+} else {
+  okButton = $.NSButton.buttonWithTitleTargetAction('OK', controller, 'okClicked:')
+  okButton.bezelStyle = $.NSBezelStyleRounded
+  okButton.keyEquivalent = '\r'
+  okButton.sizeToFit
+  const okWidth = Math.max(96, okButton.frame.size.width)
+  okButton.frame = $.NSMakeRect(width - 20 - okWidth, 22, okWidth, 32)
+  content.addSubview(okButton)
+}
 
 window.makeKeyAndOrderFront(null)
 if (!app.isActive) app.requestUserAttention($.NSInformationalRequest)
 app.activateIgnoringOtherApps(true)
+//the Dock Quit item sends an aevt/quit Apple Event that a modal session would otherwise never see
+$.NSAppleEventManager.sharedAppleEventManager.setEventHandlerAndSelectorForEventClassAndEventID(controller, 'handleQuitEvent:withReplyEvent:', 0x61657674, 0x71756974)
+$.NSAppleEventManager.sharedAppleEventManager.setEventHandlerAndSelectorForEventClassAndEventID(controller, 'handleReopenEvent:withReplyEvent:', 0x61657674, 0x72617070)
+const pumpTimer = $.NSTimer.timerWithTimeIntervalTargetSelectorUserInfoRepeats(0.25, controller, 'pumpEvents:', $(), true)
+$.NSRunLoop.currentRunLoop.addTimerForMode(pumpTimer, $.NSModalPanelRunLoopMode)
 app.runModalForWindow(window)
 app.terminate(null)
 JXA
 )"
 
-  error_marker="$(mktemp)" || error "Failed to create a GUI error marker."
-  output_log="$(mktemp)" || error "Failed to create a terminal output log."
-  rm -f "$error_marker"
-  printf -v terminal_env 'DL_DIR=%q RPI_MODEL=%q BID=%q WIN_LANG=%q DEVICE=%q CAN_INSTALL_ON_SAME_DRIVE=%q CONFIG_TXT=%q DRY_RUN=%q RUN_MODE=%q WOR_GUI_ERROR_MARKER=%q' \
-    "$DL_DIR" "$RPI_MODEL" "$BID" "$WIN_LANG" "$DEVICE" "$CAN_INSTALL_ON_SAME_DRIVE" "$CONFIG_TXT" "$DRY_RUN" "$RUN_MODE" "$error_marker"
-  terminal_runner="$(mktemp)" || error "Failed to create a temporary Terminal runner."
-  {
-    printf '%s\n' '#!/bin/bash'
-    printf '%s\n' 'trap '\''rm -f "$0"'\'' EXIT'
-    printf 'output_log=%q\n' "$output_log"
-    printf 'error_marker=%q\n' "$error_marker"
-    printf 'clear\n'
-    printf 'cd %q || exit $?\n' "$DIRECTORY"
-    printf 'env %s %q 2>&1 | tee "$output_log"\n' "$terminal_env" "$cli_script"
-    printf 'installer_status=${PIPESTATUS[0]}\n'
-    printf 'if [ "$installer_status" == 0 ]; then\n'
-    printf '  completion_text="Process completed successfully."\n'
-    printf 'else\n'
-    printf '  if [ -e "$error_marker" ]; then\n'
-    printf '    osascript -e '\''tell application "Terminal" to close front window'\'' >/dev/null 2>&1\n'
-    printf '    exit "$installer_status"\n'
-    printf '  fi\n'
-    printf '  clean_output="$(sed $'"'"'s/\033\\[[0-9;]*[A-Za-z]//g; s/\\033\\[[0-9;]*[A-Za-z]//g; s/\r//g'"'"' "$output_log" | tail -n 18)"\n'
-    printf '  completion_text="The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).\n\n$clean_output"\n'
-    printf '  rm -f "$output_log" "$error_marker"\n'
-    printf '  osascript -l JavaScript - "$completion_text" %q %q <<'"'"'JXA'"'"'\n' "$DIRECTORY/logo.png" "$WOR_APP_TITLE"
-    printf '%s\n' "$completion_jxa"
-    printf 'JXA\n'
-    printf '  osascript -e '\''tell application "Terminal" to close front window'\'' >/dev/null 2>&1\n'
-    printf '  exit "$installer_status"\n'
-    printf 'fi\n'
-    printf 'osascript -l JavaScript - "$completion_text" %q %q <<'"'"'JXA'"'"'\n' "$DIRECTORY/logo.png" "$WOR_APP_TITLE"
-    printf '%s\n' "$completion_jxa"
-    printf 'JXA\n'
-    printf 'rm -f "$output_log" "$error_marker"\n'
-    printf 'osascript -e '\''tell application "Terminal" to close front window'\'' >/dev/null 2>&1\n'
-    printf 'exit "$installer_status"\n'
-  } > "$terminal_runner"
-  chmod +x "$terminal_runner" || error "Failed to make the temporary Terminal runner executable."
-  printf -v terminal_launch_command 'exec /bin/bash %q' "$terminal_runner"
-  osascript - "$terminal_launch_command" <<'APPLESCRIPT' >/dev/null
-on run argv
-  tell application "Terminal"
-    activate
-    do script (item 1 of argv)
-  end tell
-end run
-APPLESCRIPT
+  progress_jxa="$(cat <<'JXA'
+ObjC.import('AppKit')
+ObjC.import('Foundation')
+ObjC.import('stdlib')
+const args = $.NSProcessInfo.processInfo.arguments
+const progressFile = ObjC.unwrap(args.objectAtIndex(4))
+const doneMarker = ObjC.unwrap(args.objectAtIndex(5))
+const iconPath = ObjC.unwrap(args.objectAtIndex(6))
+const appTitle = ObjC.unwrap(args.objectAtIndex(7))
+const abortMarker = ObjC.unwrap(args.objectAtIndex(8))
+
+const app = $.NSApplication.sharedApplication
+$.NSProcessInfo.processInfo.processName = appTitle
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+if (iconPath.length > 0) {
+  app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
 }
 
-RUN_MODE=gui #this variable is detected by install-wor.sh to display gui error messages
+const fm = $.NSFileManager.defaultManager
 
-#Determine the directory that contains this script
-[ -z "$DIRECTORY" ] && DIRECTORY="$(cd "$(dirname "$0")" && pwd -P)"
-[ ! -e "$DIRECTORY" ] && error "install-wor-gui.sh: Failed to determine the directory that contains this script. Try running this script with full paths."
-echo "DIRECTORY: $DIRECTORY"
+function readFile(path) {
+  if (!fm.fileExistsAtPath($(path))) return ''
+  try {
+    const data = $.NSString.stringWithContentsOfFileEncodingError($(path), $.NSUTF8StringEncoding, undefined)
+    return ObjC.unwrap(data) || ''
+  } catch (e) {
+    return ''
+  }
+}
 
-#Determine the directory to download windows component files to
-[ -z "$DL_DIR" ] && DL_DIR="$HOME/wor-flasher-files"
-echo "DL_DIR: $DL_DIR"
+function lastMatch(lines, prefix) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].indexOf(prefix) === 0) return lines[i]
+  }
+  return ''
+}
 
-if [ -z "$DRY_RUN" ];then
-  DRY_RUN=0
-fi
+let window, bar, phaseLabel, detailLabel, stepLabel
 
-#this script and cli-based install-wor.sh should be in same directory.
-cli_script="$DIRECTORY/install-wor.sh"
-if [ ! -f "$cli_script" ];then
-  error "No script found named install-wor.sh\nBoth scripts must be in the same directory."
-fi
+//stopping part-way leaves an unbootable drive, so make the user confirm and record why we stopped
+function confirmAbort() {
+  const alert = $.NSAlert.alloc.init
+  alert.messageText = 'Stop flashing this drive?'
+  alert.informativeText = 'The drive will be left unusable and has to be flashed again before it can boot.'
+  alert.alertStyle = $.NSAlertStyleCritical
+  alert.addButtonWithTitle('Stop flashing')
+  alert.addButtonWithTitle('Keep going')
+  if (alert.runModal !== $.NSAlertFirstButtonReturn) return false
+  $('').writeToFileAtomicallyEncodingError(abortMarker, true, $.NSUTF8StringEncoding, null)
+  return true
+}
 
-if [ "$(uname -s)" == Darwin ];then
-  #shellcheck disable=SC1090
-  source "$cli_script" source
+const Controller = ObjC.registerSubclass({
+  name: 'WorProgressController',
+  superclass: 'NSObject',
+  methods: {
+    'tick:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        try {
+          if (fm.fileExistsAtPath($(doneMarker))) {
+            app.stopModalWithCode($.NSOKButton)
+            return
+          }
+          const content = readFile(progressFile)
+          if (content.length === 0) return
+          const lines = content.split('\n')
+          const stepLine = lastMatch(lines, 'STEP\t')
+          const subLine = lastMatch(lines, 'SUBSTEP\t')
+          const statusLine = lastMatch(lines, 'STATUS\t')
+          if (stepLine.length > 0) {
+            const parts = stepLine.split('\t')
+            const stepNum = parseInt(parts[1], 10)
+            const stepTotal = parseInt(parts[2], 10)
+            if (!isNaN(stepNum) && !isNaN(stepTotal) && stepTotal > 0) {
+              let within = 0
+              if (subLine.length > 0) {
+                const parsed = parseInt(subLine.split('\t')[1], 10)
+                if (!isNaN(parsed)) within = Math.max(0, Math.min(100, parsed))
+              }
+              //count in hundredths of a step so progress inside a step is visible too
+              bar.indeterminate = false
+              bar.minValue = 0
+              bar.maxValue = stepTotal * 100
+              bar.doubleValue = (stepNum - 1) * 100 + within
+            }
+            phaseLabel.stringValue = parts.slice(3).join('\t')
+            if (!isNaN(stepNum) && !isNaN(stepTotal) && stepTotal > 0) {
+              stepLabel.stringValue = 'Step ' + stepNum + ' of ' + stepTotal
+            }
+          } else if (subLine.length > 0) {
+            //work before the first numbered step, such as clearing the cache, still has its own percentage
+            const parsed = parseInt(subLine.split('\t')[1], 10)
+            if (!isNaN(parsed)) {
+              bar.indeterminate = false
+              bar.minValue = 0
+              bar.maxValue = 100
+              bar.doubleValue = Math.max(0, Math.min(100, parsed))
+            }
+          }
+          if (statusLine.length > 0) {
+            detailLabel.stringValue = statusLine.split('\t').slice(1).join('\t')
+          }
+        } catch (e) {}
+      }
+    },
+    //right-click Quit from the Dock/app-switcher sends terminate: to NSApp; since this window is
+    //hosted by osascript rather than a full NSApplicationMain run loop, that does not otherwise exit the process
+    'handleQuitEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        //quitting mid-flash must go through the same confirmation and let the shell stop the installer
+        if (confirmAbort()) app.stopModalWithCode($.NSCancelButton)
+      }
+    },
+    'pumpEvents:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.dateWithTimeIntervalSinceNow(0.01))
+      }
+    },
+    'abortClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        if (confirmAbort()) app.stopModalWithCode($.NSCancelButton)
+      }
+    },
+    //the close box must go through the same confirmation, so veto it unless the user means it
+    'windowShouldClose:': {
+      types: ['bool', ['id']],
+      implementation: function() {
+        if (!confirmAbort()) return false
+        app.stopModalWithCode($.NSCancelButton)
+        return true
+      }
+    },
+    //clicking the Dock icon sends aevt/rapp; without a handler a minimised window can never come back
+    'handleReopenEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        if (window.isMiniaturized) window.deminiaturize(null)
+        window.makeKeyAndOrderFront(null)
+        app.activateIgnoringOtherApps(true)
+      }
+    },
+    'applicationShouldTerminate:': {
+      types: ['NSUInteger', ['id']],
+      implementation: function() {
+        if (confirmAbort()) app.stopModalWithCode($.NSCancelButton)
+        //NSTerminateCancel: never let AppKit kill this process while a flash is running
+        return 0
+      }
+    }
+  }
+})
+const controller = $.WorProgressController.alloc.init
+app.setDelegate(controller)
+
+const width = 560
+const height = 236
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable
+window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
+window.title = appTitle
+window.setDelegate(controller)
+window.center
+
+const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
+window.contentView = content
+
+phaseLabel = $.NSTextField.labelWithString('Starting...')
+phaseLabel.frame = $.NSMakeRect(20, 166, width - 140, 24)
+phaseLabel.font = $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightBold)
+content.addSubview(phaseLabel)
+
+stepLabel = $.NSTextField.labelWithString('')
+stepLabel.frame = $.NSMakeRect(width - 120, 166, 100, 24)
+stepLabel.font = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightRegular)
+stepLabel.alignment = $.NSTextAlignmentRight
+content.addSubview(stepLabel)
+
+detailLabel = $.NSTextField.labelWithString('')
+detailLabel.frame = $.NSMakeRect(20, 136, width - 40, 24)
+detailLabel.font = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightRegular)
+content.addSubview(detailLabel)
+
+bar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(20, 106, width - 40, 20))
+bar.indeterminate = true
+bar.startAnimation(null)
+content.addSubview(bar)
+
+const noteLabel = $.NSTextField.labelWithString('This window will close automatically when the process finishes.')
+noteLabel.frame = $.NSMakeRect(20, 74, width - 40, 20)
+noteLabel.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightRegular)
+content.addSubview(noteLabel)
+
+const abortButton = $.NSButton.buttonWithTitleTargetAction('Abort', controller, 'abortClicked:')
+abortButton.bezelStyle = $.NSBezelStyleRounded
+abortButton.sizeToFit
+const abortWidth = Math.max(96, abortButton.frame.size.width)
+abortButton.frame = $.NSMakeRect(width - 20 - abortWidth, 22, abortWidth, 32)
+content.addSubview(abortButton)
+
+window.makeKeyAndOrderFront(null)
+app.activateIgnoringOtherApps(true)
+
+const timer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(0.4, controller, 'tick:', undefined, true)
+//the Dock Quit item sends an aevt/quit Apple Event that a modal session would otherwise never see
+$.NSAppleEventManager.sharedAppleEventManager.setEventHandlerAndSelectorForEventClassAndEventID(controller, 'handleQuitEvent:withReplyEvent:', 0x61657674, 0x71756974)
+$.NSAppleEventManager.sharedAppleEventManager.setEventHandlerAndSelectorForEventClassAndEventID(controller, 'handleReopenEvent:withReplyEvent:', 0x61657674, 0x72617070)
+const pumpTimer = $.NSTimer.timerWithTimeIntervalTargetSelectorUserInfoRepeats(0.25, controller, 'pumpEvents:', $(), true)
+$.NSRunLoop.currentRunLoop.addTimerForMode(pumpTimer, $.NSModalPanelRunLoopMode)
+app.runModalForWindow(window)
+timer.invalidate
+window.orderOut(null)
+JXA
+)"
+
+  abort_marker="$(mktemp -u)"
+
+  #authenticate first: the progress window holds the front, and a password dialog cannot get past it
+  if [ "$DRY_RUN" != 1 ] && ! sudo -v ;then
+    error "Administrator authentication failed or was canceled. Enter the correct macOS password and try again."
+  fi
+
+  gui_start_installer
+  #a flash can outlast the sudo timestamp, and by then no dialog could reach the front to renew it
+  ( while kill -0 "$installer_pid" 2>/dev/null ;do command sudo -n -v >/dev/null 2>&1; sleep 30; done ) &
+
+  osascript -l JavaScript - "$progress_file" "$done_marker" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
+
+  if [ -e "$abort_marker" ];then
+    status "Aborting at your request"
+    #most of the work runs under sudo, so the tree has to come down with the credential we already hold
+    kill_process_tree "$installer_pid"
+    wait "$installer_pid" 2>/dev/null
+    rm -f "$progress_file" "$done_marker" "$abort_marker" "$error_marker"
+    saved_log="$(gui_save_failure_log)"
+    osascript -l JavaScript - "Flashing was stopped before it finished.
+
+$DEVICE is now in an unusable state and has to be flashed again before it can boot.
+
+Full log: $saved_log" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" <<<"$completion_jxa" >/dev/null 2>&1
+    exit 1
+  fi
+
+  #the window can disappear while the flash is still going; wait for the real status instead of
+  #assuming failure, which would report a bogus error and leave the flash running unattended
+  wait "$installer_pid" 2>/dev/null
+
+  installer_status="$(cat "$done_marker" 2>/dev/null)"
+  [ -z "$installer_status" ] && installer_status=1
+  rm -f "$progress_file" "$done_marker" "$abort_marker"
+
+  if [ "$installer_status" == 0 ];then
+    rm -f "$output_log" "$error_marker"
+    completion_text="Process completed successfully."
+  else
+    #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
+    saved_log="$(gui_save_failure_log)"
+    #installer writes the error_marker before showing its own error dialog; if it exists, skip the completion dialog
+    if installer_showed_own_error ;then
+      rm -f "$error_marker"
+      exit "$installer_status"
+    fi
+    completion_text="The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).
+
+$(gui_log_tail "$saved_log")
+
+Full log: $saved_log"
+  fi
+  osascript -l JavaScript - "$completion_text" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" <<<"$completion_jxa" >/dev/null 2>&1
+  exit "$installer_status"
+}
+
+if is_macos ;then
   setup || exit 1
   announcement_choice="$(macos_show_announcement)" || exit 0
   if [ "$announcement_choice" == 'Check out BVM' ];then
@@ -563,10 +1184,6 @@ if [ "$(uname -s)" == Darwin ];then
   macos_start_cli
   exit $?
 fi
-
-#source the script to acquire necessary functions
-#shellcheck disable=SC1090
-source "$cli_script" source #by sourcing, this script checks for and applies updates.
 
 #run safety checks and install packages
 setup || exit 1
@@ -654,18 +1271,12 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
             #verify ISO file
             if [ -z "$SOURCE_FILE" ];then
               break #exit ISO file menu
-            elif [ ! -f "$SOURCE_FILE" ];then
-              yad "${yadflags[@]}" --text="This file does not exist. Check spelling and try again."
-              SOURCE_FILE=''
-            elif [[ "$SOURCE_FILE" != *'.ISO' ]] && [[ "$SOURCE_FILE" != *'.iso' ]];then
-              yad "${yadflags[@]}" --text="This file does not have a .ISO file extension."
-              SOURCE_FILE=''
-            elif [ "$(get_file_size "$SOURCE_FILE")" -lt $((3*1024*1024*1024)) ];then
-              yad "${yadflags[@]}" --text="This file is smaller than 3GB and is probably incomplete."
+            elif ! iso_problem="$(validate_iso_file "$SOURCE_FILE")" ;then
+              yad "${yadflags[@]}" --text="$iso_problem"
               SOURCE_FILE=''
             else #ISO file looks good
               #Infer Build ID based on filename of ISO
-              BID="$(basename "$SOURCE_FILE" | tr '_ -' '\n' | grep -E -m 1 '^[0-9]{5}')"
+              BID="$(bid_from_iso_name "$SOURCE_FILE")"
               if [ -z "$BID" ];then
                 BID="$(yad --form --field= '' "${yadflags[@]}" \
                   --text='To store files from this ISO, this script needs to know the Windows build number of this ISO.\nPlease enter it now: (example: '"$EXAMPLE_BID"')' \
@@ -673,14 +1284,14 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
                 [ -z "$BID" ] && error "Cannot proceed without a build number for your ISO file."
               fi
               #Infer language based on filename of ISO
-              WIN_LANG="$(basename "$SOURCE_FILE" | tr '_ ' '\n' | grep -io -m 1 "$(list_langs | awk -F: '{print $1}' | tr '\n' ';' | sed 's/;/\\|/g' | sed 's/\\|$/\n/g')" | tr '[A-Z]' '[a-z]')"
+              WIN_LANG="$(lang_from_iso_name "$SOURCE_FILE")"
               if [ -z "$WIN_LANG" ];then
                 WIN_LANG="$(yad --form --field= '' "${yadflags[@]}" \
                   --text='To store files from this ISO, this script needs to know the language of this Windows ISO.\nPlease enter it now: (example: en-us)' \
                   --button="<b>OK</b>":0)"
                 if [ -z "$WIN_LANG" ];then
                   error "Cannot proceed without a language for your ISO file."
-                elif ! list_langs | awk -F: '{print $1}' | grep -q "$WIN_LANG" ;then
+                elif ! is_known_win_lang "$WIN_LANG" ;then
                   error "Language code was not found in the list!\n$(list_langs | awk '{print $1}' | tr '\n' ' ')"
                 fi
               fi
@@ -692,13 +1303,13 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
             #folders in DL_DIR named winfiles_from_iso_<BID>_<WIN_LANG>
             while true;do
               list=''
-              existing_winfiles="$(find "$DL_DIR" -maxdepth 2 -type f -name 'alldone' | grep -o "/winfiles_from_iso.*/\|/winfiles.*/" | tr -d / | sort -r -n)"
+              existing_winfiles="$(list_cached_winfiles)"
 
               echo "$existing_winfiles"
 
               for folder in $existing_winfiles ;do
-                BID="$(echo "$folder" | sed 's/^winfiles_from_iso_//g' | sed 's/^winfiles_//g' | awk -F_ '{print $1}')"
-                WIN_LANG="$(echo "$folder" | sed 's/^winfiles_from_iso_//g' | sed 's/^winfiles_//g' | awk -F_ '{print $2}')"
+                BID="$(bid_from_winfiles_dir "$folder")"
+                WIN_LANG="$(lang_from_winfiles_dir "$folder")"
 
                 list+="FALSE\n$(get_os_name "$BID") $WIN_LANG\n${folder}\n"
                 num_opts=$((num_opts+1))
@@ -716,8 +1327,8 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
                 0) #Next
                   if [ ! -z "$folder" ];then
                     #A cached version of windows (winfiles folder) was selected; infer BID and WIN_LANG from it
-                    BID="$(echo "$folder" | sed 's/^winfiles_from_iso_//g' | sed 's/^winfiles_//g' | awk -F_ '{print $1}')"
-                    WIN_LANG="$(echo "$folder" | sed 's/^winfiles_from_iso_//g' | sed 's/^winfiles_//g' | awk -F_ '{print $2}')"
+                    BID="$(bid_from_winfiles_dir "$folder")"
+                    WIN_LANG="$(lang_from_winfiles_dir "$folder")"
 
                     #DL_DIR cannot be changed later on - it is being relied upon for winfiles
                     break
@@ -755,10 +1366,8 @@ RPI_MODEL: $RPI_MODEL"
 { #choose language
 if [ -z "$WIN_LANG" ];then
 
-  #move 'en-*' languages to top of list, and of those put en-us at the very top and make it preselected
-  LANG_LIST="$(list_langs | grep '^en-us'
-list_langs | grep '^en-*' | grep -v '^en-us'
-list_langs | grep -v '^en-')"
+  #en-us is listed first so it is the preselected row
+  LANG_LIST="$(list_langs_preferred)"
 
   while true; do
     WIN_LANG="$(echo "$LANG_LIST" | sed 's/^/FALSE:/g' | tr ':' '\n' | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" \
@@ -768,8 +1377,7 @@ list_langs | grep -v '^en-')"
     button=$?
     [ $button != 0 ] && exit 1
 
-    if echo "$LANG_LIST" | grep -q "^$WIN_LANG": ;then
-      #if selected language matches line in language list
+    if is_known_win_lang "$WIN_LANG" ;then
       break
     fi
   done
@@ -782,7 +1390,7 @@ if [ -z "$DEVICE" ];then
   while [ -z "$DEVICE" ] || [ ! -b "$DEVICE" ];do
     IFS=$'\n'
     DEV_LIST=''
-    for device in $(lsblk -I 8,179,259 -dno PATH | grep -v loop | grep -vx "$ROOT_DEV") ;do
+    for device in $(list_dev_paths) ;do
       [ "$(get_size_raw "$device")" -le 0 ] && continue
       DEV_LIST="FALSE
 ${device}
@@ -811,6 +1419,8 @@ $DEV_LIST"
 elif [ -z "$(lsblk -no PATH "$DEVICE")" ];then
   error "Invalid value for DEVICE: $DEVICE is not a valid drive!"
 fi
+#same guard the macOS wizard applies, so a caller-supplied DEVICE cannot be the host's own boot disk
+is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE, which is this system's boot drive."
 echo "DEVICE: $DEVICE"
 }
 
@@ -940,65 +1550,13 @@ fi
 }
 
 #if no user-supplied CONFIG_TXT variable, set it to initial value for yad to change later
-if [ -z "$CONFIG_TXT" ];then
-  if [ "$RPI_MODEL" == 3 ];then
-
-    CONFIG_TXT="
-
-# don't change anything below this point #
-arm_64bit=1
-disable_commandline_tags=2
-disable_overscan=1
-enable_uart=1
-uart_2ndstage=1
-armstub=RPI_EFI.fd
-device_tree_address=0x1f0000
-device_tree_end=0x200000
-# Uncomment if you have trouble with the UART console during boot
-#core_freq=250"
-
-  elif [ "$RPI_MODEL" == 4 ];then
-    CONFIG_TXT="
-
-# don't change anything below this point #
-arm_64bit=1
-arm_boost=1
-enable_uart=1
-uart_2ndstage=1
-enable_gic=1
-armstub=RPI_EFI.fd
-disable_commandline_tags=1
-disable_overscan=1
-hdmi_drive=2
-hdmi_group=2
-hdmi_mode=87
-hdmi_cvt=1920 1200 60 6 0 0 0
-device_tree_address=0x3e0000
-device_tree_end=0x400000
-dtoverlay=miniuart-bt
-dtoverlay=upstream-pi4"
-
-  elif [ "$RPI_MODEL" == 5 ];then
-    CONFIG_TXT="
-
-# don't change anything below this point #
-armstub=RPI_EFI.fd
-device_tree_address=0x1f0000
-device_tree_end=0x210000
-pciex4_reset=0.
-framebuffer_depth=32
-disable_overscan=1
-usb_max_current_enable=1
-force_turbo=1"
-  fi
-fi
+set_default_config_txt
 
 { #confirmation dialog and edit config.txt
 
-window_text="- Target drive: <b>$DEVICE</b> ($(lsblk -dno SIZE "$DEVICE" | tr -d ' ')B $(get_device_name "$DEVICE"))
-- Installation mode: <b>$(echo "$CAN_INSTALL_ON_SAME_DRIVE" | sed 's/1/Install Windows onto this drive/g' | sed 's/0/Recovery drive for another >16 GB drive/g')</b>
-- Target hardware: <b>Raspberry Pi $RPI_MODEL</b>
-- Operating system: <b>$(get_os_name "$BID" | sed "s/ build / ($WIN_LANG) arm64 build /g")</b>"
+window_text="$(settings_summary_markup)
+
+To continue, click Flash. To review or change these settings, click Advanced. To cancel, close this window."
 
 #by default, if a windows image exists, don't delete it to rebuild it
 rm_img=FALSE
@@ -1039,6 +1597,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
 
     while true;do #repeat the advanced options window until the DL_DIR is not changed, or until Cancel is clicked
       fields=()
+      uefi_pinned="$(uefi_pinned_version)"
       #make entry to change DL_DIR
       if [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
         #lock DL_DIR if winfiles come from previously extracted ISO - changing it would lose these files and they cannot be replaced by the internet
@@ -1093,11 +1652,33 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       #make entry for dry run
       fields+=("--field=Skip flashing the device (DRY_RUN)":CHK "$(echo "$DRY_RUN" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
 
+      #make entries for the customization toggles
+      #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4; yad can't disable one field, so mark it and drop the value below
+      [ "$RPI_MODEL" == 4 ] && pi4_applicable=1 || pi4_applicable=0
+      if [ "$pi4_applicable" == 1 ];then
+        pi4_label='Automatically disable the Pi 4 3 GB RAM limit after install'
+      else
+        pi4_label="<i>Automatically disable the Pi 4 3 GB RAM limit after install (not applicable to the Pi $RPI_MODEL)</i>"
+      fi
+      fields+=("--field=Allow Windows setup to continue without a network connection":CHK "$(echo "$OOBE_NETWORK_BYPASS" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
+      fields+=("--field=$pi4_label":CHK "$(echo "$([ "$pi4_applicable" == 1 ] && echo "$PI4_AUTO_DISABLE_3GB" || echo 0)" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
+      fields+=("--field=Use the latest UEFI firmware instead of the tested pinned version ($uefi_pinned)":CHK "$(echo "$UEFI_USE_LATEST" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
+      fields+=("--field=Use the latest Windows ARM64 drivers instead of the pinned version ($DRIVER_VER)":CHK "$(echo "$DRIVERS_USE_LATEST" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
+      fields+=("--field=Skip verifying the written image after flashing (not recommended)":CHK "$(echo "$SKIP_IMAGE_VERIFICATION" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
+      fields+=("--field=Apply the customized config.txt below (unchecked uses the firmware's default config.txt)":CHK "$(echo "$APPLY_CUSTOM_CONFIG_TXT" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
+      #USE_CACHE has three values, so it needs a combo rather than a check box; the selected item comes first
+      case "$USE_CACHE" in
+        0) cache_items='Re-download everything, ignoring the cache!Reuse cached files when they still match (recommended)!Trust the cache without checking it' ;;
+        2) cache_items='Trust the cache without checking it!Re-download everything, ignoring the cache!Reuse cached files when they still match (recommended)' ;;
+        *) cache_items='Reuse cached files when they still match (recommended)!Re-download everything, ignoring the cache!Trust the cache without checking it' ;;
+      esac
+      fields+=("--field=Downloaded files":CB "$cache_items")
+
       output="$(yad "${yadflags[@]}" --width=500 --height=400 --image-on-top \
         "${refresh_prompt[@]}" \
         --form \
         "${fields[@]}" \
-        --button="<b>Cancel</b>":1 --button="<b>OK</b>":0
+        --button="<b>Back</b>":1 --button="<b>OK</b>":0
       )"
       button=$?
 
@@ -1142,6 +1723,21 @@ while true;do #repeat the Installation Overview window until Flash button clicke
             echo "User checked the box to set DRY_RUN=0"
             DRY_RUN=0
           fi
+          #customization toggles
+          [ "$(echo "$output" | sed -n 11p)" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
+          #keep the existing preference when the toggle wasn't applicable, so switching back to a Pi 4 doesn't lose it
+          if [ "$pi4_applicable" == 1 ];then
+            [ "$(echo "$output" | sed -n 12p)" == TRUE ] && PI4_AUTO_DISABLE_3GB=1 || PI4_AUTO_DISABLE_3GB=0
+          fi
+          [ "$(echo "$output" | sed -n 13p)" == TRUE ] && UEFI_USE_LATEST=1 || UEFI_USE_LATEST=0
+          [ "$(echo "$output" | sed -n 14p)" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
+          [ "$(echo "$output" | sed -n 15p)" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
+          [ "$(echo "$output" | sed -n 16p)" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
+          case "$(echo "$output" | sed -n 17p)" in
+            'Re-download everything'*) USE_CACHE=0 ;;
+            'Trust the cache'*) USE_CACHE=2 ;;
+            'Reuse cached files'*) USE_CACHE=1 ;;
+          esac
           #end of parsing check-box values for advanced options window
 
           break #as the DL_DIR value was not changed, go back to the Installation Overview window
@@ -1169,22 +1765,33 @@ fi
 echo -e "CONFIG_TXT: ⤵\n$(echo "$CONFIG_TXT" | sed 's/^/  > /g')\nCONFIG_TXT: ⤴\n"
 }
 
-echo "Launching install-wor.sh in a separate terminal"
+echo "Running install-wor.sh"
 
-#Terminals like lxterminal and gnome-terminal reuse an existing process, so an exported
-#environment does not reach the new window. Write the values to a file instead and source
-#it there. declare -p quotes everything correctly, so no value can break out of the string.
-export DIRECTORY cli_script DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE WOR_APP_TITLE
-export RUN_MODE=gui
-env_file="$(mktemp)" || error "Failed to create a temporary file"
-trap 'rm -f "$env_file"' EXIT
-declare -p DIRECTORY cli_script DL_DIR BID WIN_LANG RPI_MODEL DEVICE CAN_INSTALL_ON_SAME_DRIVE CONFIG_TXT DRY_RUN USE_CACHE SOURCE_FILE WOR_APP_TITLE RUN_MODE > "$env_file"
+gui_start_installer
 
-#run the Windows on Raspberry script in a terminal, then show a dismissible result window.
-"$DIRECTORY/terminal-run" 'source "'"$env_file"'"
-rm -f "'"$env_file"'"
-"$cli_script"
-exitcode=$?
+progress_fifo="$(mktemp -u)"
+mkfifo "$progress_fifo"
+tail -n +1 -F "$progress_file" > "$progress_fifo" 2>/dev/null &
+tail_pid=$!
+awk -F'\t' '
+  #pct, not sub: sub() is a built-in awk function and cannot be used as a variable
+  #before the first STEP (e.g. while clearing the cache) the percentage stands on its own
+  function overall() { if (total+0 > 0) printf("%d\n", ((step-1)*100 + pct) / (total*100) * 100); else printf("%d\n", pct+0) }
+  /^STEP/    { step=$2+0; total=$3+0; pct=0; overall(); printf("# [Step %s/%s] %s\n", $2, $3, $4); fflush() }
+  /^SUBSTEP/ { pct=$2+0; if (pct<0) pct=0; if (pct>100) pct=100; overall(); fflush() }
+  /^STATUS/  { printf("# %s\n", $2); fflush() }
+' < "$progress_fifo" | yad "${yadflags[@]}" --progress --no-buttons --text="Starting..." &
+yad_pid=$!
+
+while [ ! -f "$done_marker" ];do
+  sleep 0.3
+done
+exitcode="$(cat "$done_marker" 2>/dev/null)"
+[ -z "$exitcode" ] && exitcode=1
+
+kill "$tail_pid" "$yad_pid" 2>/dev/null
+wait "$tail_pid" "$yad_pid" 2>/dev/null
+rm -f "$progress_fifo" "$progress_file" "$done_marker"
 
 #clear zram - avoid leaving files occupying space in /zram
 if [ "$DL_DIR" == /zram ];then
@@ -1192,12 +1799,22 @@ if [ "$DL_DIR" == /zram ];then
 fi
 
 if [ "$exitcode" == 0 ];then
+  rm -f "$output_log" "$error_marker"
   #display "next steps" window
   yad --center --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" \
     --image="$DIRECTORY/next-steps.png" --button=Close:0
-fi' "Running $(basename "$cli_script")"
+else
+  #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
+  saved_log="$(gui_save_failure_log)"
+  if installer_showed_own_error ;then
+    : #install-wor.sh already displayed its own native error dialog.
+  else
+    yad "${yadflags[@]}" --text="The Windows on Raspberry script stopped unexpectedly (exit code $exitcode).\n\n$(gui_log_tail "$saved_log")\n\nFull log: $saved_log"
+  fi
+  rm -f "$error_marker"
+fi
 
-echo "The terminal running install-wor.sh has been closed."
+echo "install-wor.sh has finished."
 
 #if downloading to ram, empty it now
 if [ "$DL_DIR" == /zram ] && [ -d /zram/peinstaller ];then

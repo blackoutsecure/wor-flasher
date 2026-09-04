@@ -16,5 +16,8 @@
 ## Checklist
 
 - [ ] The GUI and CLI still agree, if shared logic changed
+- [ ] Shared logic lives in `install-wor.sh`, not duplicated into `install-wor-gui.sh`
 - [ ] README updated, if behaviour or variables changed
+- [ ] Version history at the top of `install-wor.sh` and the Versions section of the README updated, if behaviour changed
+- [ ] Sent upstream to Botspot/wor-flasher too, if the fix applies there
 - [ ] No new ShellCheck errors (`shellcheck --severity=error install-wor.sh install-wor-gui.sh terminal-run tests/*.sh`)

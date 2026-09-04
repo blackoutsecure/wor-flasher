@@ -1,0 +1,11 @@
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>1</Order>
+          <Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$s = Get-PSDrive -PSProvider FileSystem | ForEach-Object { Join-Path $_.Root 'Pi4Disable3GB.ps1' } | Where-Object { Test-Path $_ } | Select-Object -First 1; if (-not $s) { exit 1 }; &amp; $s"</Path>
+          <WillReboot>Always</WillReboot>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>

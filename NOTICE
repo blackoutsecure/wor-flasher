@@ -1,0 +1,50 @@
+WoR-Flasher
+Copyright (C) 2021-2026 Botspot and the WoR-Flasher contributors
+Copyright (C) 2026 Blackout Secure
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. The full text is in the LICENSE file.
+
+## Upstream licensing status
+
+As of 2026-09-04, the upstream project at https://github.com/Botspot/wor-flasher
+ships no LICENSE file and the GitHub API reports its license as null. Botspot's
+companion project BVM (https://github.com/Botspot/bvm) is released under
+GPL-3.0, so GPL-3.0 is what this fork applies, on the understanding that it
+matches the author's intent for his other work in this space.
+
+Read that as a statement of intent, not as settled fact. Only Botspot can
+license the upstream code he wrote. Until he adds a LICENSE file upstream, or
+confirms GPL-3.0 in writing:
+
+- The Blackout Secure additions listed in the version history at the top of
+  install-wor.sh are offered under GPL-3.0 without reservation.
+- The pre-existing upstream code carries no explicit grant. Anyone planning to
+  redistribute this fork commercially, or to relicense it, should get that
+  confirmation first.
+
+If you are Botspot and GPL-3.0 is not what you want here, please open an issue
+on https://github.com/blackoutsecure/wor-flasher and it will be changed.
+
+## Third-party components
+
+This project downloads, but does not redistribute, the following:
+
+- Windows 10/11 ARM64 installation media, retrieved directly from Microsoft's
+  own update servers via uupdump (https://uupdump.net). No proprietary
+  Microsoft material is included in this repository. The resulting install is
+  unlicensed, exactly like a retail Windows ISO, and must be activated with a
+  key or a pre-licensed Microsoft account.
+- Windows on Raspberry (WoR) PE-based installer, by the WoR project
+  (https://worproject.com).
+- Raspberry Pi UEFI firmware, by the Pi Firmware Task Force
+  (https://github.com/pftf).
+- Windows ARM64 drivers for the Raspberry Pi, by the WoR project
+  (https://github.com/worproject/RPi-Windows-Drivers).
+
+Each of those is covered by its own license, held by its own authors.
+
+The config.txt bodies in config-templates/ are derived from the Pi Firmware Task
+Force reference configuration (https://github.com/pftf/RPi4/blob/master/config.txt).

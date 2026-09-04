@@ -76,8 +76,13 @@ cleanup() {
 
 static_checks() {
   info "== Static checks =="
-  git -C "$REPO_DIR" diff --check >/dev/null 2>&1 \
-    && pass "working tree has no whitespace errors" || fail "working tree has whitespace errors"
+  #a git that cannot read the repo (e.g. an unusable checkout in a container) is not a whitespace error
+  if ! command -v git >/dev/null || ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
+    skip "git cannot read this checkout; cannot check for whitespace errors"
+  else
+    git -C "$REPO_DIR" diff --check >/dev/null 2>&1 \
+      && pass "working tree has no whitespace errors" || fail "working tree has whitespace errors"
+  fi
   for f in install-wor.sh install-wor-gui.sh terminal-run ;do
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
@@ -103,20 +108,45 @@ static_checks() {
     && pass "all temporary mounts use the shared cleanup handler" \
     || fail "a temporary mount bypasses the shared cleanup handler"
 
-  grep -qF 'if ! sudo -v >/dev/null 2>&1;then' "$REPO_DIR/install-wor.sh" \
+  grep -qF 'if ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1 ;then' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Administrator authentication failed or was canceled.' "$REPO_DIR/install-wor.sh" \
     && pass "macOS checks administrator access before partitioning" \
     || fail "macOS does not check administrator access before partitioning"
 
-  grep -qF 'rm -rf "$PWD"/winfiles_* "$PWD"/winfiles_from_iso_*' "$REPO_DIR/install-wor.sh" \
+  grep -qF 'require_free_space()' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'required_download_space' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'mkdir -p "$DL_DIR"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'require_free_space "$required_download_space" "$DL_DIR"' "$REPO_DIR/install-wor.sh" \
+    && pass "download directory free-space check runs before downloads" \
+    || fail "download directory free-space check is missing"
+
+  #prove the behaviour rather than the wording: winfiles_from_iso_* is also matched by winfiles_*
+  cache_clear_dir="$(mktemp -d)"
+  mkdir -p "$cache_clear_dir/dl/peinstaller" "$cache_clear_dir/dl/driverpackage" \
+    "$cache_clear_dir/dl/pi4-uefipackage" "$cache_clear_dir/dl/winfiles_22631_en-us" \
+    "$cache_clear_dir/dl/winfiles_from_iso_22631_en-us" "$cache_clear_dir/dl/keep-me" "$cache_clear_dir/repo/cache"
+  (
+    cd "$cache_clear_dir/dl" || exit 1
+    #shellcheck disable=SC1090
+    DIRECTORY="$cache_clear_dir/repo" source "$REPO_DIR/install-wor.sh" source >/dev/null 2>&1
+    DIRECTORY="$cache_clear_dir/repo" clear_cached_components >/dev/null 2>&1
+  )
+  [ ! -e "$cache_clear_dir/dl/winfiles_22631_en-us" ] \
+    && [ ! -e "$cache_clear_dir/dl/winfiles_from_iso_22631_en-us" ] \
+    && [ ! -e "$cache_clear_dir/dl/peinstaller" ] \
+    && [ ! -e "$cache_clear_dir/dl/driverpackage" ] \
+    && [ ! -e "$cache_clear_dir/dl/pi4-uefipackage" ] \
+    && [ -d "$cache_clear_dir/dl/keep-me" ] \
+    && [ -d "$cache_clear_dir/repo/cache" ] \
     && pass "USE_CACHE=0 clears extracted Windows image caches" \
     || fail "USE_CACHE=0 leaves extracted Windows image caches in place"
+  rm -rf "$cache_clear_dir"
 
   grep -qF '[ -z "$USE_CACHE" ] && USE_CACHE=1' "$REPO_DIR/install-wor.sh" \
     && pass "validated cache reuse is the default" \
     || fail "validated cache reuse is not the default"
 
-  grep -qF 'USE_CACHE:                 $USE_CACHE' "$REPO_DIR/install-wor.sh" \
+  grep -qF "printf 'Downloaded files\\t%s\\n' \"\$(cache_mode_label \"\$USE_CACHE\")\"" "$REPO_DIR/install-wor.sh" \
     && pass "startup summary shows cache policy" \
     || fail "startup summary does not show cache policy"
 
@@ -166,7 +196,7 @@ static_checks() {
     && grep -qF 'Formatting " & targetDevice & return & return & "There is no turning back now.' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'WOR_FLASH_TARGET="$DEVICE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'RUN_MODE=%q' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'export RUN_MODE=gui' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "name: 'WorErrorController'" "$REPO_DIR/install-wor.sh" \
     && grep -qF 'app.requestUserAttention($.NSInformationalRequest)' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'display alert' "$REPO_DIR/install-wor.sh" \
@@ -206,35 +236,617 @@ static_checks() {
     && ! grep -qF 'Refresh detected devices' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'tkinter' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose installation mode' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "macos_choose '' \"\$confirm_summary\" Flash Back Cancel Cancel '' Flash" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "macos_choose '' \"\$confirm_summary\" Flash Back 'Advanced...' Advanced '' Flash" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '[ "$confirmation" == Cancel ] && exit 0' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "macos_choose '' \"\$plain\" OK" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'macos_advanced_options' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'display alert' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'display dialog' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'All data on the target drive will be erased.' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "name: 'WorCompletionController'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'osascript -l JavaScript - "$completion_text"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'tell application "Terminal" to close front window' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'exit "$installer_status"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'installer_status=${PIPESTATUS[0]}' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'WOR_GUI_ERROR_MARKER=%q' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'WOR_GUI_ERROR_MARKER="$error_marker"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'CONFIG_TXT=%q' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "terminal_runner=\"\$(mktemp)\"" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "printf -v terminal_launch_command 'exec /bin/bash %q'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'do script (item 1 of argv)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "name: 'WorProgressController'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'tell application "Terminal" to close front window' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF "terminal_runner=\"\$(mktemp)\"" "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'do script (item 1 of argv)' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'choose from list' "$REPO_DIR/install-wor-gui.sh" \
-    && pass "macOS GUI collects choices and hands off to the Terminal CLI" \
-    || fail "macOS GUI handoff is missing"
+    && pass "macOS GUI collects choices and shows a native progress window" \
+    || fail "macOS GUI progress window is missing"
 
-  [ "$(grep -cF 'device_tree_address=0x3e0000' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
-    && [ "$(grep -cF 'device_tree_end=0x400000' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+  grep -qF 'device_tree_address=0x3e0000' "$REPO_DIR/config-templates/pi4.config.txt" \
+    && grep -qF 'device_tree_end=0x400000' "$REPO_DIR/config-templates/pi4.config.txt" \
+    && grep -qF 'read_config_template "pi${RPI_MODEL}.config.txt"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'set_default_config_txt' "$REPO_DIR/install-wor-gui.sh" \
     && pass "Pi 4 GUI config matches the current UEFI memory range" \
     || fail "Pi 4 GUI config uses stale device-tree addresses"
   grep -qF "UEFI_VER_PI4='v1.51'" "$REPO_DIR/install-wor.sh" \
     && ! grep -qF "UEFI_VER_PI4='v1.52'" "$REPO_DIR/install-wor.sh" \
     && pass "Pi 4 avoids UEFI v1.52 microSD boot regression" \
     || fail "Pi 4 uses UEFI v1.52, which does not boot reliably from microSD"
+
+  grep -qF '#Raspberry Pi 4 only; this setting is ignored for every other model.' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '[ -z "$PI4_AUTO_DISABLE_3GB" ] && PI4_AUTO_DISABLE_3GB=1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'SetFirmwareEnvironmentVariableEx("RamLimitTo3GB", "{CD7CC258-31DB-22E6-9F22-63B0B8EED6B5}"' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
+    && grep -qF '<settings pass="specialize">' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
+    && grep -qF '<WillReboot>Always</WillReboot>' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
+    && grep -qF 'read_config_template pi4-ram-unlock.ps1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'read_config_template pi4-ram-unlock-specialize.xml' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'Prepare a one-time post-install RAM unlock' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "Pi 4 RAM unlock is config-only and runs automatically after the PE reboot" \
+    || fail "Pi 4 automatic RAM unlock is unsafe or incomplete"
+
+  grep -qF 'Pi 4 driver package is incomplete:' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'wimdir "$boot_mount/sources/boot.wim" 2 --path=/drivers/bcmgenet/bcmgenet.inf' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'wimdir "$boot_mount/sources/boot.wim" 2 --path=/drivers/mcci_dwchsotg/mcci_dwchsotg_hcd.inf' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'wimdir "$boot_mount/sources/boot.wim" 2 --path=/drivers/mcci_dwchsotg/mcci_dwchsotg_hub.inf' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'wimdir "$boot_mount/sources/boot.wim" 2 --path=/drivers/rpiuxflt/rpiuxflt.inf' "$REPO_DIR/install-wor.sh" \
+    && pass "Pi 4 Ethernet, USB, and DMA filter drivers are checked before and after flashing" \
+    || fail "Pi 4 Ethernet, USB, and DMA filter driver verification is incomplete"
+
+  grep -qF 'if [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ];then' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'after the injected drivers are installed' "$REPO_DIR/README.md" \
+    && grep -qF 'CM4 requires the RAM limit set to 1 GB' "$REPO_DIR/README.md" \
+    && grep -qF 'bcdedit /deletevalue' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
+    && pass "Pi 4 RAM unlock runs only after Setup has installed the DMA filter, and clears the BCD memory cap" \
+    || fail "Pi 4 RAM unlock may run before the DMA filter is installed, or CM4 guidance is missing"
+
+  grep -qF '[ -z "$OOBE_NETWORK_BYPASS" ] && OOBE_NETWORK_BYPASS=1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '<HideOnlineAccountScreens>true</HideOnlineAccountScreens>' "$REPO_DIR/config-templates/oobe-network-bypass.xml" \
+    && grep -qF '<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>' "$REPO_DIR/config-templates/oobe-network-bypass.xml" \
+    && grep -qF 'read_config_template oobe-network-bypass.xml' "$REPO_DIR/install-wor.sh" \
+    && [ "$(grep -cF 'install_windows_setup_configuration ' "$REPO_DIR/install-wor.sh")" == 2 ] \
+    && grep -qF 'cmp -s "$boot_mount/Autounattend.xml" "$install_mount/Autounattend.xml"' "$REPO_DIR/install-wor.sh" \
+    && pass "Windows OOBE network bypass is default-on, configurable, written to both partitions, and verified" \
+    || fail "Windows OOBE network bypass is incomplete"
+
+  [ -f "$REPO_DIR/config-templates/pi3.config.txt" ] \
+    && [ -f "$REPO_DIR/config-templates/pi4.config.txt" ] \
+    && [ -f "$REPO_DIR/config-templates/pi5.config.txt" ] \
+    && [ -f "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" ] \
+    && [ -f "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" ] \
+    && [ -f "$REPO_DIR/config-templates/oobe-network-bypass.xml" ] \
+    && grep -qF 'read_config_template() {' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'sync_repo_template' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'raw.githubusercontent.com' "$REPO_DIR/install-wor.sh" \
+    && pass "config-templates/ files exist as static, locally-editable files with no redundant per-file repo sync" \
+    || fail "config-templates/ files are missing, or the removed per-file sync mechanism is still present"
+
+  #these must be committed: a fresh clone without them silently writes a blank config.txt and the Pi will not boot
+  if command -v git >/dev/null && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
+    [ "$(git -C "$REPO_DIR" ls-files config-templates/ | wc -l | tr -d ' ')" == 6 ] \
+      && grep -qF 'This file ships with WoR-Flasher and is required to write a bootable drive.' "$REPO_DIR/install-wor.sh" \
+      && pass "config-templates/ files are tracked by git and a missing one aborts instead of writing a blank config.txt" \
+      || fail "config-templates/ files are untracked, or a missing template does not abort"
+  else
+    skip "git is unavailable; cannot verify that config-templates/ is tracked"
+  fi
+
+  grep -qF 'macos_advanced_options() {' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "name: 'WorAdvancedController'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'NSButton.checkboxWithTitleTargetAction' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Automatically disable the Pi 4 3 GB RAM limit after install' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Skip flashing the device (dry run)' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(grep -cF 'export_installer_settings' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
+    && grep -qF 'export "${WOR_INSTALLER_SETTINGS[@]}"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF "editMenu.addItemWithTitleActionKeyEquivalent('Copy', 'copy:', 'c')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'app.mainMenu = mainMenu' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "macOS and Linux GUIs expose an Advanced Options window for site-documented customizations" \
+    || fail "Advanced Options window is missing or incomplete"
+
+  ! grep -qF 'OVERRIDE_CONFIG_TXT' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'OVERRIDE_PI4_RAM_UNLOCK' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'OVERRIDE_OOBE_TEMPLATE' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "Redundant per-file repo-sync checkboxes were removed from both GUIs" \
+    || fail "Redundant per-file repo-sync checkboxes are still present"
+
+  #WSL reports uname -s as Linux, so it would otherwise pass the host gate and offer
+  #WSL's own virtual disks as erasable targets
+  grep -qF 'is_wsl() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'WSL_DISTRO_NAME' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'WSLENV' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '/proc/version' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'if is_wsl ;then' "$REPO_DIR/install-wor.sh" \
+    && pass "WSL hosts are rejected before any drive is listed or erased" \
+    || fail "WSL is not detected, so it would pass the Linux host gate"
+
+  #a modal session never services default-mode run loop sources, so the Dock's quit Apple Event
+  #is only delivered because each window registers a handler and pumps default mode from a timer
+  [ "$(grep -cF "'handleQuitEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+    && [ "$(grep -cF "'pumpEvents:': {" "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+    && [ "$(grep -cF '0x61657674, 0x71756974' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+    && [ "$(grep -cF 'addTimerForMode(pumpTimer' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+    && [ "$(grep -cF 'app.runModalForWindow(window)' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+    && pass "every macOS window responds to the Dock's Quit menu item" \
+    || fail "a macOS window cannot receive the Dock's quit Apple Event"
+
+  #these heredocs sit inside "$( ... )", so bash still tracks quote state through the body:
+  #a lone apostrophe (e.g. "doesn't") silently swallows every function defined after it
+  [ -z "$(awk '/<<.JXA.$/{inh=1; next} inh && /^JXA$/{inh=0; next} inh{n=gsub(/'"'"'/,""); if(n%2==1) print NR}' "$REPO_DIR/install-wor-gui.sh")" ] \
+    && pass "JXA heredoc bodies contain no unpaired apostrophes" \
+    || fail "an unpaired apostrophe in a JXA heredoc will corrupt shell parsing"
+
+  #guards against the same class of breakage from any cause: run the real script far enough to
+  #register its function definitions, then confirm every macos_* helper actually became a function
+  macos_fn_expected="$(grep -c '^macos_[a-z_]*() {' "$REPO_DIR/install-wor-gui.sh")"
+  macos_fn_probe="$(mktemp)"
+  awk -v line="$(grep -n '^macos_start_cli() {' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" \
+    'NR==line{print "declare -F | grep -c \"^declare -f macos_\"; exit 0"} {print}' \
+    "$REPO_DIR/install-wor-gui.sh" > "$macos_fn_probe"
+  #macos_start_cli itself is not defined yet at the probe point.
+  #DIRECTORY is supplied because the probe is a copy: the GUI resolves install-wor.sh relative to its own path.
+  [ "$(cd "$REPO_DIR" && DIRECTORY="$REPO_DIR" bash "$macos_fn_probe" 2>/dev/null | tail -n1)" == "$((macos_fn_expected - 1))" ] \
+    && pass "all macOS helper functions parse as separate top-level definitions" \
+    || fail "a macOS function definition is being swallowed by a preceding heredoc"
+  rm -f "$macos_fn_probe"
+
+  #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4, so the GUIs must not offer it as a live choice
+  grep -qF 'checked: parts[1]' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "enabled: parts[2] !== '0'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'checkbox.enabled = rows[i].enabled' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(grep -cF 'pi4_applicable=1 || pi4_applicable=0' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && grep -qF 'not applicable to the Pi $RPI_MODEL' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '2) [ "$pi4_applicable" == 1 ] && PI4_AUTO_DISABLE_3GB="$line" ;;' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the Pi 4 RAM-unlock toggle is greyed out and ignored on other Pi models" \
+    || fail "the Pi 4 RAM-unlock toggle is not gated on the selected Pi model"
+
+  #in recovery mode the custom config.txt only boots the installer media
+  grep -qF "config_scope='applied to the boot partition'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'not the installed Windows drive' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "labelWithString('config.txt (' + configScope + '):')" "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the config.txt editor states its scope for the selected installation mode" \
+    || fail "the config.txt editor does not state its scope per installation mode"
+
+  grep -qF '[ -z "$SKIP_IMAGE_VERIFICATION" ] && SKIP_IMAGE_VERIFICATION=0' "$REPO_DIR/install-wor.sh" \
+    && [ "$(grep -cF 'if [ "$SKIP_IMAGE_VERIFICATION" == 1 ];then' "$REPO_DIR/install-wor.sh")" == 2 ] \
+    && [ "$(grep -cF 'verify_written_image "$DEVICE" "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh")" == 2 ] \
+    && grep -qF 'Use the latest UEFI firmware instead of the tested pinned version ($uefi_pinned)' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(grep -cF 'Use the latest Windows ARM64 drivers instead of the pinned version ($DRIVER_VER)' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && grep -qF 'Skip verifying the written image after flashing (not recommended)' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(grep -cF 'To continue, click Flash. To review or change these settings, click Advanced.' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && pass "Skip-verification option defaults off, wraps both verify_written_image calls, and confirm screens show pinned versions and guidance" \
+    || fail "Skip-verification option or confirm-screen guidance is missing or incomplete"
+
+  grep -qF '[ -z "$APPLY_CUSTOM_CONFIG_TXT" ] && APPLY_CUSTOM_CONFIG_TXT=1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '[ -z "$CONFIG_TXT" ] || [ "$APPLY_CUSTOM_CONFIG_TXT" != 1 ] || echo "$CONFIG_TXT" | sudo tee "$boot_mount/config.txt" >/dev/null' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'if [ ! -z "$CONFIG_TXT" ] && [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ];then' "$REPO_DIR/install-wor.sh" \
+    && grep -qF "applyConfigCheckbox = \$.NSButton.checkboxWithTitleTargetAction('Apply the customized config.txt below" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'function updateConfigEditableState() {' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'textView.editable = enabled' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'scrollView.alphaValue = enabled ? 1.0 : 0.5' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "Apply the customized config.txt below (unchecked uses the firmware's default config.txt)" "$REPO_DIR/install-wor-gui.sh" \
+    && pass "Applying the customized config.txt is a togglable checkbox that greys out the editor on macOS" \
+    || fail "Apply-customized-config.txt toggle is missing or incomplete"
+
+  grep -qF '[ -z "$HIDE_EMPTY_DRIVES" ] && HIDE_EMPTY_DRIVES=1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'configure_pe_settings_ini() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF "settings_ini=\"\$PWD/peinstaller/winpe/2/settings.ini\"" "$REPO_DIR/install-wor.sh" \
+    && [ "$(grep -cF 'configure_pe_settings_ini' "$REPO_DIR/install-wor.sh")" == 3 ] \
+    && pass "HideEmptyDrives is written into the cached PE settings.ini before boot.wim assembly" \
+    || fail "HideEmptyDrives support is missing or incomplete"
+
+  grep -qF 'Allow Windows setup to continue without a network connection' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF "step=oobe" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'OOBE_NETWORK_BYPASS' "$REPO_DIR/install-wor.sh" \
+    && pass "macOS and Linux GUIs expose the OOBE network choice only in Advanced Options" \
+    || fail "GUI OOBE network choice is incomplete"
+
+  grep -qF 'emit_gui_progress() { #Input: line.' "$REPO_DIR/install-wor.sh" \
+    && grep -qF $'STEP\t$STEP_NUM\t$STEP_TOTAL\t$1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF $'STATUS\t$1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'LINUX_ASKPASS="$(mktemp)"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$DIRECTORY/logo.png" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF "yad \"\${yadflags[@]}\" --progress --no-buttons" "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF '"$DIRECTORY/terminal-run"' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "GUI mode runs the installer without a visible terminal on macOS and Linux" \
+    || fail "GUI mode still depends on a visible terminal"
+
+  #a subshell cannot wait on a sibling, so `( wait "$installer_pid" ... )` wrote 127 immediately:
+  #the progress window closed at once and the GUI reported failure while the flash kept running.
+  #Both front-ends now go through one shared launcher, so there is a single copy to get right.
+  [ "$(grep -cF '{ "$cli_script" > "$output_log" 2>&1; echo $? > "$done_marker"; } &' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
+    && [ "$(grep -cF 'gui_start_installer' "$REPO_DIR/install-wor-gui.sh")" == 3 ] \
+    && ! grep -qF '( wait "$installer_pid"; echo $? > "$done_marker" ) &' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "both GUIs record the installer exit status from the job itself, not a sibling wait" \
+    || fail "a GUI still waits on a sibling process, so it reports completion immediately"
+
+  #the macOS password dialog cannot render in front of the progress window, so authenticate before it opens
+  macos_auth_line="$(grep -n 'if \[ "$DRY_RUN" != 1 \] && ! sudo -v ;then' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
+  macos_progress_line="$(grep -n '<<<"$progress_jxa"' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
+  [ -n "$macos_auth_line" ] && [ -n "$macos_progress_line" ] \
+    && [ "$macos_auth_line" -lt "$macos_progress_line" ] \
+    && grep -qF 'command sudo -n -v >/dev/null 2>&1; sleep 30' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "macOS authenticates before the progress window and keeps the credential alive" \
+    || fail "macOS asks for the password behind the progress window, where it cannot be answered"
+
+  #having authenticated once, the engine must not prompt a second time behind the progress window
+  grep -qF 'if ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1 ;then' "$REPO_DIR/install-wor.sh" \
+    && pass "the flash reuses the GUI credential instead of asking for the password twice" \
+    || fail "the engine re-prompts for a password the GUI already collected"
+
+  #a failed flash must leave the log behind; the GUI has no terminal to fall back on
+  grep -qF 'saved_log="$DL_DIR/last-run.log"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Installer log saved to $saved_log' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(grep -cF 'saved_log="$(gui_save_failure_log)"' "$REPO_DIR/install-wor-gui.sh")" == 3 ] \
+    && pass "a failed run keeps its installer log for diagnosis" \
+    || fail "a failed run deletes the only record of what went wrong"
+
+  #the bar should advance inside a step, not jump once per step
+  grep -qF 'emit_gui_substep() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'with_progress_capture pv -f -N' "$REPO_DIR/install-wor.sh" \
+    && [ "$(grep -cF 'with_progress_capture pv -f -N' "$REPO_DIR/install-wor.sh")" == 6 ] \
+    && grep -qF 'bar.maxValue = stepTotal * 100' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'bar.doubleValue = (stepNum - 1) * 100 + within' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "progress is captured within each step and carried into both progress bars" \
+    || fail "progress still jumps a whole step at a time"
+
+  #sub() is a built-in awk function, so using it as a variable is a syntax error
+  linux_awk="$(sed -n "/^awk -F'\\\\t' '$/,/^' < \"\$progress_fifo\"/p" "$REPO_DIR/install-wor-gui.sh" | sed '1d;$d')"
+  if [ -n "$linux_awk" ] && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\n' | awk -F'\t' "$linux_awk" >/dev/null 2>&1 ;then
+    [ "$(printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\n' | awk -F'\t' "$linux_awk" | grep -vE '^#' | tail -n1)" == 31 ] \
+      && pass "the Linux progress program runs and maps a mid-step percentage correctly" \
+      || fail "the Linux progress program computes the wrong overall percentage"
+  else
+    fail "the Linux progress awk program has a syntax error"
+  fi
+
+  #USE_CACHE has three values, so both GUIs need a menu, and it has to reach the installer
+  grep -qF 'cachePopup.addItemWithTitle' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "out.push(String(cachePopup.indexOfSelectedItem))" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '8) [ "$line" == 0 ] || [ "$line" == 1 ] || [ "$line" == 2 ] && USE_CACHE="$line" ;;' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"--field=Downloaded files":CB "$cache_items"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE' "$REPO_DIR/install-wor.sh" \
+    && pass "both GUIs can choose the download cache mode and pass it to the installer" \
+    || fail "the download cache mode is not adjustable from the GUI"
+
+  #a one-line `case` inside $( ) is mis-parsed at the first ')', leaking raw shell into the dialog
+  if ! grep -qE '\$\(case .* in [^)]*\)' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qE '\$\(case .* in [^)]*\)' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'cache_mode_label() {' "$REPO_DIR/install-wor.sh" ;then
+    #render it the way the confirmation screens do
+    cache_label_fn="$(sed -n '/^cache_mode_label() {/,/^}/p' "$REPO_DIR/install-wor.sh")"
+    cache_rendered="$(bash -c "$cache_label_fn"$'\n''cache_mode_label 2' 2>/dev/null)"
+    [ "$cache_rendered" == 'Trust the cache without checking' ] \
+      && pass "the confirmation screens show the cache mode as words, not shell source" \
+      || fail "the cache mode does not render correctly on the confirmation screens"
+  else
+    fail "an inline case in a command substitution will leak shell source into a dialog"
+  fi
+
+  #clearing several GB used to sit on a dead bar with no indication anything was happening
+  grep -qF 'clear_cached_components() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'status "Deleting $(basename "$target") ($((removed+1)) of $total)"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'emit_gui_substep $((removed * 100 / total))' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'rm -rf "$PWD/peinstaller" "$PWD/driverpackage"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '} else if (subLine.length > 0) {' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "clearing the cache reports each deletion and moves the bar before step 1" \
+    || fail "clearing the cache gives no progress feedback"
+
+  #the progress window needs a way out, a step counter, and the usual window buttons
+  grep -qF "abortClicked:" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "'windowShouldClose:'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "stepLabel.stringValue = 'Step ' + stepNum + ' of ' + stepTotal" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'abort_marker="$(mktemp -u)"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'kill_process_tree "$installer_pid"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Stop flashing this drive?' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the progress window can be aborted, shows step x of y, and has close and minimise" \
+    || fail "the progress window cannot be aborted or lacks its window controls"
+
+  #clicking the Dock icon sends aevt/rapp; without a handler a minimised window can never be restored
+  [ "$(grep -cF "'handleReopenEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+    && [ "$(grep -cF '0x61657674, 0x72617070' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+    && grep -qF 'if (window.isMiniaturized) window.deminiaturize(null)' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "clicking the Dock icon restores a minimised window" \
+    || fail "a minimised window cannot be restored from the Dock"
+
+  #Quit during a flash used to exit on the spot: a bogus failure dialog, with the flash left running
+  progress_block="$(sed -n "/^  progress_jxa=\"\$(cat <<'JXA'\$/,/^JXA\$/p" "$REPO_DIR/install-wor-gui.sh")"
+  ! printf '%s' "$progress_block" | grep -qF '$.exit(0)' \
+    && printf '%s' "$progress_block" | grep -qF 'if (confirmAbort()) app.stopModalWithCode($.NSCancelButton)' \
+    && [ "$(grep -c '        \$.exit(0)' "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
+    && grep -qF 'wait "$installer_pid" 2>/dev/null' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "quitting mid-flash confirms first and the shell still collects the real exit status" \
+    || fail "quitting mid-flash reports a bogus failure or leaves the flash running"
+
+  #the completion dialog has an "Open Log" button that extracts the log path and opens it in the default editor
+  completion_block="$(sed -n "/^  completion_jxa=\"\$(cat <<'JXA'\$/,/^JXA\$/p" "$REPO_DIR/install-wor-gui.sh")"
+  printf '%s' "$completion_block" | grep -qF "'openLogClicked:': {" \
+    && printf '%s' "$completion_block" | grep -qF "openButton = $.NSButton.buttonWithTitleTargetAction('Open Log'" \
+    && printf '%s' "$completion_block" | grep -qF "$.NSWorkspace.sharedWorkspace.openFileWithApplication" \
+    && printf '%s' "$completion_block" | grep -qF "const logMatch = message.match(/Full log: (.+)$/)" \
+    && pass "completion dialog can open the log file from the message" \
+    || fail "completion dialog cannot open the log file"
+
+  #the completion dialog has a "Copy" button that copies the log path to the clipboard
+  printf '%s' "$completion_block" | grep -qF "'copyLogClicked:': {" \
+    && printf '%s' "$completion_block" | grep -qF "copyButton = $.NSButton.buttonWithTitleTargetAction('Copy'" \
+    && printf '%s' "$completion_block" | grep -qF "$.NSPasteboard.generalPasteboard" \
+    && printf '%s' "$completion_block" | grep -qF "pb.setStringForType($(logPath)" \
+    && pass "completion dialog can copy the log path to the clipboard" \
+    || fail "completion dialog cannot copy the log path"
+
+  #when an error occurs in the installer, gui_error_dialog writes to WOR_GUI_ERROR_MARKER with touch+sync before showing its dialog
+  gui_error_block="$(sed -n "/^gui_error_dialog() {/,/^}/p" "$REPO_DIR/install-wor.sh" | head -n 20)"
+  printf '%s' "$gui_error_block" | grep -qF 'mkdir -p "$(dirname "$WOR_GUI_ERROR_MARKER")' \
+    && printf '%s' "$gui_error_block" | grep -qF 'touch "$WOR_GUI_ERROR_MARKER"' \
+    && printf '%s' "$gui_error_block" | grep -qF 'sync' \
+    && pass "gui_error_dialog reliably creates error_marker with touch+sync before dialog" \
+    || fail "gui_error_dialog does not reliably create error_marker"
+
+  #the GUI checks for error_marker with -s (non-empty) to ensure it was actually written, not just the file existing
+  marker_check_fn="$(sed -n '/^installer_showed_own_error() {/,/^}/p' "$REPO_DIR/install-wor-gui.sh")"
+  printf '%s' "$marker_check_fn" | grep -qF '[ -e "$error_marker" ] && [ -s "$error_marker" ]' \
+    && [ "$(grep -cF 'if installer_showed_own_error ;then' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && pass "both GUIs check error_marker exists AND is non-empty before skipping the completion dialog" \
+    || fail "GUI does not verify error_marker is non-empty before trusting it"
+
+  #aborting must take down the sudo-owned children too, not just the top-level job
+  kill_tree_dir="$(mktemp -d)"
+
+  sed -n '/^kill_process_tree() {/,/^}/p' "$REPO_DIR/install-wor-gui.sh" > "$kill_tree_dir/fn.sh"
+  printf '#!/bin/bash\nsleep 60\n' > "$kill_tree_dir/child.sh"
+  printf '#!/bin/bash\n"%s/child.sh" &\nsleep 60\n' "$kill_tree_dir" > "$kill_tree_dir/parent.sh"
+  chmod +x "$kill_tree_dir/child.sh" "$kill_tree_dir/parent.sh"
+  (
+    #shellcheck disable=SC1090
+    . "$kill_tree_dir/fn.sh"
+    "$kill_tree_dir/parent.sh" & tree_pid=$!
+    sleep 1
+    kill_process_tree "$tree_pid" 2>/dev/null
+    sleep 1
+    kill -0 "$tree_pid" 2>/dev/null && exit 1
+    pgrep -f "$kill_tree_dir/child.sh" >/dev/null 2>&1 && exit 1
+    exit 0
+  ) >/dev/null 2>&1 \
+    && pass "aborting stops the installer and every process it started" \
+    || fail "aborting leaves the flash running in the background"
+  pkill -f "$kill_tree_dir/child.sh" 2>/dev/null
+  rm -rf "$kill_tree_dir"
+
+  shared_function_checks
+}
+
+#Runs the real functions out of install-wor.sh rather than restating their logic here, so a test can
+#never pass against behaviour the shipped script no longer has.
+run_in_engine() { #Input: shell code. Runs it with install-wor.sh sourced and a representative run configured.
+  env -u CONFIG_TXT -u DEVICE -u DL_DIR -u SOURCE_FILE NO_UPDATE=1 DIRECTORY="$REPO_DIR" \
+    bash -c '
+      #shellcheck disable=SC1090
+      source "$DIRECTORY/install-wor.sh" source >/dev/null 2>&1
+      RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us DEVICE=/dev/does-not-exist
+      CAN_INSTALL_ON_SAME_DRIVE=1 DL_DIR=/tmp/wor-test-dl
+      '"$1"
+}
+
+shared_function_checks() {
+  info "== Shared engine functions =="
+
+  #the CLI banner and both GUI overviews must describe a run from one place, or they drift apart
+  summary_labels="$(run_in_engine 'settings_summary | cut -f1 | tr "\n" ","')"
+  [ "$summary_labels" == 'WoR-Flasher version,Target drive,Target hardware,Operating system,Installation mode,Offline OOBE,Pi 4 RAM unlock,UEFI firmware,Windows ARM64 drivers,Custom config.txt,Hide empty drives,Verify written image,Downloaded files,Dry run,Download directory,' ] \
+    && [ "$(run_in_engine 'settings_summary | awk -F"\t" "NF != 2" | wc -l | tr -d " "')" == 0 ] \
+    && pass "settings_summary emits one tab-separated label/value pair per setting" \
+    || fail "settings_summary is missing settings or emits malformed lines: $summary_labels"
+
+  #every toggle the Advanced Options windows offer has to be visible on the confirmation screen
+  [ "$(run_in_engine 'DRY_RUN=1 SKIP_IMAGE_VERIFICATION=1 USE_CACHE=2 APPLY_CUSTOM_CONFIG_TXT=0 UEFI_USE_LATEST=1 DRIVERS_USE_LATEST=0 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 HIDE_EMPTY_DRIVES=0 settings_summary | tail -n +2 | cut -f2 | tr "\n" "|"')" \
+       == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-us) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|" ] \
+    && pass "every Advanced Options toggle changes what the confirmation screens show" \
+    || fail "a setting is not reflected in settings_summary"
+
+  #the summary must never abort a run, however little can be read back about the chosen drive
+  [ "$(run_in_engine 'DEVICE=/dev/definitely-not-here settings_summary >/dev/null 2>&1; echo $?')" == 0 ] \
+    && pass "an unreadable target drive does not break the summary" \
+    || fail "settings_summary fails when the drive details cannot be read"
+
+  #yad renders its text as pango markup, so an ISO filename containing markup characters would corrupt the window
+  markup_expected="- Windows source: <b>/tmp/a&lt;b&gt;&amp;c.iso</b>"
+  [ "$(run_in_engine 'SOURCE_FILE="/tmp/a<b>&c.iso"; settings_summary_markup | sed -n "/Windows source/p"')" == "$markup_expected" ] \
+    && [ "$(run_in_engine 'settings_summary_markup | grep -c "^- Target drive: <b>/dev/does-not-exist</b>$"')" == 1 ] \
+    && grep -qF 'window_text="$(settings_summary_markup)' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the Linux overview escapes pango markup in every value it shows" \
+    || fail "a value containing markup characters would corrupt the Linux overview window"
+
+  #the macOS confirmation screen and the CLI banner list the same settings, from the same renderer
+  [ "$(run_in_engine 'settings_summary_plain | sed -n 2p')" == 'Target drive: /dev/does-not-exist' ] \
+    && [ "$(run_in_engine 'settings_summary_plain "  %-24s %s\n" | sed -n 2p')" == '  Target drive:            /dev/does-not-exist' ] \
+    && grep -qF 'confirm_summary="$(settings_summary_plain)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "settings_summary_plain '  %-24s %s" "$REPO_DIR/install-wor.sh" \
+    && pass "the CLI banner and the macOS confirmation screen render one shared summary" \
+    || fail "the CLI banner and the macOS confirmation screen do not share a renderer"
+
+  #a Pi 3 or Pi 5 has no 3 GB RAM limit, so offering the line at all would be misleading
+  ! run_in_engine 'RPI_MODEL=5 settings_summary' | grep -q 'Pi 4 RAM unlock' \
+    && run_in_engine 'RPI_MODEL=4 settings_summary' | grep -q 'Pi 4 RAM unlock' \
+    && pass "the Pi 4 RAM unlock line appears only for a Pi 4" \
+    || fail "the Pi 4 RAM unlock line is shown for the wrong models"
+
+  [ "$(run_in_engine 'for RPI_MODEL in 3 4 5 ;do uefi_pinned_version ;done | tr "\n" " "')" == "$(grep -oE "UEFI_VER_PI[345]='[^']*'" "$REPO_DIR/install-wor.sh" | cut -d"'" -f2 | tr '\n' ' ')" ] \
+    && pass "uefi_pinned_version returns the pinned firmware for every supported model" \
+    || fail "uefi_pinned_version does not match the pinned UEFI versions"
+
+  #the CLI used to write the firmware's own config.txt while the GUI wrote the shipped template
+  config_from_engine="$(run_in_engine 'set_default_config_txt; printf "%s" "$CONFIG_TXT"')"
+  [ -n "$config_from_engine" ] \
+    && [ "$config_from_engine" == "$(printf '\n\n%s' "$(cat "$REPO_DIR/config-templates/pi4.config.txt")")" ] \
+    && [ "$(run_in_engine 'CONFIG_TXT=mine; set_default_config_txt; printf "%s" "$CONFIG_TXT"')" == mine ] \
+    && grep -qF 'set_default_config_txt' "$REPO_DIR/install-wor.sh" \
+    && pass "a CLI run and a GUI run start from the same shipped config.txt" \
+    || fail "the CLI and the GUI do not agree on the default config.txt"
+
+  #the two front-ends used to keep their own export lists, so one could silently drop a setting
+  exported_settings="$(run_in_engine 'SOURCE_FILE=/tmp/x.iso; set_default_config_txt; export_installer_settings
+    comm -23 <(printf "%s\n" "${WOR_INSTALLER_SETTINGS[@]}" | sort -u) <(bash -c compgen\ -e | sort -u)')"
+  [ -z "$exported_settings" ] \
+    && [ "$(run_in_engine 'printf "%s\n" "${WOR_INSTALLER_SETTINGS[@]}" | sort | uniq -d | wc -l | tr -d " "')" == 0 ] \
+    && pass "export_installer_settings hands the installer every collected setting exactly once" \
+    || fail "these settings never reach the installer: $exported_settings"
+
+  #shared behaviour belongs to install-wor.sh; a second copy in the GUI silently shadows it on sourcing
+  duplicate_functions="$(comm -12 \
+    <(grep -oE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor.sh" | sort -u) \
+    <(grep -oE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | sort -u))"
+  [ -z "$duplicate_functions" ] \
+    && pass "no function is defined in both install-wor.sh and install-wor-gui.sh" \
+    || fail "these functions are defined twice and will drift apart: $duplicate_functions"
+
+  #the GUI's own helpers call shared ones, so the source has to happen before any of them are defined
+  gui_source_line="$(grep -n 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
+  gui_first_function_line="$(grep -nE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
+  [ -n "$gui_source_line" ] && [ -n "$gui_first_function_line" ] \
+    && [ "$gui_source_line" -lt "$gui_first_function_line" ] \
+    && [ "$(grep -c 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
+    && pass "the GUI sources install-wor.sh once, before it defines anything of its own" \
+    || fail "the GUI defines functions before sourcing install-wor.sh, so shared ones are unavailable"
+
+  #every shared name the GUI relies on has to survive as a function, on both platforms
+  missing_shared="$(run_in_engine 'for fn in error warning status echo_red gui_error_dialog settings_summary \
+    cache_mode_label install_mode_label uefi_pinned_version set_default_config_txt describe_device human_size \
+    export_installer_settings read_config_template drive_capability validate_install_mode is_safe_target_device \
+    list_bids list_bids_supported get_bid get_os_name list_langs default_win_lang get_device_name get_size_raw \
+    get_file_size setup ;do declare -F "$fn" >/dev/null || echo "$fn" ;done')"
+  [ -z "$missing_shared" ] \
+    && pass "install-wor.sh exports every shared function the GUI depends on" \
+    || fail "the GUI calls these functions, but install-wor.sh does not define them: $missing_shared"
+
+  #`warning` was called by the self-updater without ever being defined, so a failed update printed nothing
+  [ "$(run_in_engine 'warning "update failed" 2>&1 | sed "s/\x1b\[[0-9;]*m//g"')" == 'update failed' ] \
+    && grep -qF 'warning "Automatic update failed. Continuing..."' "$REPO_DIR/install-wor.sh" \
+    && pass "a failed automatic update reports itself instead of dying on an undefined command" \
+    || fail "the self-updater still calls an undefined warning command"
+
+  #ISO acceptance used to be written out three times, so the CLI and the GUI could disagree on what is usable
+  iso_dir="$(mktemp -d)"
+  : > "$iso_dir/small.iso"
+  : > "$iso_dir/notanimage.txt"
+  #sparse, so these cost nothing on disk. 2 GB sits just under the 3 GB floor, making it a boundary test
+  dd if=/dev/zero of="$iso_dir/22631.2861_ARM64_en-us.iso" bs=1 count=0 seek=4g >/dev/null 2>&1
+  dd if=/dev/zero of="$iso_dir/truncated.iso" bs=1 count=0 seek=2g >/dev/null 2>&1
+  [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/22631.2861_ARM64_en-us.iso"; echo "rc=$?"')" == 'rc=0' ] \
+    && [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/missing.iso" >/dev/null; echo "rc=$?"')" == 'rc=1' ] \
+    && [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/notanimage.txt" >/dev/null; echo "rc=$?"')" == 'rc=1' ] \
+    && [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/truncated.iso" >/dev/null; echo "rc=$?"')" == 'rc=1' ] \
+    && [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/truncated.iso" 2>&1')" == 'This file is smaller than 3GB and is probably incomplete.' ] \
+    && [ "$(grep -cF 'validate_iso_file' "$REPO_DIR/install-wor.sh")" == 3 ] \
+    && [ "$(grep -cF 'validate_iso_file' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
+    && pass "the CLI and the GUI accept and reject exactly the same ISO files" \
+    || fail "ISO validation is duplicated or disagrees between the CLI and the GUI"
+
+  #the build number and language are read back out of the filename, in both front-ends
+  [ "$(run_in_engine 'bid_from_iso_name "'"$iso_dir"'/22631.2861_ARM64_en-us.iso"')" == '22631.2861' ] \
+    && [ "$(run_in_engine 'lang_from_iso_name "'"$iso_dir"'/22631.2861_ARM64_EN-US.iso"')" == 'en-us' ] \
+    && [ -z "$(run_in_engine 'bid_from_iso_name "'"$iso_dir"'/small.iso"')" ] \
+    && ! grep -qF "tr '_ -' " "$REPO_DIR/install-wor-gui.sh" \
+    && pass "ISO build number and language are inferred by one shared function" \
+    || fail "ISO build number or language inference is duplicated or wrong"
+
+  #the CLI listed only winfiles_from_iso_*, the GUI listed both, from two different pipelines
+  winfiles_dir="$(mktemp -d)"
+  mkdir -p "$winfiles_dir/winfiles_22631.2861_en-us" "$winfiles_dir/winfiles_from_iso_22000.1_de-de" \
+    "$winfiles_dir/notwinfiles_9_9" "$winfiles_dir/winfiles_incomplete_xx"
+  touch "$winfiles_dir/winfiles_22631.2861_en-us/alldone" "$winfiles_dir/winfiles_from_iso_22000.1_de-de/alldone" \
+    "$winfiles_dir/notwinfiles_9_9/alldone"
+  [ "$(run_in_engine 'list_cached_winfiles "'"$winfiles_dir"'" | tr "\n" " "')" == 'winfiles_from_iso_22000.1_de-de winfiles_22631.2861_en-us ' ] \
+    && [ "$(run_in_engine 'bid_from_winfiles_dir winfiles_from_iso_22000.1_de-de')" == '22000.1' ] \
+    && [ "$(run_in_engine 'lang_from_winfiles_dir winfiles_22631.2861_en-us')" == 'en-us' ] \
+    && ! grep -qF "name 'alldone'" "$REPO_DIR/install-wor-gui.sh" \
+    && pass "cached Windows files are discovered the same way by the CLI and the GUI" \
+    || fail "cached Windows file discovery is duplicated or lists the wrong folders"
+
+  #the GUI enumerated drives with its own lsblk call, so a filter added here would not apply there
+  ! grep -qF 'lsblk -I 8,179,259' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'for device in $(list_dev_paths) ;do' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'list_dev_paths() {' "$REPO_DIR/install-wor.sh" \
+    && [ "$(grep -cF 'lsblk -I 8,179,259' "$REPO_DIR/install-wor.sh")" == 1 ] \
+    && pass "both front-ends enumerate candidate drives through one function" \
+    || fail "drive enumeration is duplicated between the CLI and the GUI"
+
+  #en-us has to come first so it is the preselected row, and both GUIs offer the same order
+  [ "$(run_in_engine 'list_langs_preferred | cut -d: -f1 | head -n1')" == 'en-us' ] \
+    && [ "$(run_in_engine 'list_langs_preferred | wc -l | tr -d " "')" == "$(run_in_engine 'list_langs | wc -l | tr -d " "')" ] \
+    && [ "$(grep -cF 'list_langs_preferred' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && run_in_engine 'is_known_win_lang en-us' \
+    && ! run_in_engine 'is_known_win_lang en' \
+    && pass "both GUIs offer the same language order and accept the same codes" \
+    || fail "the language list differs between front-ends, or an invalid code is accepted"
+
+  rm -rf "$iso_dir" "$winfiles_dir"
+
+  #one entry point, but never a guess: DISPLAY is also set over SSH and in CI, and this tool erases disks
+  [ "$(cd "$REPO_DIR" && ./install-wor.sh --help | head -n1)" == "WoR-Flasher $(run_in_engine 'printf %s "$WOR_FLASHER_VERSION"')" ] \
+    && grep -qF 'exec "$DIRECTORY/install-wor-gui.sh" "$@"' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qE 'if .*-n .\$DISPLAY|command -v yad .*&&.*exec' "$REPO_DIR/install-wor.sh" \
+    && [ "$(cd "$REPO_DIR" && ./install-wor.sh --bogus 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; echo "rc=${PIPESTATUS[0]}")" == "Unknown argument '--bogus'. Run 'install-wor.sh --help' for usage.
+rc=1" ] \
+    && pass "install-wor.sh --gui hands over explicitly and never auto-detects a display" \
+    || fail "the CLI entry point is missing, or it guesses whether to open a GUI"
+
+  #a bug report is unactionable without knowing which version produced it
+  version="$(run_in_engine 'printf %s "$WOR_FLASHER_VERSION"')"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    && [ "$(cd "$REPO_DIR" && ./install-wor.sh --version)" == "WoR-Flasher $version" ] \
+    && [ "$(cd "$REPO_DIR" && ./install-wor.sh -V)" == "WoR-Flasher $version" ] \
+    && [ "$(run_in_engine 'settings_summary | head -n1')" == "$(printf 'WoR-Flasher version\t%s' "$version")" ] \
+    && pass "the version is a single semantic value, reported by --version and on every run" \
+    || fail "the version is missing, malformed, or not reported: '$version'"
+
+  #the version history and the README must not describe different releases
+  grep -qF "#$version - First versioned release of this fork." "$REPO_DIR/install-wor.sh" \
+    && grep -qF "**$version** — First versioned release of this fork." "$REPO_DIR/README.md" \
+    && grep -qF "version-$version-" "$REPO_DIR/README.md" \
+    && pass "the version history in install-wor.sh, the README and the version badge all agree" \
+    || fail "the version history or the README badge is out of step with WOR_FLASHER_VERSION"
+
+  #GitHub only surfaces these community files if they are named exactly right and are tracked
+  missing_community=''
+  for community_file in LICENSE NOTICE README.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md \
+    .github/FUNDING.yml .github/PULL_REQUEST_TEMPLATE.md .github/ISSUE_TEMPLATE/config.yml ;do
+    [ -s "$REPO_DIR/$community_file" ] || missing_community="$missing_community $community_file"
+  done
+  [ -z "$missing_community" ] \
+    && grep -qF 'GNU GENERAL PUBLIC LICENSE' "$REPO_DIR/LICENSE" \
+    && grep -qF 'Version 3, 29 June 2007' "$REPO_DIR/LICENSE" \
+    && pass "every community health file is present and the license is GPL-3.0" \
+    || fail "these community health files are missing or empty:$missing_community"
+
+  #upstream ships no license, so the fork must say so rather than implying a grant it cannot make
+  grep -qF 'ships no LICENSE file' "$REPO_DIR/NOTICE" \
+    && grep -qF 'https://github.com/Botspot/wor-flasher' "$REPO_DIR/NOTICE" \
+    && grep -qF 'does not distribute' "$REPO_DIR/NOTICE" 2>/dev/null || grep -qF 'downloads, but does not redistribute' "$REPO_DIR/NOTICE" \
+    && grep -qF '[NOTICE](NOTICE)' "$REPO_DIR/README.md" \
+    && pass "the upstream licensing caveat is recorded in NOTICE and linked from the README" \
+    || fail "the upstream licensing caveat is missing"
+
+  #attribution is the one thing a fork must never get wrong
+  missing_attribution=''
+  for attribution in 'https://github.com/Botspot' 'https://blackoutsecure.app' \
+    'https://linktr.ee/billmcilhargey' 'https://discord.gg/RXSTvaUvuu' 'https://discord.gg/jQCpfVK' \
+    'https://github.com/sponsors/Botspot' 'https://uupdump.net' ;do
+    grep -qF "$attribution" "$REPO_DIR/README.md" || missing_attribution="$missing_attribution $attribution"
+  done
+  [ -z "$missing_attribution" ] \
+    && grep -qF 'github: [Botspot]' "$REPO_DIR/.github/FUNDING.yml" \
+    && pass "the README credits the original author, this fork's maintainer and every upstream project" \
+    || fail "the README is missing this attribution:$missing_attribution"
+
+  #a table of contents that points at a heading which no longer exists is worse than none
+  broken_anchors=''
+  while read -r anchor ;do
+    [ -z "$anchor" ] && continue
+    #GitHub slugs: lowercase, punctuation dropped, spaces to hyphens
+    grep -qE "^#{2,4} " "$REPO_DIR/README.md" || break
+    grep -E "^#{2,4} " "$REPO_DIR/README.md" \
+      | sed 's/^#* //; s/!\[[^]]*\]([^)]*)//g; s/`//g' \
+      | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9 -]//g; s/^ *//; s/ *$//; s/ /-/g' \
+      | grep -qx "$anchor" || broken_anchors="$broken_anchors #$anchor"
+  done < <(grep -oE '^\s*- \[[^]]+\]\(#[a-z0-9-]+\)' "$REPO_DIR/README.md" | grep -oE '#[a-z0-9-]+' | tr -d '#')
+  [ -z "$broken_anchors" ] \
+    && pass "every table-of-contents entry points at a heading that exists" \
+    || fail "the table of contents links to headings that do not exist:$broken_anchors"
 }
 
 make_disk() { #Input: size, name. Output: loop device path
@@ -481,6 +1093,30 @@ DIRECTORY="$REPO_DIR"
 #shellcheck disable=SC1090
 source "$REPO_DIR/install-wor.sh" source >/dev/null 2>&1
 
+#configure_pe_settings_ini edits cached payload, so it has to re-record the manifest or every run re-downloads the PE installer
+pe_cache_dir="$(mktemp -d)"
+mkdir -p "$pe_cache_dir/peinstaller/winpe/2"
+printf '[WoR Configuration File]\n' > "$pe_cache_dir/peinstaller/winpe/2/settings.ini"
+printf 'payload\n' > "$pe_cache_dir/peinstaller/winpe/2/other.bin"
+(
+  cd "$pe_cache_dir" || exit 1
+  #both are read by the sourced install-wor.sh helpers below
+  #shellcheck disable=SC2034
+  USE_CACHE=1
+  #shellcheck disable=SC2034
+  HIDE_EMPTY_DRIVES=1
+  mark_cache "$pe_cache_dir/peinstaller" PE_TOKEN >/dev/null 2>&1 || exit 1
+  configure_pe_settings_ini || exit 1
+  grep -q '^HideEmptyDrives=1$' "$pe_cache_dir/peinstaller/winpe/2/settings.ini" || exit 1
+  cache_is_current "$pe_cache_dir/peinstaller" PE_TOKEN || exit 1
+  #a genuinely altered payload must still be rejected
+  printf 'tampered\n' > "$pe_cache_dir/peinstaller/winpe/2/other.bin"
+  cache_is_current "$pe_cache_dir/peinstaller" PE_TOKEN && exit 1
+  exit 0
+) && pass "editing the WoR-PE settings keeps the cache valid while tampering is still detected" \
+  || fail "configure_pe_settings_ini invalidates the PE installer cache, forcing a re-download every run"
+rm -rf "$pe_cache_dir"
+
 progress_test_dir="$(mktemp -d)"
 printf 'progress helper fixture\n' > "$progress_test_dir/source"
 original_sudo_function="$(declare -f sudo)"
@@ -535,7 +1171,7 @@ if command -v jq >/dev/null ;then
     && grep -qF -- '-A 1:clear:63 -A 2:clear:63' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'boot_size_mb=$((boot_payload_kb / 1024 + 512))' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'diskutil partitionDisk' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'diskutil unmountDisk force "$DEVICE" >/dev/null || error "Failed to unmount newly created partitions on $DEVICE."' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Failed to unmount newly created partitions on $DEVICE."' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'raw_part2="/dev/r${PART2#/dev/}"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'newfs_exfat -R -v WOR_INSTALL "$raw_part2"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'less than 1 GiB remains unallocated for the Windows target partition' "$REPO_DIR/install-wor.sh" \

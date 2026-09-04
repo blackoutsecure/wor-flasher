@@ -1,7 +1,41 @@
 #!/bin/bash
 
-#Written by Botspot
-#This script is an automation for the tutorial that can be found here: https://worproject.com/guides/how-to-install/from-other-os
+#WoR-Flasher - install Windows 10/11 on a Raspberry Pi from Linux or macOS.
+#Originally written by Botspot: https://github.com/Botspot/wor-flasher
+#Automates this tutorial: https://worproject.com/guides/how-to-install/from-other-os
+#
+#This is the Blackout Secure fork: https://github.com/blackoutsecure/wor-flasher
+#Upstream has never published a git tag or a GitHub release, so this fork keeps its own
+#version line. WOR_FLASHER_VERSION below is the single source of truth for it.
+#
+#Version history
+#---------------
+#1.0.0 - First versioned release of this fork.
+#        macOS host support: diskutil/hdiutil drive discovery, sgdisk GPT partitioning that keeps
+#          WOR_BOOT as partition 1 (an extra ESP made the Pi 4 fall back to PXE boot), and a native
+#          AppKit/JXA wizard, progress window, Advanced Options window and error dialogs.
+#        No visible terminal in GUI mode: install-wor.sh reports progress over WOR_GUI_PROGRESS_FILE
+#          and both front-ends render it (AppKit on macOS, yad on Linux). Administrator access is
+#          requested through a native password dialog on both platforms.
+#        Post-flash verification of partitions, boot files and checksums (SKIP_IMAGE_VERIFICATION).
+#        Offline Windows OOBE via a shipped Autounattend.xml (OOBE_NETWORK_BYPASS, default on).
+#        Automatic Pi 4 3 GB RAM unlock after the WoR-PE reboot (PI4_AUTO_DISABLE_3GB).
+#        Pinned, overridable UEFI firmware and driver versions; Pi 4 stays on UEFI v1.51 because
+#          v1.52 does not boot reliably from microSD.
+#        Cache modes with SHA-256 payload manifests (USE_CACHE), free-space preflight, and
+#          HideEmptyDrives written into the cached WoR-PE settings.ini.
+#        Editable config.txt sourced from config-templates/, applied by the CLI and the GUI alike
+#          (APPLY_CUSTOM_CONFIG_TXT).
+#        One engine, two front-ends: install-wor-gui.sh sources this script and adds only windows.
+#        Explicit entry point '--gui'; the front-end is never chosen by sniffing DISPLAY.
+#        Test suite (tests/run-tests.sh) plus ShellCheck, macOS and Linux dry-run CI.
+#0.x   - Upstream Botspot releases, never tagged. Highlights, oldest first: initial WoR automation,
+#        self-updater, "next steps" window, complete rewrite to use ESD releases, download-to-RAM
+#        support, Pi 5 support, GitHub API fallback for UEFI firmware, empty block devices filtered
+#        out of the drive list, and SHA-256 hashed ESD image handling.
+
+#Single source of truth for this fork's version. Reported by '--version'.
+WOR_FLASHER_VERSION='1.0.0'
 
 #shared app title, used for window titles and dialog titles across this file and install-wor-gui.sh
 : "${WOR_APP_TITLE:=Windows on Raspberry}"
@@ -16,7 +50,7 @@ is_macos() {
   [ "$HOST_OS" == Darwin ]
 }
 
-sudo() { #On the macOS GUI, show a native password dialog instead of blocking the hidden Terminal window.
+sudo() { #On the GUI, show a native password dialog instead of blocking a hidden/absent terminal.
   if is_macos && [ "$RUN_MODE" == gui ];then
     if [ -z "$MACOS_ASKPASS" ] && MACOS_ASKPASS="$(mktemp)" && chmod +x "$MACOS_ASKPASS";then
       cat > "$MACOS_ASKPASS" <<'ASKPASS'
@@ -34,6 +68,23 @@ ASKPASS
     fi
     if [ -n "$MACOS_ASKPASS" ];then
       WOR_FLASH_TARGET="$DEVICE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"
+      return
+    fi
+  elif ! is_macos && [ "$RUN_MODE" == gui ];then
+    if [ -z "$LINUX_ASKPASS" ] && LINUX_ASKPASS="$(mktemp)" && chmod +x "$LINUX_ASKPASS";then
+      cat > "$LINUX_ASKPASS" <<'ASKPASS'
+#!/bin/bash
+prompt="WoR-Flasher needs administrator access to flash the drive.\n\nFormatting $WOR_FLASH_TARGET\n\nThere is no turning back now."
+if command -v yad >/dev/null ;then
+  yad --center --window-icon="$WOR_ICON_PATH" --title="$WOR_APP_TITLE" --entry --hide-text --text="$prompt"
+elif command -v zenity >/dev/null ;then
+  zenity --password --title="$WOR_APP_TITLE"
+fi
+ASKPASS
+      register_file_cleanup "$LINUX_ASKPASS"
+    fi
+    if [ -n "$LINUX_ASKPASS" ];then
+      WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$DIRECTORY/logo.png" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"
       return
     fi
   fi
@@ -78,7 +129,12 @@ register_file_cleanup() { #Input: file path
 gui_error_dialog() { #Input: error message
   local plain icon_path
   plain="$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
-  [ -n "$WOR_GUI_ERROR_MARKER" ] && : > "$WOR_GUI_ERROR_MARKER"
+  #write the error marker before showing the dialog, so the GUI doesn't race with the installer
+  if [ -n "$WOR_GUI_ERROR_MARKER" ] ;then
+    mkdir -p "$(dirname "$WOR_GUI_ERROR_MARKER")" 2>/dev/null
+    touch "$WOR_GUI_ERROR_MARKER" 2>/dev/null
+    sync 2>/dev/null || true
+  fi
   [ -f "$DIRECTORY/logo.png" ] && icon_path="$DIRECTORY/logo.png" || icon_path=''
   if command -v osascript >/dev/null ;then
     osascript -l JavaScript - "$plain" "$icon_path" "$WOR_APP_TITLE" <<'JXA' >/dev/null 2>&1
@@ -167,8 +223,10 @@ status() { #blue text to indicate what is happening
   if [[ "$1" == '-'* ]] && [ ! -z "$2" ];then
     printf '\033[96m%b\033[0m' "$2" 1>&2
     [ "$1" == '-n' ] || printf '\n' 1>&2
+    emit_gui_progress "STATUS	$2"
   else
     printf '\033[96m%b\033[0m\n' "$1" 1>&2
+    emit_gui_progress "STATUS	$1"
   fi
 }
 
@@ -180,9 +238,67 @@ echo_red() { #announce the failure of a nonfatal action
   printf '\033[91m%b\033[0m\n' "$1" 1>&2
 }
 
+warning() { #Input: message. A nonfatal problem the user should know about, but which does not stop the run.
+  printf '\033[93m%b\033[0m\n' "$1" 1>&2
+}
+
+emit_gui_progress() { #Input: line. Lets a native GUI progress window show live status without a visible terminal.
+  [ -n "$WOR_GUI_PROGRESS_FILE" ] && printf '%s\n' "$1" >> "$WOR_GUI_PROGRESS_FILE" 2>/dev/null
+}
+
+emit_gui_substep() { #Input: percent complete of the current step, so the bar moves within a step too.
+  [ -n "$WOR_GUI_PROGRESS_FILE" ] && printf 'SUBSTEP\t%s\n' "$1" >> "$WOR_GUI_PROGRESS_FILE" 2>/dev/null
+}
+
+gui_percent_stream() { #Mirrors a progress stream back out while reporting any percentage it carries.
+  local line
+  while IFS= read -r line ;do
+    printf '%s\n' "$line" 1>&2
+    [[ "$line" =~ ([0-9]{1,3})% ]] && emit_gui_substep "${BASH_REMATCH[1]}"
+  done
+}
+
+with_progress_capture() { #Input: command. Feeds the GUI bar from tools that already print a percentage.
+  if [ -n "$WOR_GUI_PROGRESS_FILE" ];then
+    #pv and wimlib redraw with carriage returns, which read would otherwise never see as lines
+    "$@" 2> >(tr '\r' '\n' | gui_percent_stream)
+  else
+    "$@"
+  fi
+}
+
+clear_cached_components() { #Deletes every cached download, one at a time so the GUI can show it happening.
+  local targets=() target s seen removed=0 total
+  #winfiles_from_iso_* is also matched by winfiles_*, so skip anything already listed
+  for target in "$PWD/peinstaller" "$PWD/driverpackage" "$PWD"/pi[345]-uefipackage "$PWD"/winfiles_* ;do
+    #an unmatched glob stays literal, so only keep entries that exist
+    [ -e "$target" ] || continue
+    seen=0
+    for s in "${targets[@]}" ;do [ "$s" == "$target" ] && seen=1 && break ;done
+    [ "$seen" == 0 ] && targets+=("$target")
+  done
+  [ -n "$DIRECTORY" ] && [ -e "$DIRECTORY/cache" ] && targets+=("$DIRECTORY/cache")
+  total="${#targets[@]}"
+  if [ "$total" == 0 ];then
+    status "Nothing cached to delete"
+    emit_gui_substep 100
+  else
+    for target in "${targets[@]}" ;do
+      status "Deleting $(basename "$target") ($((removed+1)) of $total)"
+      rm -rf "$target"
+      removed=$((removed+1))
+      emit_gui_substep $((removed * 100 / total))
+    done
+  fi
+  [ -z "$DIRECTORY" ] || mkdir -p "${DIRECTORY}/cache"
+}
+
 phase() { #Input: message. A numbered status() line marking one of the major installation stages.
   STEP_NUM=$((STEP_NUM+1))
   status "[Step $STEP_NUM/$STEP_TOTAL] $1"
+  emit_gui_progress "STEP	$STEP_NUM	$STEP_TOTAL	$1"
+  #must follow the STEP line: the window reads the newest SUBSTEP as belonging to the current step
+  emit_gui_substep 0
 }
 
 cli_pause() {
@@ -211,9 +327,22 @@ resolve_path() { #Input: path. Output: absolute path, using GNU or BSD tools whe
   fi
 }
 
+is_wsl() { #WSL reports itself as Linux, so uname alone cannot rule it out
+  [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSLENV:-}" ] || grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null
+}
+
 require_linux_host() {
+  if is_wsl ;then
+    #WSL cannot reach USB storage without usbipd, and lsblk there lists WSL's own virtual disks as erasable targets
+    error "WoR-Flasher does not support WSL.
+WSL cannot access USB drives directly, and the drives it does list are WSL's own virtual disks.
+Erasing one of those would damage your WSL installation.
+On Windows, use the official Windows on Raspberry Imager instead: https://worproject.com/downloads
+To use WoR-Flasher, run it from a Debian-based Linux host or macOS."
+  fi
   [ "$HOST_OS" == Linux ] || is_macos && return 0
-  error "WoR-Flasher supports Linux and macOS hosts only. This host is $HOST_OS."
+  error "WoR-Flasher supports Linux and macOS hosts only. This host is $HOST_OS.
+On Windows, use the official Windows on Raspberry Imager instead: https://worproject.com/downloads"
 }
 
 require_macos_tools() {
@@ -281,7 +410,7 @@ darwin_list_device_paths() { #Output: external physical whole-disk paths suitabl
   done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
 }
 
-darwin_human_size() { #Input: size in bytes. Output: human-readable size (e.g. 1.9 TB)
+human_size() { #Input: size in bytes. Output: human-readable size (e.g. 1.9 TB)
   awk -v bytes="$1" 'BEGIN {
     units[0]="B"; units[1]="KB"; units[2]="MB"; units[3]="GB"; units[4]="TB"
     size = bytes + 0
@@ -324,7 +453,7 @@ darwin_list_device_choices() { #Output: tab-delimited safe disk path, size, medi
     #fields use readable spacing instead of raw tabs, which render squished together
     printf '%s\t%s   %s   Labels: %s   Volumes: %s\n' \
       "$device" \
-      "$(darwin_human_size "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')")" \
+      "$(human_size "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')")" \
       "$(darwin_device_value "$device" '.MediaName // .DeviceIdentifier')" \
       "$label_names" \
       "$volume_names"
@@ -338,11 +467,38 @@ darwin_mount_iso() { #Input: ISO path. Sets ISO_MOUNTPOINT and ISO_DEVICE.
   ISO_DEVICE="$(plutil -convert json -o - - <<<"$details" | jq -er '."system-entities"[] | select(.["mount-point"] != null) | .["dev-entry"]' | head -n1)" || return 1
 }
 
+install_windows_setup_configuration() { #Input: mounted boot partition, mounted installation partition.
+  local auto_disable_3gb=0 destination
+  [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ] && auto_disable_3gb=1
+  [ "$OOBE_NETWORK_BYPASS" == 1 ] || [ "$auto_disable_3gb" == 1 ] || return 0
+
+  if [ "$auto_disable_3gb" == 1 ];then
+    for destination in "$1/Pi4Disable3GB.ps1" "$2/Pi4Disable3GB.ps1";do
+      read_config_template pi4-ram-unlock.ps1 | sudo tee "$destination" >/dev/null
+    done
+  fi
+
+  for destination in "$1/Autounattend.xml" "$2/Autounattend.xml";do
+    {
+      cat <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+EOF
+      [ "$auto_disable_3gb" == 1 ] && read_config_template pi4-ram-unlock-specialize.xml
+      [ "$OOBE_NETWORK_BYPASS" == 1 ] && read_config_template oobe-network-bypass.xml
+      cat <<'EOF'
+</unattend>
+EOF
+    } | sudo tee "$destination" >/dev/null
+  done
+}
+
 darwin_flash_device() {
   is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
   local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device raw_part1 raw_part2 attempt
   sgdisk_bin="$(command -v sgdisk)" || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."
-  if ! sudo -v >/dev/null 2>&1;then
+  #the GUI already authenticated before opening its progress window; only ask again if that credential is gone
+  if ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1 ;then
     error "Administrator authentication failed or was canceled. Enter the correct macOS password and try again."
   fi
   raw_device="/dev/r${DEVICE#/dev/}"
@@ -400,6 +556,7 @@ darwin_flash_device() {
   echo "  - EFI files"
   sudo cp -r "$PWD/peinstaller/efi" "$boot_mount" || error "Failed to copy EFI files to $boot_mount"
   echo "  - PE installer"
+  configure_pe_settings_ini
   sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add peinstaller/winpe/2 /" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim"
 
   if [ "$RPI_MODEL" == 5 ];then
@@ -412,12 +569,19 @@ darwin_flash_device() {
     sudo wimupdate "$boot_mount/sources/boot.wim" 2 --command="add driverpackage /drivers" || error "The wimupdate command failed to add $PWD/driverpackage to boot.wim"
   fi
 
+  echo "  - Windows Setup configuration"
+  install_windows_setup_configuration "$boot_mount" "$win_mount" || error "Failed to install the Windows Setup configuration."
+
   echo "  - UEFI firmware"
   sudo cp -r "$PWD/pi${RPI_MODEL}-uefipackage"/* "$boot_mount" || error "Failed to copy UEFI firmware to $boot_mount"
-  [ -z "$CONFIG_TXT" ] || echo "$CONFIG_TXT" | sudo tee "$boot_mount/config.txt" >/dev/null
+  [ -z "$CONFIG_TXT" ] || [ "$APPLY_CUSTOM_CONFIG_TXT" != 1 ] || echo "$CONFIG_TXT" | sudo tee "$boot_mount/config.txt" >/dev/null
   [ "$RPI_MODEL" != 3 ] || sudo dd if="$PWD/peinstaller/pi3/gptpatch.img" of="/dev/r${DEVICE#/dev/}" conv=fsync || error "Failed to apply the Pi3 GPT partition-table fix to $DEVICE"
 
-  verify_written_image "$DEVICE" "$PART1" "$PART2" "$boot_mount" "$win_mount" "$PWD/$winfiles/install.wim"
+  if [ "$SKIP_IMAGE_VERIFICATION" == 1 ];then
+    echo_red "Skipping written-image verification (SKIP_IMAGE_VERIFICATION=1). This is not recommended."
+  else
+    verify_written_image "$DEVICE" "$PART1" "$PART2" "$boot_mount" "$win_mount" "$PWD/$winfiles/install.wim"
+  fi
   sudo diskutil unmountDisk "$DEVICE" || echo_red "Warning: failed to unmount $DEVICE"
   sudo diskutil eject "$DEVICE" || echo_red "Warning: failed to eject $DEVICE"
   phase "$WOR_APP_TITLE script has completed."
@@ -445,6 +609,23 @@ sha1_file() { #Input: file. Output: SHA1 hash
   fi
 }
 
+configure_pe_settings_ini() { #Sets HideEmptyDrives in the cached WoR-PE settings.ini before it's added to boot.wim.
+  local settings_ini="$PWD/peinstaller/winpe/2/settings.ini" tmp_ini token
+  [ -f "$settings_ini" ] || return 0
+  tmp_ini="$(mktemp)" || return 1
+  if grep -q '^HideEmptyDrives=' "$settings_ini";then
+    awk -v val="$HIDE_EMPTY_DRIVES" '{ if ($0 ~ /^HideEmptyDrives=/) print "HideEmptyDrives=" val; else print }' "$settings_ini" > "$tmp_ini"
+  else
+    cat "$settings_ini" > "$tmp_ini"
+    printf 'HideEmptyDrives=%s\n' "$HIDE_EMPTY_DRIVES" >> "$tmp_ini"
+  fi
+  mv "$tmp_ini" "$settings_ini"
+  #this edits cached payload, so re-record the manifest or the next run treats the cache as corrupt and re-downloads
+  token="$(cat "$PWD/peinstaller/.wor-flasher-version" 2>/dev/null)"
+  [ -n "$token" ] && mark_cache "$PWD/peinstaller" "$token"
+  return 0
+}
+
 sha256_file() { #Input: file. Output: SHA256 hash
   if command -v sha256sum >/dev/null ;then
     sha256sum "$1" | awk '{print $1}'
@@ -456,7 +637,7 @@ sha256_file() { #Input: file. Output: SHA256 hash
 copy_file_with_progress() { #Input: progress label, source file, destination file
   local label="$1" source="$2" destination="$3" size pipe_status
   size="$(get_file_size "$source")" || return 1
-  pv -f -N "$label" -s "$size" "$source" | sudo tee "$destination" >/dev/null
+  with_progress_capture pv -f -N "$label" -s "$size" "$source" | sudo tee "$destination" >/dev/null
   pipe_status=("${PIPESTATUS[@]}")
   [ "${pipe_status[0]}" == 0 ] && [ "${pipe_status[1]}" == 0 ]
 }
@@ -464,7 +645,7 @@ copy_file_with_progress() { #Input: progress label, source file, destination fil
 copy_local_file_with_progress() { #Input: progress label, source file, destination file
   local label="$1" source="$2" destination="$3" size pipe_status
   size="$(get_file_size "$source")" || return 1
-  pv -f -N "$label" -s "$size" "$source" | tee "$destination" >/dev/null
+  with_progress_capture pv -f -N "$label" -s "$size" "$source" | tee "$destination" >/dev/null
   pipe_status=("${PIPESTATUS[@]}")
   [ "${pipe_status[0]}" == 0 ] && [ "${pipe_status[1]}" == 0 ]
 }
@@ -486,9 +667,9 @@ sha1_file_with_progress() { #Input: progress label, file. Output: SHA1 hash
   local label="$1" file="$2" size
   size="$(get_file_size "$file")" || return 1
   if command -v sha1sum >/dev/null ;then
-    (set -o pipefail; pv -f -N "$label" -s "$size" "$file" | sha1sum | awk '{print $1}')
+    (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | sha1sum | awk '{print $1}')
   else
-    (set -o pipefail; pv -f -N "$label" -s "$size" "$file" | shasum -a 1 | awk '{print $1}')
+    (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | shasum -a 1 | awk '{print $1}')
   fi
 }
 
@@ -496,9 +677,9 @@ sha256_file_with_progress() { #Input: progress label, file. Output: SHA256 hash
   local label="$1" file="$2" size
   size="$(get_file_size "$file")" || return 1
   if command -v sha256sum >/dev/null ;then
-    (set -o pipefail; pv -f -N "$label" -s "$size" "$file" | sha256sum | awk '{print $1}')
+    (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | sha256sum | awk '{print $1}')
   else
-    (set -o pipefail; pv -f -N "$label" -s "$size" "$file" | shasum -a 256 | awk '{print $1}')
+    (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | shasum -a 256 | awk '{print $1}')
   fi
 }
 
@@ -567,6 +748,34 @@ verify_written_image() { #Input: device, boot partition, install partition, boot
   sudo test -s "$boot_mount/EFI/Microsoft/Boot/bcd" || error "Written-image verification failed: EFI/Microsoft/Boot/bcd is missing or empty."
   sudo test -s "$boot_mount/sources/boot.wim" || error "Written-image verification failed: sources/boot.wim is missing or empty."
   sudo test -s "$install_mount/install.wim" || error "Written-image verification failed: install.wim is missing or empty."
+  if [ "$OOBE_NETWORK_BYPASS" == 1 ] || { [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ]; };then
+    sudo cmp -s "$boot_mount/Autounattend.xml" "$install_mount/Autounattend.xml" \
+      || error "Written-image verification failed: the answer file differs between the media partitions."
+  fi
+  if [ "$OOBE_NETWORK_BYPASS" == 1 ];then
+    sudo grep -qF '<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>' "$boot_mount/Autounattend.xml" \
+      || error "Written-image verification failed: the OOBE network bypass is missing from the boot partition."
+  fi
+  if [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ];then
+    sudo grep -qF '<WillReboot>Always</WillReboot>' "$boot_mount/Autounattend.xml" \
+      || error "Written-image verification failed: the automatic Pi 4 RAM unlock is missing from the answer file."
+    sudo grep -qF 'SetFirmwareEnvironmentVariableEx' "$boot_mount/Pi4Disable3GB.ps1" \
+      || error "Written-image verification failed: the automatic Pi 4 RAM unlock script is missing."
+    sudo cmp -s "$boot_mount/Pi4Disable3GB.ps1" "$install_mount/Pi4Disable3GB.ps1" \
+      || error "Written-image verification failed: the Pi 4 RAM unlock script differs between the media partitions."
+  fi
+
+  if [ "$RPI_MODEL" == 4 ];then
+    status "  Checking Pi 4 Setup drivers"
+    sudo wimdir "$boot_mount/sources/boot.wim" 2 --path=/drivers/bcmgenet/bcmgenet.inf >/dev/null \
+      || error "Written-image verification failed: the Pi 4 Ethernet driver is missing from boot.wim."
+    sudo wimdir "$boot_mount/sources/boot.wim" 2 --path=/drivers/mcci_dwchsotg/mcci_dwchsotg_hcd.inf >/dev/null \
+      || error "Written-image verification failed: the Pi 4 USB host driver is missing from boot.wim."
+    sudo wimdir "$boot_mount/sources/boot.wim" 2 --path=/drivers/mcci_dwchsotg/mcci_dwchsotg_hub.inf >/dev/null \
+      || error "Written-image verification failed: the Pi 4 USB hub driver is missing from boot.wim."
+    sudo wimdir "$boot_mount/sources/boot.wim" 2 --path=/drivers/rpiuxflt/rpiuxflt.inf >/dev/null \
+      || error "Written-image verification failed: the Pi 4 USB DMA filter driver is missing from boot.wim."
+  fi
 
   status "  Verifying boot.wim integrity"
   sudo wimverify "$boot_mount/sources/boot.wim" || error "Written-image verification failed: boot.wim is invalid or corrupted."
@@ -943,11 +1152,29 @@ validate_install_mode() { #Input: drive capability. Validates CAN_INSTALL_ON_SAM
   fi
 }
 
-get_space_free() { #Input: folder to check. Output: show many bytes can fit before the disk is full
+get_space_free() { #Input: folder to check. Output: how many bytes can fit before the disk is full.
   if df -B 1 "$1" --output=avail >/dev/null 2>&1 ;then
     df -B 1 "$1" --output=avail | tail -1 | tr -d ' '
   else
     df -Pk "$1" | awk 'NR==2 {print $4 * 1024}'
+  fi
+}
+
+require_free_space() { #Input: minimum required bytes, path. Abort with a clear error if the local disk is too full.
+  local required_bytes="$1"
+  local target_path="${2:-$DL_DIR}"
+  local free_bytes required_human free_human shortage_human
+
+  [ -n "$required_bytes" ] || return 0
+  free_bytes="$(get_space_free "$target_path")" || return 0
+  if [ "$free_bytes" -lt "$required_bytes" ];then
+    required_human="$(human_size "$required_bytes")"
+    free_human="$(human_size "$free_bytes")"
+    shortage_human="$(human_size $((required_bytes - free_bytes)))"
+    error "Not enough free space in $target_path to download the required Windows files.
+Required for this download set: $required_human
+Available now: $free_human
+Please free up at least $shortage_human and try again, or choose a different download directory."
   fi
 }
 
@@ -993,15 +1220,23 @@ mark_cache() { #Input: folder, version token. Records payload integrity and sour
   printf '%s\n' "$2" > "${1}/.wor-flasher-version"
 }
 
+list_dev_paths() { #Output: whole-disk paths that may be written to. Omits /dev/loop* and the root device.
+  if is_macos ;then
+    darwin_list_device_paths
+    return
+  fi
+  [ -z "$ROOT_DEV" ] && detect_root_dev
+  lsblk -I 8,179,259 -dno NAME | sed 's+^+/dev/+g' | grep -v loop | grep -vx "$ROOT_DEV"
+}
+
 list_devs() { #Output: human-readable, colorized list of valid block devices to write to. Omits /dev/loop* and the root device. Returns code 1 if no drives found
   if is_macos ;then
     darwin_list_devices
     return
   fi
-  [ -z "$ROOT_DEV" ] && detect_root_dev
   local IFS=$'\n'
   local device size exitcode=1
-  for device in $(lsblk -I 8,179,259 -dno NAME | sed 's+^+/dev/+g' | grep -v loop | grep -vx "$ROOT_DEV") ;do
+  for device in $(list_dev_paths) ;do
     size="$(lsblk -dnbo SIZE "$device")" || continue
     if [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -gt 0 ];then
       echo -e "\e[1m\e[97m${device}\e[0m - \e[92m$(lsblk -dno SIZE "$device")B\e[0m - \e[36m$(get_device_name "$device")\e[0m"
@@ -1100,6 +1335,143 @@ get_os_name() { #input: build id, Output: either "Windows 10 build $BID" or "Win
   fi
 }
 
+uefi_pinned_version() { #Output: the pinned UEFI firmware version for the selected RPI_MODEL.
+  case "$RPI_MODEL" in
+    3) echo "$UEFI_VER_PI3" ;;
+    4) echo "$UEFI_VER_PI4" ;;
+    5) echo "$UEFI_VER_PI5" ;;
+  esac
+}
+
+cache_mode_label() { #Input: USE_CACHE value. Output: how that mode reads on a summary or confirmation screen.
+  case "$1" in
+    0) echo 'Re-download everything' ;;
+    2) echo 'Trust the cache without checking' ;;
+    *) echo 'Reuse when they still match' ;;
+  esac
+}
+
+install_mode_label() { #Input: CAN_INSTALL_ON_SAME_DRIVE value. Output: how that mode reads on a summary screen.
+  case "$1" in
+    1) echo 'Install Windows onto this drive' ;;
+    *) echo 'Recovery drive for another >16 GB drive' ;;
+  esac
+}
+
+set_default_config_txt() { #Sets CONFIG_TXT from the selected model's shipped template, unless the caller already supplied one.
+  [ -n "$CONFIG_TXT" ] && return 0
+  case "$RPI_MODEL" in
+    3 | 4 | 5) CONFIG_TXT="
+
+$(read_config_template "pi${RPI_MODEL}.config.txt")" ;;
+  esac
+}
+
+describe_device() { #Input: device. Output: the path plus its size and model when those can be read.
+  local size name detail
+  [ -z "$1" ] && return 0
+  size="$(get_size_raw "$1" 2>/dev/null)"
+  name="$(get_device_name "$1" 2>/dev/null)"
+  #a summary line must never be the thing that stops a run, so unreadable details are simply omitted
+  if [ -n "$size" ] && [ "$size" -gt 0 ] 2>/dev/null ;then
+    detail="$(human_size "$size")"
+  fi
+  [ -n "$name" ] && detail="${detail:+$detail }$name"
+  [ -n "$detail" ] && printf '%s (%s)\n' "$1" "$detail" || printf '%s\n' "$1"
+}
+
+settings_summary() { #Output: tab-separated "label<TAB>value" lines describing this run. One source of truth for the CLI banner and both GUI confirmation screens.
+  printf 'WoR-Flasher version\t%s\n' "$WOR_FLASHER_VERSION"
+  printf 'Target drive\t%s\n' "$(describe_device "$DEVICE")"
+  printf 'Target hardware\tRaspberry Pi %s\n' "$RPI_MODEL"
+  printf 'Operating system\t%s\n' "$(get_os_name "$BID" | sed "s/ build / ($WIN_LANG) arm64 build /g")"
+  printf 'Installation mode\t%s\n' "$(install_mode_label "$CAN_INSTALL_ON_SAME_DRIVE")"
+  [ -n "$SOURCE_FILE" ] && printf 'Windows source\t%s\n' "$SOURCE_FILE"
+  printf 'Offline OOBE\t%s\n' "$([ "$OOBE_NETWORK_BYPASS" == 1 ] && echo 'Allowed' || echo 'Disabled')"
+  [ "$RPI_MODEL" == 4 ] && printf 'Pi 4 RAM unlock\t%s\n' "$([ "$PI4_AUTO_DISABLE_3GB" == 1 ] && echo 'Enabled' || echo 'Disabled')"
+  printf 'UEFI firmware\t%s\n' "$([ "$UEFI_USE_LATEST" == 1 ] && echo 'Latest' || echo "Pinned ($(uefi_pinned_version))")"
+  printf 'Windows ARM64 drivers\t%s\n' "$([ "$DRIVERS_USE_LATEST" == 1 ] && echo 'Latest' || echo "Pinned ($DRIVER_VER)")"
+  printf 'Custom config.txt\t%s\n' "$([ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ] && echo 'Applied' || echo "Using the firmware default")"
+  printf 'Hide empty drives\t%s\n' "$([ "$HIDE_EMPTY_DRIVES" == 1 ] && echo 'Yes' || echo 'No')"
+  printf 'Verify written image\t%s\n' "$([ "$SKIP_IMAGE_VERIFICATION" == 1 ] && echo 'No (skipped)' || echo 'Yes')"
+  printf 'Downloaded files\t%s\n' "$(cache_mode_label "$USE_CACHE")"
+  printf 'Dry run\t%s\n' "$([ "$DRY_RUN" == 1 ] && echo 'Yes (no changes will be written)' || echo 'No')"
+  printf 'Download directory\t%s\n' "$DL_DIR"
+  return 0
+}
+
+validate_iso_file() { #Input: path to a Windows ISO. Output: why it is unusable, or nothing. Exit 0 when it can be used.
+  local iso="$1"
+  if [ ! -f "$iso" ];then
+    echo "This file does not exist. Check spelling and try again."
+  elif [[ "$iso" != *'.ISO' ]] && [[ "$iso" != *'.iso' ]];then
+    echo "This file does not have a .ISO file extension."
+  elif [ "$(get_file_size "$iso")" -lt $((3*1024*1024*1024)) ];then
+    echo "This file is smaller than 3GB and is probably incomplete."
+  else
+    return 0
+  fi
+  return 1
+}
+
+bid_from_iso_name() { #Input: ISO path. Output: the Windows build number in its filename, if there is one.
+  basename "$1" | tr '_ -' '\n' | grep -E -m 1 '^[0-9]{5}'
+}
+
+lang_from_iso_name() { #Input: ISO path. Output: the Windows language code in its filename, if there is one.
+  basename "$1" | tr '_ ' '\n' | grep -io -m 1 "$(list_langs | awk -F: '{print $1}' | tr '\n' ';' | sed 's/;/\\|/g' | sed 's/\\|$/\n/g')" | tr '[A-Z]' '[a-z]'
+}
+
+is_known_win_lang() { #Input: language code. Exit 0 if it appears in the published language list.
+  list_langs | awk -F: '{print $1}' | grep -qFx "$1"
+}
+
+list_langs_preferred() { #Output: list_langs with en-us first, then the other English variants, then the rest.
+  list_langs | grep '^en-us:'
+  list_langs | grep '^en-' | grep -v '^en-us:'
+  list_langs | grep -v '^en-'
+}
+
+list_cached_winfiles() { #Input: optional directory, default DL_DIR. Output: names of winfiles folders that finished extracting.
+  find "${1:-$DL_DIR}" -maxdepth 2 -type f -name 'alldone' 2>/dev/null \
+    | sed 's+/alldone$++' | xargs -I{} basename {} 2>/dev/null \
+    | grep -E '^winfiles(_from_iso)?_' | sort -r
+}
+
+bid_from_winfiles_dir() { #Input: winfiles folder name. Output: the build ID it holds.
+  echo "$1" | sed 's/^winfiles_from_iso_//g; s/^winfiles_//g' | awk -F_ '{print $1}'
+}
+
+lang_from_winfiles_dir() { #Input: winfiles folder name. Output: the Windows language it holds.
+  echo "$1" | sed 's/^winfiles_from_iso_//g; s/^winfiles_//g' | awk -F_ '{print $2}'
+}
+
+settings_summary_plain() { #Input: optional printf format taking the label then the value. Output: one plain line per setting.
+  local format="${1:-%s %s\n}" label value
+  settings_summary | while IFS=$'\t' read -r label value ;do
+    #shellcheck disable=SC2059
+    printf "$format" "$label:" "$value"
+  done
+}
+
+settings_summary_markup() { #Output: one pango-markup line per setting, for a yad --text window.
+  local label value
+  settings_summary | while IFS=$'\t' read -r label value ;do
+    #yad renders its text as markup, so a value carrying <, > or & would corrupt the whole window
+    printf -- '- %s: <b>%s</b>\n' "$label" "$(printf '%s' "$value" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+  done
+}
+
+#Every setting a GUI front-end collects and the installer subprocess has to see. Kept in one place so
+#the macOS and Linux front-ends can never drift into exporting different subsets of the same run.
+WOR_INSTALLER_SETTINGS=(DIRECTORY DL_DIR RPI_MODEL BID WIN_LANG DEVICE CAN_INSTALL_ON_SAME_DRIVE SOURCE_FILE
+  CONFIG_TXT APPLY_CUSTOM_CONFIG_TXT PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS UEFI_USE_LATEST DRIVERS_USE_LATEST
+  SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE DRY_RUN WOR_APP_TITLE)
+
+export_installer_settings() { #Exports every collected setting, so the installer subprocess runs exactly what was confirmed.
+  export "${WOR_INSTALLER_SETTINGS[@]}"
+}
+
 setup() { #run safety checks and install packages
   require_linux_host
 
@@ -1175,6 +1547,20 @@ Errors: $errors"
 #Set UEFI_USE_LATEST=1 to query GitHub for the newest release instead of using the pinned versions below.
 [ -z "$UEFI_USE_LATEST" ] && UEFI_USE_LATEST=0
 
+#Raspberry Pi 4 only; this setting is ignored for every other model.
+#Disable the pftf 3 GB RAM limit during specialize after WoR-PE reboots.
+[ -z "$PI4_AUTO_DISABLE_3GB" ] && PI4_AUTO_DISABLE_3GB=1
+case "$PI4_AUTO_DISABLE_3GB" in
+  0 | 1) ;;
+  *) error "Unknown value for PI4_AUTO_DISABLE_3GB. Expected '0' or '1'.";;
+esac
+
+#Set to 1 to hide the Windows OOBE network and online-account screens, or 0 to require the standard flow. Adjustable in the GUI's Advanced Options window.
+[ -z "$OOBE_NETWORK_BYPASS" ] && OOBE_NETWORK_BYPASS=1
+if [ "$OOBE_NETWORK_BYPASS" != 0 ] && [ "$OOBE_NETWORK_BYPASS" != 1 ];then
+  error "Unknown value for OOBE_NETWORK_BYPASS. Expected '0' or '1'."
+fi
+
 #Pinned versions. Used by default, or as a fallback when the GitHub API is unreachable.
 [ -z "$UEFI_VER_PI3" ] && UEFI_VER_PI3='v1.39'
 [ -z "$UEFI_VER_PI4" ] && UEFI_VER_PI4='v1.51'
@@ -1183,6 +1569,34 @@ Errors: $errors"
 #Windows driver package. The upstream project is archived, so v0.17 is the final release.
 [ -z "$DRIVERS_USE_LATEST" ] && DRIVERS_USE_LATEST=1
 [ -z "$DRIVER_VER" ] && DRIVER_VER='v0.17'
+
+#Set to 1 to run every step except writing to the drive.
+[ -z "$DRY_RUN" ] && DRY_RUN=0
+case "$DRY_RUN" in
+  0 | 1) ;;
+  *) error "Unknown value for DRY_RUN. Expected '0' or '1'.";;
+esac
+
+#Set to 1 to skip the post-flash written-image verification (partition, boot file, and checksum checks). Not recommended.
+[ -z "$SKIP_IMAGE_VERIFICATION" ] && SKIP_IMAGE_VERIFICATION=0
+case "$SKIP_IMAGE_VERIFICATION" in
+  0 | 1) ;;
+  *) error "Unknown value for SKIP_IMAGE_VERIFICATION. Expected '0' or '1'.";;
+esac
+
+#Set to 0 to leave the UEFI firmware package's own default config.txt in place instead of writing the CONFIG_TXT variable.
+[ -z "$APPLY_CUSTOM_CONFIG_TXT" ] && APPLY_CUSTOM_CONFIG_TXT=1
+case "$APPLY_CUSTOM_CONFIG_TXT" in
+  0 | 1) ;;
+  *) error "Unknown value for APPLY_CUSTOM_CONFIG_TXT. Expected '0' or '1'.";;
+esac
+
+#Set to 0 to show empty card-reader slots as selectable drives in WoR-PE. Written to the cached PE settings.ini before each run.
+[ -z "$HIDE_EMPTY_DRIVES" ] && HIDE_EMPTY_DRIVES=1
+case "$HIDE_EMPTY_DRIVES" in
+  0 | 1) ;;
+  *) error "Unknown value for HIDE_EMPTY_DRIVES. Expected '0' or '1'.";;
+esac
 
 #Set to 0 to skip TLS certificate verification, for systems with an outdated CA bundle.
 [ -z "$VERIFY_TLS" ] && VERIFY_TLS=1
@@ -1247,10 +1661,48 @@ if [ -e "$DIRECTORY" ] && [ "$NO_UPDATE" != 1 ] && command -v git >/dev/null && 
 fi
 }
 
+read_config_template() { #Input: path relative to config-templates/. Output: file contents.
+  local path="$DIRECTORY/config-templates/$1"
+  #continuing without one of these silently produces a blank config.txt or answer file, which is worse than stopping
+  [ -s "$path" ] || error "Missing config-templates/$1
+This file ships with WoR-Flasher and is required to write a bootable drive.
+Update or re-clone your WoR-Flasher checkout, then run this script again."
+  cat "$path"
+}
+
 mkdir -p "${DIRECTORY}/cache"
 
 [ "$1" == 'source' ] && return 0 #If being sourced, exit here at this point in the script
 #past this point, this script is being run, not sourced.
+
+#A single entry point, without guessing: --gui hands over to the graphical front-end, which then runs
+#this script again to do the work. Never auto-detect a display - DISPLAY is also set over SSH and in CI,
+#and a tool that erases a disk must do exactly what it was asked to do.
+if [ "$1" == '--gui' ];then
+  shift
+  [ -x "$DIRECTORY/install-wor-gui.sh" ] || error "No script found named install-wor-gui.sh
+Both scripts must be in the same directory."
+  exec "$DIRECTORY/install-wor-gui.sh" "$@"
+fi
+if [ "$1" == '--version' ] || [ "$1" == '-V' ];then
+  printf 'WoR-Flasher %s\n' "$WOR_FLASHER_VERSION"
+  exit 0
+fi
+if [ "$1" == '--help' ] || [ "$1" == '-h' ];then
+  cat <<HELP
+WoR-Flasher $WOR_FLASHER_VERSION
+Usage: $(basename "$0") [--gui]
+
+  (no arguments)  run the interactive text-mode installer
+  --gui           run the graphical front-end instead
+  --version       print the version and exit
+  --help          show this message
+
+Every setting can also be supplied as an environment variable; see the README.
+HELP
+  exit 0
+fi
+[ -n "$1" ] && error "Unknown argument '$1'. Run '$(basename "$0") --help' for usage."
 
 require_linux_host
 
@@ -1272,6 +1724,20 @@ setup || exit 1
 mkdir -p "$DL_DIR"
 cd "$DL_DIR" || error "Failed to open the download directory: $DL_DIR"
 
+#We are about to download the PE installer, drivers, firmware, and likely a multi-GB Windows image.
+#Fail now with a clear message instead of wasting time and ending up with a partial, unusable cache.
+required_download_space=$((2 * 1024 * 1024 * 1024))
+if [ ! -d "$PWD/peinstaller" ] || [ "$USE_CACHE" != 2 ];then
+  required_download_space=$((required_download_space + 256 * 1024 * 1024))
+fi
+if [ ! -d "$PWD/driverpackage" ] || [ "$USE_CACHE" != 2 ];then
+  required_download_space=$((required_download_space + 256 * 1024 * 1024))
+fi
+if [ ! -d "$PWD/pi${RPI_MODEL}-uefipackage" ] || [ "$USE_CACHE" != 2 ];then
+  required_download_space=$((required_download_space + 192 * 1024 * 1024))
+fi
+require_free_space "$required_download_space" "$DL_DIR"
+
 #unless specified otherwise, run this script in cli mode
 [ -z "$RUN_MODE" ] && RUN_MODE=cli #RUN_MODE=gui
 
@@ -1281,12 +1747,7 @@ fi
 
 if [ "$USE_CACHE" == 0 ];then
   status "USE_CACHE=0: clearing cached components so everything is fetched again"
-  rm -rf "$PWD/peinstaller" "$PWD/driverpackage" "$PWD"/pi[345]-uefipackage
-  rm -rf "$PWD"/winfiles_* "$PWD"/winfiles_from_iso_*
-  if [ ! -z "$DIRECTORY" ];then
-    rm -rf "${DIRECTORY}/cache"
-    mkdir -p "${DIRECTORY}/cache"
-  fi
+  clear_cached_components
 fi
 
 { #choose windows version
@@ -1326,7 +1787,7 @@ Enter \e[96m1\e[0m, \e[96m2\e[0m or \e[96m3\e[0m: "
           #Discover past extracted ISO files so user does not need to keep ISO
           num_opts=3 #default number of options already in the "Additional options" menu
           add_options='' #Store additional options to display to the user
-          available_extracted_isos="$(find "$PWD" -maxdepth 2 -type f -name 'alldone' | grep -o "/winfiles_from_iso.*/" | sed 's+/$++' | sed 's+/winfiles_from_iso_++g' | sort)"
+          available_extracted_isos="$(list_cached_winfiles "$PWD" | grep '^winfiles_from_iso_' | sed 's/^winfiles_from_iso_//g' | sort)"
 
           for folder in $available_extracted_isos ;do
             BID="$(echo "$folder" | awk -F_ '{print $1}')"
@@ -1365,29 +1826,23 @@ $([ $num_opts == 3 ] && echo 'Enter \e[96m1\e[0m, \e[96m2\e[0m or \e[96m3\e[0m: 
                 read -p $'\nEnter the full path to a Windows 10/11 ARM64 ISO file: ' SOURCE_FILE
                 if [ -z "$SOURCE_FILE" ];then
                   break #exit ISO file menu
-                elif [ ! -f "$SOURCE_FILE" ];then
-                  echo_red "This file does not exist. Check spelling and try again."
-                  SOURCE_FILE=''
-                elif [[ "$SOURCE_FILE" != *'.ISO' ]] && [[ "$SOURCE_FILE" != *'.iso' ]];then
-                  echo_red "This file does not have a .ISO file extension."
-                  SOURCE_FILE=''
-                elif [ "$(get_file_size "$SOURCE_FILE")" -lt $((3*1024*1024*1024)) ];then
-                  echo_red "This file is smaller than 3GB and is probably incomplete."
+                elif ! iso_problem="$(validate_iso_file "$SOURCE_FILE")" ;then
+                  echo_red "$iso_problem"
                   SOURCE_FILE=''
                 else #ISO file looks good
                   #Infer Build ID based on filename of ISO
-                  BID="$(basename "$SOURCE_FILE" | tr '_ -' '\n' | grep -E -m 1 '^[0-9]{5}')"
+                  BID="$(bid_from_iso_name "$SOURCE_FILE")"
                   if [ -z "$BID" ];then
                     read -p $'\nTo store files from this ISO, this script needs to know the Windows build number of this ISO.\nPlease enter it now: (example: '"$EXAMPLE_BID"') ' BID
                     [ -z "$BID" ] && error "Cannot proceed without a build number for your ISO file."
                   fi
                   #Infer language based on filename of ISO
-                  WIN_LANG="$(basename "$SOURCE_FILE" | tr '_ ' '\n' | grep -io -m 1 "$(list_langs | awk -F: '{print $1}' | tr '\n' ';' | sed 's/;/\\|/g' | sed 's/\\|$/\n/g')" | tr '[A-Z]' '[a-z]')"
+                  WIN_LANG="$(lang_from_iso_name "$SOURCE_FILE")"
                   if [ -z "$WIN_LANG" ];then
                     read -p $'\nTo store files from this ISO, this script needs to know the language of this Windows ISO.\nPlease enter it now: (example: en-us) ' WIN_LANG
                     if [ -z "$WIN_LANG" ];then
                       error "Cannot proceed without a language for your ISO file."
-                    elif ! list_langs | awk -F: '{print $1}' | grep -q "$WIN_LANG" ;then
+                    elif ! is_known_win_lang "$WIN_LANG" ;then
                       error "Language code was not found in the list!\n$(list_langs | awk '{print $1}')"
                     fi
                   fi
@@ -1427,14 +1882,7 @@ else
 
   #Verify SOURCE_FILE value provided to script
   if [ ! -z "$SOURCE_FILE" ];then
-    if [ ! -f "$SOURCE_FILE" ];then
-      error "Specified ISO file '$SOURCE_FILE' does not exist."
-    elif [[ "$SOURCE_FILE" != *'.ISO' ]] && [[ "$SOURCE_FILE" != *'.iso' ]];then
-      error "Specified ISO file '$SOURCE_FILE' does not have a .ISO file extension."
-    elif [ "$(get_file_size "$SOURCE_FILE")" -lt $((3*1024*1024*1024)) ];then
-      error "Specified ISO file '$SOURCE_FILE' is smaller than 3GB and is probably incomplete."
-    fi
-
+    iso_problem="$(validate_iso_file "$SOURCE_FILE")" || error "Specified ISO file '$SOURCE_FILE': $iso_problem"
   #Verify BID value provided to script
   elif [ "$using_esd" == true ] && ! (list_bids 10 ; list_bids 11) | awk '{print $1}' | grep -Fqx "$BID" ;then
     error "Build ID '$BID' not found on list of available ones."
@@ -1453,7 +1901,7 @@ if [ -z "$WIN_LANG" ];then
     read -p $'\nFrom the list above, enter a language ['"$default_language"']: ' WIN_LANG
     [ -z "$WIN_LANG" ] && WIN_LANG="$default_language"
 
-    if list_langs | awk -F: '{print $1}' | grep -qFx "$WIN_LANG" ;then
+    if is_known_win_lang "$WIN_LANG" ;then
       #if selected language matches line in language list
       break
     else
@@ -1463,7 +1911,7 @@ if [ -z "$WIN_LANG" ];then
   done
 
 #Verify WIN_LANG value provided to script
-elif ! list_langs | awk -F: '{print $1}' | grep -qFx "$WIN_LANG" ;then
+elif ! is_known_win_lang "$WIN_LANG" ;then
   error "Invalid WIN_LANG value '$WIN_LANG'.\nAvailable languages:\n$(list_langs | awk -F: '{print $1}')"
 fi
 }
@@ -1565,21 +2013,15 @@ elif [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
 fi
 }
 
+
 #fail fast, before any downloads, if macOS partitioning can't proceed later
 is_macos && { command -v sgdisk >/dev/null || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."; }
 
-[ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && install_mode_label='Install Windows onto this drive' || install_mode_label='Recovery drive'
+#the GUI already picked one and exported it; a CLI run gets the same shipped template, so both write identical media
+set_default_config_txt
+
 printf '\n\033[96m%s\033[0m - starting installation\n' "$WOR_APP_TITLE"
-echo "  Windows build:             $BID ($WIN_LANG)"
-echo "  Raspberry Pi model:        $RPI_MODEL"
-echo "  Target drive:              $DEVICE"
-echo "  Install mode:              $install_mode_label"
-echo "  CAN_INSTALL_ON_SAME_DRIVE: $CAN_INSTALL_ON_SAME_DRIVE"
-[ ! -z "$SOURCE_FILE" ] && echo "  Custom ISO:                $SOURCE_FILE"
-[ ! -z "$CONFIG_TXT" ] && echo "  Custom config.txt:         yes"
-[ ! -z "$DRY_RUN" ] && echo "  DRY_RUN:                   $DRY_RUN"
-echo "  USE_CACHE:                 $USE_CACHE"
-echo "  Download directory:       $DL_DIR"
+settings_summary_plain '  %-24s %s\n'
 echo
 
 STEP_NUM=0
@@ -1658,6 +2100,24 @@ if [ "$RPI_MODEL" != 5 ];then
       mark_cache "$PWD/driverpackage" "$URL" || error "Failed to record driver cache integrity."
       echo
     fi
+  fi
+
+  if [ "$RPI_MODEL" == 4 ];then
+    for driver_file in \
+      bcmgenet/bcmgenet.inf \
+      bcmgenet/bcmgenet.cat \
+      mcci_dwchsotg/mcci_dwchsotg_hcd.inf \
+      mcci_dwchsotg/mcci_dwchsotg_hcd.cat \
+      mcci_dwchsotg/mcci_dwchsotg_hub.inf \
+      mcci_dwchsotg/mcci_dwchsotg_hub.cat \
+      mcci_dwchsotg/arm64/mcci_dwchsotg_hcd.sys \
+      mcci_dwchsotg/arm64/mcci_dwchsotg_hub.sys \
+      rpiuxflt/rpiuxflt.inf \
+      rpiuxflt/rpiuxflt.cat \
+      rpiuxflt/rpiuxflt.sys
+    do
+      [ -s "$PWD/driverpackage/$driver_file" ] || error "Pi 4 driver package is incomplete: $driver_file is missing or empty. Clear the driver cache and run WoR-Flasher again."
+    done
   fi
 fi
 
@@ -1764,6 +2224,9 @@ else #Download and extract ESD
   if [ -z "$URL" ] || [ -z "$SIZE" ] || ([ -z "$SHA1" ] && [ -z "$SHA256" ]);then
     error "One of URL, SIZE, or SHA1/SHA256 variables is empty!\nURL: $URL\nSIZE: $SIZE\nSHA1: $SHA1\nSHA256: $SHA256\nHere's the full catalog output: '$catalog'"
   fi
+
+  #The ESD is usually the largest single download in the set, so do the exact free-space check here.
+  require_free_space $((SIZE + 768 * 1024 * 1024)) "$DL_DIR"
 
   if [ -f "$SOURCE_FILE" ] && [ ! -z "$SHA1" ] && [ "$SHA1" == "$(sha1_file_with_progress cached-esd "$SOURCE_FILE")" ];then
     echo "Not downloading $SOURCE_FILE - file exists"
@@ -1975,6 +2438,7 @@ echo "  - EFI files"
 sudo cp -r "$PWD/peinstaller/efi" "$mntpnt"/bootpart || error "Failed to copy $PWD/peinstaller/efi to $mntpnt/bootpart"
 
 echo "  - PE installer"
+configure_pe_settings_ini
 sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add peinstaller/winpe/2 /" || error "The wimupdate command failed to add $PWD/peinstaller to boot.wim"
 
 if [ "$RPI_MODEL" == 5 ];then
@@ -1988,10 +2452,13 @@ else
   sudo wimupdate "$mntpnt"/bootpart/sources/boot.wim 2 --command="add driverpackage /drivers" || error "The wimupdate command failed to add $PWD/driverpackage to boot.wim"
 fi
 
+echo "  - Windows Setup configuration"
+install_windows_setup_configuration "$mntpnt/bootpart" "$mntpnt/winpart" || error "Failed to install the Windows Setup configuration."
+
 echo "  - UEFI firmware"
 sudo cp -r "$PWD/pi${RPI_MODEL}-uefipackage"/* "$mntpnt"/bootpart || error "Failed to copy $PWD/pi${RPI_MODEL}-uefipackage to $mntpnt/bootpart"
 
-if [ ! -z "$CONFIG_TXT" ];then
+if [ ! -z "$CONFIG_TXT" ] && [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ];then
   status "Customizing config.txt according to the CONFIG_TXT variable"
   echo "$CONFIG_TXT" | sudo tee "$mntpnt"/bootpart/config.txt >/dev/null
 fi
@@ -2003,7 +2470,11 @@ if [ $RPI_MODEL == 3 ];then
   sudo dd if=$PWD/peinstaller/pi3/gptpatch.img of="$DEVICE" conv=fsync || error "The 'dd' command failed to flash $PWD/peinstaller/pi3/gptpatch.img to $DEVICE"
 fi
 
-verify_written_image "$DEVICE" "$PART1" "$PART2" "$mntpnt/bootpart" "$mntpnt/winpart" "$PWD/$winfiles/install.wim"
+if [ "$SKIP_IMAGE_VERIFICATION" == 1 ];then
+  echo_red "Skipping written-image verification (SKIP_IMAGE_VERIFICATION=1). This is not recommended."
+else
+  verify_written_image "$DEVICE" "$PART1" "$PART2" "$mntpnt/bootpart" "$mntpnt/winpart" "$PWD/$winfiles/install.wim"
+fi
 
 status "Ejecting drive $DEVICE"
 sudo umount "$PART1" || echo_red "Warning: the umount command failed to unmount all partitions within $DEVICE"
