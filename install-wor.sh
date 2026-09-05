@@ -283,11 +283,12 @@ cli_intro() {
   [ "$RUN_MODE" == gui ] && return
   printf '\n\033[1;96m'
   cat 1>&2 <<'BANNER'
- __        __       ____  _           _
- \ \      / /__  __/ ___|| |__   __ _| |_ ___| |__   ___ _ __
-  \ \ /\ / / _ \/ _` \___ \| '_ \ / _` | __/ __| '_ \ / _ \ '__|
-   \ V  V /  __/ (_| |___) | | | | (_| | || (__| | | |  __/ |
-    \_/\_/ \___|\__,_|____/|_| |_|\__,_|\__\___|_| |_|\___|_|
+   __        __      ____        _____ _           _
+   \ \      / /__   |  _ \      |  ___| | __ _ ___| |__   ___ _ __
+    \ \ /\ / / _ \  | |_) |_____| |_  | |/ _` / __| '_ \ / _ \ '__|
+     \ V  V / (_) | |  _ <_____|  _| | | (_| \__ \ | | |  __/ |
+    \_/\_/ \___/  |_| \_\    |_|   |_|\__,_|___/_| |_|\___|_|
+               WoR-Flasher
 BANNER
   printf '\033[0m\033[1;92m  STRONGER TOGETHER.  BETTER FOR EVERYONE.\033[0m\n' 1>&2
   printf '  Botspot (creator) + Blackout Secure (community maintenance)\n' 1>&2
@@ -2400,7 +2401,7 @@ if [[ "$SOURCE_FILE" == *'.ESD' ]] || [[ "$SOURCE_FILE" == *'.esd' ]];then
   #Remove first 3 partitions from ESD file
   wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE"
   wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE"
-  wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE" #remove --soft for this last one to minimize filesize
+  wimdelete "$SOURCE_FILE" 1 || error "Failed to remove a partition from $SOURCE_FILE" #remove --soft for this last one to minimize filesize
   mv -f "$SOURCE_FILE" "$PWD/install.wim" || error "Failed to rename $SOURCE_FILE to install.wim"
 
   touch "$PWD/alldone" #mark this folder of microsoft stuff as complete
@@ -2513,10 +2514,20 @@ else
 fi
 sudo parted -s "$DEVICE" set 2 msftdata on || error "Failed to enable msftdata flag on $DEVICE partition 2"
 sync
+sudo partprobe "$DEVICE" || error "Failed to refresh the partition table on $DEVICE"
 
 status "Generating filesystems"
-PART1="$(get_partition "$DEVICE" 1)"
-PART2="$(get_partition "$DEVICE" 2)"
+PART1=''
+PART2=''
+partition_wait_attempt=0
+while [ "$partition_wait_attempt" -lt 50 ] ;do
+  PART1="$(get_partition "$DEVICE" 1)"
+  PART2="$(get_partition "$DEVICE" 2)"
+  [ -b "$PART1" ] && [ -b "$PART2" ] && break
+  sleep 0.1
+  partition_wait_attempt=$((partition_wait_attempt+1))
+done
+[ -b "$PART1" ] && [ -b "$PART2" ] || error "Partition devices for $DEVICE did not become available"
 echo "Partition 1: $PART1, Partition 2: $PART2"
 
 errors="$(sudo mkfs.fat -F 32 -n WOR_BOOT "$PART1" 2>&1)" || error "Failed to create FAT partition on $PART1\nErrors:\n$errors"

@@ -83,12 +83,12 @@ static_checks() {
     git -C "$REPO_DIR" diff --check >/dev/null 2>&1 \
       && pass "working tree has no whitespace errors" || fail "working tree has whitespace errors"
   fi
-  for f in install-wor.sh install-wor-gui.sh terminal-run ;do
+  for f in install-wor.sh install-wor-gui.sh install-wor-hook.sh terminal-run ;do
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
 
   if command -v shellcheck >/dev/null ;then
-    shellcheck --severity=error "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/terminal-run >/dev/null 2>&1 \
+    shellcheck --severity=error "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/install-wor-hook.sh "$REPO_DIR"/terminal-run >/dev/null 2>&1 \
       && pass "shellcheck reports no errors" || fail "shellcheck reports errors"
   else
     skip "shellcheck is not installed"
@@ -174,6 +174,12 @@ static_checks() {
     && pass "long image operations stream progress" \
     || fail "a long image operation still hides progress"
 
+  esd_delete_block="$(sed -n '/#Remove first 3 partitions from ESD file/,/mv -f .*install.wim/p' "$REPO_DIR/install-wor.sh")"
+  [ "$(printf '%s\n' "$esd_delete_block" | grep -cF 'wimdelete "$SOURCE_FILE" 1 --soft')" == 2 ] \
+    && printf '%s\n' "$esd_delete_block" | grep -qF 'wimdelete "$SOURCE_FILE" 1 || error' \
+    && pass "ESD conversion compacts the image after two soft index deletions" \
+    || fail "ESD conversion does not compact the image on its final index deletion"
+
   awk '/#install dependencies before using them/{deps=NR} /#check for internet connection/{net=NR} END{exit !(deps && net && deps < net)}' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Missing required dependency: wget.' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'No internet connection!' "$REPO_DIR/install-wor.sh" \
@@ -202,6 +208,12 @@ static_checks() {
     && ! grep -qF 'display alert' "$REPO_DIR/install-wor.sh" \
     && pass "macOS GUI shows a native password dialog instead of a terminal prompt" \
     || fail "macOS GUI does not use a native password dialog"
+
+  cli_intro_block="$(sed -n '/^cli_intro() {/,/^}/p' "$REPO_DIR/install-wor.sh")"
+  grep -qF 'WoR-Flasher' <<< "$cli_intro_block" \
+    && ! grep -qiE 'web.?watcher' <<< "$cli_intro_block" \
+    && pass "CLI ASCII banner names WoR-Flasher" \
+    || fail "CLI ASCII banner does not name WoR-Flasher"
 
   grep -qF 'macos_start_cli()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'macos_show_announcement()' "$REPO_DIR/install-wor-gui.sh" \
@@ -587,7 +599,7 @@ static_checks() {
   printf '%s' "$completion_block" | grep -qF "'copyLogClicked:': {" \
     && printf '%s' "$completion_block" | grep -qF "copyButton = $.NSButton.buttonWithTitleTargetAction('Copy'" \
     && printf '%s' "$completion_block" | grep -qF "$.NSPasteboard.generalPasteboard" \
-    && printf '%s' "$completion_block" | grep -qF "pb.setStringForType($(logPath)" \
+    && printf '%s' "$completion_block" | grep -qF 'pb.setStringForType($(logPath)' \
     && pass "completion dialog can copy the log path to the clipboard" \
     || fail "completion dialog cannot copy the log path"
 
@@ -687,7 +699,7 @@ shared_function_checks() {
     && pass "the Pi 4 RAM unlock line appears only for a Pi 4" \
     || fail "the Pi 4 RAM unlock line is shown for the wrong models"
 
-  [ "$(run_in_engine 'for RPI_MODEL in 3 4 5 ;do uefi_pinned_version ;done | tr "\n" " "')" == "$(grep -oE "UEFI_VER_PI[345]='[^']*'" "$REPO_DIR/install-wor.sh" | cut -d"'" -f2 | tr '\n' ' ')" ] \
+  [ "$(run_in_engine 'for RPI_MODEL in 3 4 5 ;do uefi_pinned_version ;done | tr "\n" " "')" == "$(grep -aoE "UEFI_VER_PI[345]='[^']*'" "$REPO_DIR/install-wor.sh" | cut -d"'" -f2 | tr '\n' ' ')" ] \
     && pass "uefi_pinned_version returns the pinned firmware for every supported model" \
     || fail "uefi_pinned_version does not match the pinned UEFI versions"
 
@@ -746,17 +758,24 @@ shared_function_checks() {
   : > "$iso_dir/small.iso"
   : > "$iso_dir/notanimage.txt"
   #sparse, so these cost nothing on disk. 2 GB sits just under the 3 GB floor, making it a boundary test
-  dd if=/dev/zero of="$iso_dir/22631.2861_ARM64_en-us.iso" bs=1 count=0 seek=4g >/dev/null 2>&1
-  dd if=/dev/zero of="$iso_dir/truncated.iso" bs=1 count=0 seek=2g >/dev/null 2>&1
-  [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/22631.2861_ARM64_en-us.iso"; echo "rc=$?"')" == 'rc=0' ] \
-    && [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/missing.iso" >/dev/null; echo "rc=$?"')" == 'rc=1' ] \
-    && [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/notanimage.txt" >/dev/null; echo "rc=$?"')" == 'rc=1' ] \
-    && [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/truncated.iso" >/dev/null; echo "rc=$?"')" == 'rc=1' ] \
-    && [ "$(run_in_engine 'validate_iso_file "'"$iso_dir"'/truncated.iso" 2>&1')" == 'This file is smaller than 3GB and is probably incomplete.' ] \
-    && [ "$(grep -cF 'validate_iso_file' "$REPO_DIR/install-wor.sh")" == 3 ] \
-    && [ "$(grep -cF 'validate_iso_file' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
+  dd if=/dev/zero of="$iso_dir/22631.2861_ARM64_en-us.iso" bs=1 count=0 seek=$((4*1024*1024*1024)) >/dev/null 2>&1
+  dd if=/dev/zero of="$iso_dir/truncated.iso" bs=1 count=0 seek=$((2*1024*1024*1024)) >/dev/null 2>&1
+  valid_iso_result="$(run_in_engine 'validate_iso_file "'"$iso_dir"'/22631.2861_ARM64_en-us.iso"; echo "rc=$?"')"
+  missing_iso_result="$(run_in_engine 'validate_iso_file "'"$iso_dir"'/missing.iso" >/dev/null; echo "rc=$?"')"
+  extension_iso_result="$(run_in_engine 'validate_iso_file "'"$iso_dir"'/notanimage.txt" >/dev/null; echo "rc=$?"')"
+  truncated_iso_result="$(run_in_engine 'validate_iso_file "'"$iso_dir"'/truncated.iso" >/dev/null; echo "rc=$?"')"
+  truncated_iso_message="$(run_in_engine 'validate_iso_file "'"$iso_dir"'/truncated.iso" 2>&1')"
+  engine_iso_references="$(awk '{ count += gsub(/validate_iso_file/, "&") } END { print count + 0 }' "$REPO_DIR/install-wor.sh")"
+  gui_iso_references="$(awk '{ count += gsub(/validate_iso_file/, "&") } END { print count + 0 }' "$REPO_DIR/install-wor-gui.sh")"
+  [ "$valid_iso_result" == 'rc=0' ] \
+    && [ "$missing_iso_result" == 'rc=1' ] \
+    && [ "$extension_iso_result" == 'rc=1' ] \
+    && [ "$truncated_iso_result" == 'rc=1' ] \
+    && [ "$truncated_iso_message" == 'This file is smaller than 3GB and is probably incomplete.' ] \
+    && [ "$engine_iso_references" == 3 ] \
+    && [ "$gui_iso_references" == 1 ] \
     && pass "the CLI and the GUI accept and reject exactly the same ISO files" \
-    || fail "ISO validation is duplicated or disagrees between the CLI and the GUI"
+    || fail "ISO validation mismatch: valid=$valid_iso_result missing=$missing_iso_result extension=$extension_iso_result truncated=$truncated_iso_result message=$truncated_iso_message references=$engine_iso_references/$gui_iso_references"
 
   #the build number and language are read back out of the filename, in both front-ends
   [ "$(run_in_engine 'bid_from_iso_name "'"$iso_dir"'/22631.2861_ARM64_en-us.iso"')" == '22631.2861' ] \
@@ -835,11 +854,19 @@ rc=1" ] \
     && pass "every community health file is present and the license is GPL-3.0" \
     || fail "these community health files are missing or empty:$missing_community"
 
+  wsl_hook_out="$(cd "$REPO_DIR" && WSL_DISTRO_NAME=wor-test ./install-wor-hook.sh list-devices 2>&1; echo "rc=$?")"
   [ -x "$REPO_DIR/install-wor-hook.sh" ] \
     && grep -qF 'list-devices)' "$REPO_DIR/install-wor-hook.sh" \
     && grep -qF 'describe-device)' "$REPO_DIR/install-wor-hook.sh" \
     && grep -qF 'summary)' "$REPO_DIR/install-wor-hook.sh" \
     && grep -qF 'exec "$ENGINE"' "$REPO_DIR/install-wor-hook.sh" \
+    && grep -A2 -F 'list-devices)' "$REPO_DIR/install-wor-hook.sh" | grep -qF 'require_linux_host' \
+    && ! grep -qF 'install-wor-hook.sh' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(cd "$REPO_DIR" && ./install-wor-hook.sh run --version)" == "WoR-Flasher $version" ] \
+    && [ "$(cd "$REPO_DIR" && DL_DIR=/tmp/wor-test-dl RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us DEVICE=/dev/does-not-exist CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh summary)" == "$(run_in_engine 'settings_summary')" ] \
+    && [ "$(cd "$REPO_DIR" && ./install-wor-hook.sh describe-device 2>/dev/null; echo $?)" == 2 ] \
+    && grep -qF 'WoR-Flasher does not support WSL.' <<< "$wsl_hook_out" \
+    && [ "$(tail -n1 <<< "$wsl_hook_out")" == 'rc=1' ] \
     && pass "integration adapter exposes the shared installer engine" \
     || fail "integration adapter is missing or does not use the shared engine"
 
@@ -1004,7 +1031,7 @@ make_disk() { #Input: size, name. Output: loop device path
   [ -z "$dev" ] && die "No free loop device is available."
   #containers ship a fixed set of /dev/loop* nodes, so the next free name may not exist yet
   [ ! -e "$dev" ] && sudo mknod "$dev" b 7 "${dev##*loop}" 2>/dev/null
-  sudo losetup "$dev" "$img" || die "Failed to attach $img to $dev"
+  sudo losetup --partscan "$dev" "$img" || die "Failed to attach $img to $dev"
   LOOP_DEVICES+=("$dev")
   echo "$dev"
 }
@@ -1028,6 +1055,25 @@ stub_kernel_modules() {
   #containers have no /lib/modules, which install-wor.sh treats as a pending reboot
   local moddir="/lib/modules/$(uname -r)"
   [ ! -d "$moddir" ] && sudo mkdir -p "$moddir"
+
+  #minimal containers have no device manager to create loop partition nodes
+  local partprobe_wrapper
+  partprobe_wrapper="$(mktemp)"
+  cat > "$partprobe_wrapper" <<'PARTPROBE'
+#!/bin/bash
+/usr/sbin/partprobe "$@" || exit $?
+for device in "$@" ;do
+  device_name="${device##*/}"
+  for partition in /sys/class/block/"$device_name"/"$device_name"p* ;do
+    [ -e "$partition/dev" ] || continue
+    node="/dev/${partition##*/}"
+    IFS=: read -r major minor < "$partition/dev"
+    [ -b "$node" ] || mknod "$node" b "$major" "$minor"
+  done
+done
+PARTPROBE
+  sudo install -m 0755 "$partprobe_wrapper" /usr/local/bin/partprobe
+  rm -f "$partprobe_wrapper"
   return 0
 }
 
@@ -1372,7 +1418,7 @@ for model in $(tr ' ' '\n' <<<"$TEST_MODELS") ;do
   echo "  using build $bid"
   seed_winfiles "$bid"
 
-  run_flasher TERM=unknown BID="$bid" RPI_MODEL="$model" DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=0
+  run_flasher TERM=unknown BID="$bid" RPI_MODEL="$model" DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=1
   expect_ok "Pi $model dry run completes"
   expect_output "Pi $model downloads the PE installer" "Downloading WoR PE-based installer"
   expect_output "Pi $model downloads UEFI firmware" "UEFI firmware"
@@ -1394,7 +1440,6 @@ done
 ######## Cache modes, which need a populated cache to test against
 
 info "== Cache modes =="
-run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=0
 run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=1
 expect_output "USE_CACHE=1 reuses a current cache" "cached copy is up to date"
 printf 'tampered\n' >> "$TEST_DL_DIR/pi4-uefipackage/RPI_EFI.fd"
@@ -1464,7 +1509,7 @@ expect_no_output "USE_CACHE=1 downloads nothing" "Downloading ARM64 drivers"
 echo 'https://example.com/stale.zip' > "$TEST_DL_DIR/driverpackage/.wor-flasher-version"
 run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=1
 expect_output "USE_CACHE=1 refreshes a stale component" "Downloading ARM64 drivers"
-expect_output "USE_CACHE=1 keeps the current ones" "peinstaller - cached copy is up to date"
+expect_output "USE_CACHE=1 keeps the current ones" "pi4-uefipackage - cached copy is up to date"
 
 run_flasher BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
 expect_output "USE_CACHE=2 skips update checks" "without checking for updates"
@@ -1493,12 +1538,12 @@ expect_fail "self-install is refused on a recovery-sized drive"
 
 run_flasher_with_input '' BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_RECOVERY" USE_CACHE=2
 expect_ok "recovery-sized drive automatically uses recovery mode"
-expect_output "automatic recovery mode is recorded" "CAN_INSTALL_ON_SAME_DRIVE: 0"
+expect_output "automatic recovery mode is recorded" "Installation mode:       Recovery drive for another >16 GB drive"
 expect_no_output "recovery-sized drive does not ask for install mode" "Choose the installation mode"
 
 run_flasher_with_input '2\n' BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" USE_CACHE=2
 expect_ok "large drive can be used as a recovery drive"
-expect_output "large-drive recovery choice is recorded" "CAN_INSTALL_ON_SAME_DRIVE: 0"
+expect_output "large-drive recovery choice is recorded" "Installation mode:       Recovery drive for another >16 GB drive"
 
 run_flasher BID="$GOOD_BID" RPI_MODEL=9 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2
 expect_fail "an unknown RPI_MODEL is rejected"

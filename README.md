@@ -101,12 +101,12 @@ To install the original upstream version instead, clone `https://github.com/Bots
 
 ## Usage
 
-There are two front-ends over one engine:
+There are two built-in front-ends over one engine:
 
 - **`install-wor.sh`** holds all of the logic — drive detection, download and cache handling, ISO validation, partitioning, flashing and verification.
 - **`install-wor-gui.sh`** sources it and adds only the windows. It collects your choices in native dialogs, then runs `install-wor.sh` and shows a native progress window (AppKit on macOS, `yad` on Linux) instead of a visible terminal.
 
-Both therefore write identical media from identical settings.
+Both therefore write identical media from identical settings. The built-in GUI intentionally uses the engine directly because it needs shared functions and state while constructing its forms. The separate integration adapter below is a process-level contract for external tools, not an extra layer inside the GUI.
 
 ### Graphical interface
 
@@ -175,18 +175,37 @@ Sourcing with the `source` argument makes the engine's functions available witho
 
 ## Integration adapter
 
-`install-wor-hook.sh` is the stable command-line adapter for other front-ends and automation. It keeps device safety and the flashing engine in `install-wor.sh` while exposing a small integration surface:
+`install-wor-hook.sh` is the stable command-line adapter for external front-ends and automation. Keep it executable and next to `install-wor.sh`; it sources that shared engine for discovery and summaries, then executes the engine directly for a flash.
+
+| Command                  | Output or behavior                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| `list-devices`           | Safe whole-disk candidate paths, one per line, excluding the current boot drive     |
+| `describe-device DEVICE` | The supplied path with its size and model when available                            |
+| `summary`                | The current settings as tab-separated `label<TAB>value` lines                       |
+| `run [ARGS...]`          | Runs `install-wor.sh` with the caller's environment and any supplied engine options |
 
 ```bash
 ./install-wor-hook.sh list-devices
 ./install-wor-hook.sh describe-device /dev/sda
-./install-wor-hook.sh summary
+
+DEVICE=/dev/sda RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us \
+  CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh summary
 
 DEVICE=/dev/sda RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us \
   CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh run
 ```
 
-The adapter is transport-neutral. A GUI, desktop launcher, service, test harness or another imaging application can discover safe devices, present its own choices, and invoke the same engine with environment variables. `WOR_GUI_PROGRESS_FILE` remains available when a frontend wants structured `STATUS`, `STEP` and `SUBSTEP` progress events.
+Discovery is a snapshot, not authorization to erase a path later. `list-devices` rejects unsupported hosts and excludes the current boot drive, but device state can change. `describe-device` formats any supplied path and `summary` previews settings; neither validates that a device is currently safe. Call `list-devices` again before `run`, and let `run` perform the engine's final host, device, capacity and installation-mode checks. For unattended operation, provide all required values from [Parameters](#parameters); otherwise the engine can prompt for missing choices.
+
+The adapter is transport-neutral. A GUI, desktop launcher, test harness or another local imaging application can present its own choices and invoke the same engine without copying its flashing logic. Set `WOR_GUI_PROGRESS_FILE` to a writable path to receive line-oriented, tab-separated events while `run` is active:
+
+```text
+STATUS<TAB>message
+STEP<TAB>current<TAB>total<TAB>message
+SUBSTEP<TAB>percent
+```
+
+The adapter returns the underlying command's exit status. Usage errors, including an unknown command or a missing `DEVICE` for `describe-device`, return `2`.
 
 Raspberry Pi Imager supports a custom image repository through `--repo`, which is useful for publishing image metadata and downloads. It does not by itself turn an arbitrary shell flasher into an Imager write target. A future Imager integration should therefore be a deliberate adapter on the Imager side that calls this contract, rather than embedding or forking the flashing logic. See the [Raspberry Pi Imager repository](https://github.com/raspberrypi/rpi-imager) for its current repository and application integration model.
 
@@ -403,7 +422,7 @@ This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unloc
 ./tests/run-tests.sh --gui          # walk the GUI in DRY_RUN mode
 ./tests/run-tests.sh --walkthrough  # fake drives, then the CLI interactively
 ./tests/run-linux-integration.sh    # force the Dockerised Linux suite
-shellcheck --severity=error install-wor.sh install-wor-gui.sh tests/*.sh
+shellcheck --severity=error install-wor.sh install-wor-gui.sh install-wor-hook.sh tests/*.sh
 ```
 
 The suite creates loopback devices as stand-in drives, so nothing can be written to physical storage. Tests call the real functions out of `install-wor.sh` rather than restating their logic, which means a test cannot pass against behaviour the shipped script no longer has.

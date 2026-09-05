@@ -11,11 +11,17 @@ if [ ! -f "$ENGINE" ];then
   exit 1
 fi
 
+if [ "${1:-}" == run ];then
+  shift
+  exec "$ENGINE" "$@"
+fi
+
 # shellcheck disable=SC1090
 source "$ENGINE" source
 
 case "${1:-}" in
   list-devices)
+    require_linux_host
     list_dev_paths
     ;;
   describe-device)
@@ -24,10 +30,6 @@ case "${1:-}" in
     ;;
   summary)
     settings_summary
-    ;;
-  run)
-    shift
-    exec "$ENGINE" "$@"
     ;;
   *)
     cat >&2 <<USAGE

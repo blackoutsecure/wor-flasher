@@ -80,6 +80,9 @@ Two structural rules matter more than any of that:
 2. **The two front-ends must not diverge.** If you add a setting to the macOS Advanced
    Options window, add it to the Linux yad form and to `settings_summary` in the same
    commit.
+3. **`install-wor-hook.sh` is the external process adapter, not an internal GUI layer.**
+   Keep the built-in GUI on the shared engine functions it needs to construct its forms.
+   Keep hook commands small, machine-readable and behaviorally covered by the test suite.
 
 ## Traps that have bitten us
 
