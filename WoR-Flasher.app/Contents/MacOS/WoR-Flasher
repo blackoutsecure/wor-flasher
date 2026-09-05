@@ -25,6 +25,7 @@ DEPENDENCIES_FILE=''
 RUNTIME_MANIFEST=''
 SOURCE_CHECKOUT=0
 WOR_FLASHER_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST" 2>/dev/null || printf 'WoR-Flasher')"
+BUNDLE_ICON_FILENAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$INFO_PLIST" 2>/dev/null || printf 'WoR-Flasher.icns')"
 STARTUP_STATUS=''
 STARTUP_DONE=''
 STARTUP_PID=''
@@ -243,18 +244,21 @@ check_for_runtime_update() {
 }
 
 start_startup_window() {
+  local icon_path="$RESOURCES_DIR/$BUNDLE_ICON_FILENAME"
   rm -f "$STARTUP_DONE"
-  /usr/bin/osascript -l JavaScript - "$STARTUP_STATUS" "$STARTUP_DONE" "$WOR_FLASHER_NAME" <<'JXA' >/dev/null 2>&1 &
+  /usr/bin/osascript -l JavaScript - "$STARTUP_STATUS" "$STARTUP_DONE" "$WOR_FLASHER_NAME" "$icon_path" <<'JXA' >/dev/null 2>&1 &
 ObjC.import('AppKit')
 ObjC.import('Foundation')
 const args = $.NSProcessInfo.processInfo.arguments
 const statusPath = ObjC.unwrap(args.objectAtIndex(4))
 const donePath = ObjC.unwrap(args.objectAtIndex(5))
 const appTitle = ObjC.unwrap(args.objectAtIndex(6))
-const app = $.NSApplication.sharedApplication
+const iconPath = ObjC.unwrap(args.objectAtIndex(7))
 const fm = $.NSFileManager.defaultManager
 $.NSProcessInfo.processInfo.processName = appTitle
+const app = $.NSApplication.sharedApplication
 app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
 
 const window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
   $.NSMakeRect(0, 0, 440, 150),
@@ -294,7 +298,7 @@ function readStatus() {
   }
 }
 
-const Controller = ObjC.registerSubclass({
+ObjC.registerSubclass({
   name: 'WorStartupController',
   superclass: 'NSObject',
   methods: {
@@ -310,7 +314,7 @@ const Controller = ObjC.registerSubclass({
     },
   },
 })
-const controller = Controller.alloc.init
+const controller = $.WorStartupController.alloc.init
 const timer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(
   0.15,
   controller,
@@ -522,14 +526,12 @@ launcher_main() {
   startup_phase 'Checking application files...'
   start_startup_window
 
-  select_runtime || { show_error 'No complete, verified WoR-Flasher runtime is available.'; exit 1; }
   if [ "$SOURCE_CHECKOUT" == 1 ];then
     repair_missing_files || exit 1
     load_metadata || { show_error 'WoR-Flasher metadata could not be loaded after repair.'; exit 1; }
     startup_phase 'Checking for a safe source update...'
     check_for_update || exit 1
     startup_phase 'Verifying updated files...'
-    repair_missing_files || exit 1
     load_metadata || { show_error 'Updated WoR-Flasher metadata could not be loaded.'; exit 1; }
     startup_phase 'Synchronizing application resources...'
     sync_bundle_metadata || { show_error 'The updated macOS app metadata could not be synchronized.'; exit 1; }
@@ -553,6 +555,7 @@ launcher_main() {
   export HOMEBREW_NO_AUTO_UPDATE=1
   export WOR_NATIVE_APP=1
   export WOR_CACHE_DIR="$APP_SUPPORT_DIR/cache"
+  export WOR_ICON_PATH="$RESOURCES_DIR/$WOR_ICON_FILENAME"
   trap - EXIT INT TERM
   rm -f "$STARTUP_STATUS" "$STARTUP_DONE"
   exec "$GUI_SCRIPT"

@@ -1098,8 +1098,8 @@ package_installed() { #exit 0 if $1 package is installed, otherwise exit 1
   grep "^Package: $package$" /var/lib/dpkg/status -A 1 | tail -n 1 | grep -q 'Status: install ok installed'
 }
 
-install_packages() { #input: space-separated list of apt packages to install
-  [ -z "$1" ] && error "install_packages(): requires a list of apt packages to install"
+install_packages() { #input: one or more apt packages to install
+  [ "$#" -eq 0 ] && error "install_packages(): requires a list of apt packages to install"
   if is_macos ;then
     command -v brew >/dev/null || error "macOS support requires Homebrew. Install it from https://brew.sh, then run this script again."
     local formula
@@ -1108,26 +1108,20 @@ install_packages() { #input: space-separated list of apt packages to install
     done
     return 0
   fi
-  local dependencies="$1"
-  local install_list=''
+  local install_list=()
   local package
 
-  local IFS=' '
-  for package in $dependencies ;do
+  for package in "$@" ;do
     if ! package_installed "$package" ;then
-      #if the currently-checked package is not installed, add it to the list of packages to install
-      if [ -z "$install_list" ];then
-        install_list="$package"
-      else
-        install_list="$install_list $package"
-      fi
+      #Keep package names as distinct arguments.
+      install_list+=("$package")
     fi
   done
 
-  if [ ! -z "$install_list" ];then
-    status "Installing packages: $install_list"
+  if [ "${#install_list[@]}" -gt 0 ];then
+    status "Installing packages: ${install_list[*]}"
     sudo apt update || error "Failed to run 'sudo apt update'! This is not an error in WoR-flasher."
-    sudo apt install -yf $install_list --no-install-recommends || error "Failed to install dependency packages! This is not an error in WoR-flasher."
+    sudo apt install -yf "${install_list[@]}" --no-install-recommends || error "Failed to install dependency packages! This is not an error in WoR-flasher."
   fi
 }
 
@@ -1605,7 +1599,7 @@ If this error persists, contact Botspot - the WoR-flasher developer."
 
   #install dependencies before using them for setup checks
   if [ "$SKIP_PACKAGE_INSTALL" != 1 ];then
-    install_packages "${WOR_LINUX_PACKAGES[*]}" || exit 1
+    install_packages "${WOR_LINUX_PACKAGES[@]}" || exit 1
 
     #install exfat partition manipulation utility. exfatprogs replaces exfat-utils, but they cannot both be installed at once.
     if [ "$HOST_OS" == Linux ];then

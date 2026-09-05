@@ -176,7 +176,7 @@ stop_loader() {
 
 macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label, optional action label/value, optional image path/next label/icon path/title/cancel value/timeout. Output: selected choice or action value.
   local result
-  result="$(wor_osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_LOGO_PATH}" "${10:-$WOR_APP_TITLE}" "${11:-}" "${12:-0}" "${13:-$WOR_APP_TITLE}" <<'JXA'
+  result="$(wor_osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_ICON_PATH}" "${10:-$WOR_APP_TITLE}" "${11:-}" "${12:-0}" "${13:-$WOR_APP_TITLE}" <<'JXA'
 ObjC.import('AppKit')
 ObjC.import('stdlib')
 ObjC.import('Foundation')
@@ -210,11 +210,12 @@ function cancelAndExit() {
   $.exit(0)
 }
 
-const app = $.NSApplication.sharedApplication
 $.NSProcessInfo.processInfo.processName = processTitle
+const app = $.NSApplication.sharedApplication
 app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
 const mainMenu = $.NSMenu.alloc.initWithTitle(appTitle)
 const appMenuItem = $.NSMenuItem.alloc.init
+appMenuItem.title = appTitle
 const appMenu = $.NSMenu.alloc.initWithTitle(appTitle)
 appMenu.addItemWithTitleActionKeyEquivalent('About ' + appTitle, 'orderFrontStandardAboutPanel:', '')
 appMenu.addItemWithTitleActionKeyEquivalent('Hide ' + appTitle, 'hide:', 'h')
@@ -231,6 +232,7 @@ if (iconPath.length > 0) {
 let tableView
 let window
 let selectedValue = null
+let allowTermination = false
 let countdownSeconds = announcementTimeout
 let countdownTimer = null
 let nextButton
@@ -337,6 +339,7 @@ const Controller = ObjC.registerSubclass({
     'applicationShouldTerminate:': {
       types: ['NSUInteger', ['id']],
       implementation: function() {
+        if (allowTermination) return $.NSTerminateNow
         cancelAndExit()
       }
     }
@@ -469,6 +472,8 @@ if (!isMessageMode) {
 
 //buttons are sized to their own text so any label (e.g. "Proceed with WoR-Flasher") fits without truncation
 nextButton = $.NSButton.buttonWithTitleTargetAction(nextLabel, controller, 'nextClicked:')
+nextButton.setTarget(controller)
+nextButton.setAction('nextClicked:')
 nextButton.bezelStyle = $.NSBezelStyleRounded
 nextButton.keyEquivalent = '\r'
 if (announcementTimeout > 0 && isMessageMode) nextButton.title = nextLabel + ' (' + announcementTimeout + ')'
@@ -525,11 +530,11 @@ app.runModalForWindow(window)
 
 if (selectedValue === null) {
   writeResult('__WOR_CANCEL__')
-  app.terminate(null)
 } else {
   writeResult(selectedValue)
-  app.terminate(null)
 }
+allowTermination = true
+app.terminate(null)
 JXA
 )"
   if [ "$result" == __WOR_CANCEL__ ];then
@@ -545,7 +550,7 @@ macos_show_announcement() { #Output: proceed or project partner.
     "Blackout Secure is proud to partner with Botspot and the Windows on R community, carrying WoR-Flasher forward while preserving Botspot's original authorship and project direction." \
     "Report issues, share feedback, or contribute at Botspot/wor-flasher." \
     "Support continued development by sponsoring Botspot or buying Blackout Secure a coffee on GitHub."
-  announcement_choice="$(macos_choose "$announcement_choices" "$announcement_text" 'Proceed with WoR-Flasher' Cancel '' '' "$WOR_ASSETS_DIR/partnership.png" 'Proceed with WoR-Flasher' "$WOR_LOGO_PATH" "$WOR_WINDOW_TITLE" '' "$WOR_ANNOUNCEMENT_TIMEOUT" "$WOR_APP_TITLE")" || return 1
+  announcement_choice="$(macos_choose "$announcement_choices" "$announcement_text" 'Proceed with WoR-Flasher' Cancel '' '' "$WOR_ASSETS_DIR/partnership.png" 'Proceed with WoR-Flasher' "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" '' "$WOR_ANNOUNCEMENT_TIMEOUT" "$WOR_APP_TITLE")" || return 1
 
   case "$announcement_choice" in
     'Proceed with WoR-Flasher') echo "$announcement_choice" ;;
@@ -605,8 +610,8 @@ const rows = checkboxSpec.split('\n').map(function(line) {
   return { label: parts[0], checked: parts[1] === '1', enabled: parts[2] !== '0' }
 })
 
-const app = $.NSApplication.sharedApplication
 $.NSProcessInfo.processInfo.processName = appTitle
+const app = $.NSApplication.sharedApplication
 app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
 if (iconPath.length > 0) {
   app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
@@ -839,7 +844,7 @@ app.terminate(null)
 JXA
 )"
 
-  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" <<<"$advanced_jxa" 2>/dev/null)"
+  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" <<<"$advanced_jxa" 2>/dev/null)"
   status="$(printf '%s\n' "$result" | sed -n '1p')"
   [ "$status" == OK ] || return 1
 
@@ -921,7 +926,7 @@ macos_start_cli() {
 All data on the target drive will be erased.
 
 To continue, click Flash. To review or change these settings, click Advanced. To cancel, click Back or close this window."
-        confirmation="$(macos_choose '' "$confirm_summary" Flash Back 'Advanced...' Advanced '' Flash "$WOR_LOGO_PATH" "$WOR_APP_TITLE" Back)" || confirmation=Cancel
+        confirmation="$(macos_choose '' "$confirm_summary" Flash Back 'Advanced...' Advanced '' Flash "$WOR_ICON_PATH" "$WOR_APP_TITLE" Back)" || confirmation=Cancel
         [ "$confirmation" == Cancel ] && exit 0
         if [ "$confirmation" == Advanced ];then
           macos_advanced_options
@@ -942,8 +947,8 @@ const iconPath = ObjC.unwrap(args.objectAtIndex(5))
 const appTitle = ObjC.unwrap(args.objectAtIndex(6))
 const imagePath = ObjC.unwrap(args.objectAtIndex(7) || '')
 
-const app = $.NSApplication.sharedApplication
 $.NSProcessInfo.processInfo.processName = appTitle
+const app = $.NSApplication.sharedApplication
 app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
 if (iconPath.length > 0) {
   app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
@@ -1110,8 +1115,8 @@ const iconPath = ObjC.unwrap(args.objectAtIndex(6))
 const appTitle = ObjC.unwrap(args.objectAtIndex(7))
 const abortMarker = ObjC.unwrap(args.objectAtIndex(8))
 
-const app = $.NSApplication.sharedApplication
 $.NSProcessInfo.processInfo.processName = appTitle
+const app = $.NSApplication.sharedApplication
 app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
 if (iconPath.length > 0) {
   app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
@@ -1320,7 +1325,7 @@ JXA
 
   gui_start_installer
 
-  wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
+  wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
 
   #Command-Q or a crashed/killed osascript can bypass the JXA abort handler. Never leave the flash unattended.
   [ -f "$done_marker" ] || touch "$abort_marker"
@@ -1336,7 +1341,7 @@ JXA
 
 $DEVICE is now in an unusable state and has to be flashed again before it can boot.
 
-  Full log: $saved_log" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" '' <<<"$completion_jxa" >/dev/null 2>&1
+  Full log: $saved_log" "$WOR_ICON_PATH" "$WOR_APP_TITLE" '' <<<"$completion_jxa" >/dev/null 2>&1
     exit 1
   fi
 
@@ -1367,7 +1372,7 @@ Full log: $saved_log"
   fi
   completion_image=''
   [ "$installer_status" == 0 ] && completion_image="$WOR_ASSETS_DIR/next-steps.png"
-  wor_osascript -l JavaScript - "$completion_text" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$completion_image" <<<"$completion_jxa" >/dev/null 2>&1
+  wor_osascript -l JavaScript - "$completion_text" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$completion_image" <<<"$completion_jxa" >/dev/null 2>&1
   exit "$installer_status"
 }
 

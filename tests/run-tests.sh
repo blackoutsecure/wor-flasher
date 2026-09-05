@@ -222,7 +222,8 @@ static_checks() {
     && pass "CLI ASCII banner names WoR-Flasher" \
     || fail "CLI ASCII banner does not name WoR-Flasher"
 
-  launcher="$REPO_DIR/WoR-Flasher.app/Contents/MacOS/WoR-Flasher"
+  if [ "$HOST_OS" == Darwin ];then
+    launcher="$REPO_DIR/WoR-Flasher.app/Contents/MacOS/WoR-Flasher"
   "$REPO_DIR/scripts/package-macos-app.sh" --check >/dev/null 2>&1 \
     && grep -qF 'validate_runtime "$EMBEDDED_RUNTIME" "$EMBEDDED_MANIFEST"' "$launcher" \
     && grep -qF 'actual_digest="$(shasum -a 256 "$archive"' "$launcher" \
@@ -237,6 +238,8 @@ static_checks() {
     && grep -qF 'brew install "${missing[@]}"' "$launcher" \
     && grep -qF "open 'https://brew.sh'" "$launcher" \
     && grep -qF "start_startup_window" "$launcher" \
+    && grep -qF 'local icon_path="$RESOURCES_DIR/$BUNDLE_ICON_FILENAME"' "$launcher" \
+    && grep -qF 'const controller = $.WorStartupController.alloc.init' "$launcher" \
     && grep -qF "startup_phase 'Checking for a safe source update...'" "$launcher" \
     && grep -qF 'for attempt in {1..80};do' "$launcher" \
     && grep -qF 'installed_formulae="$(brew list --formula 2>/dev/null)"' "$launcher" \
@@ -581,6 +584,25 @@ static_checks() {
       && pass "macOS app bundle metadata matches the shared name, version, and logo" \
       || fail "macOS app bundle metadata differs from the shared name, version, or logo"
   else
+    skip "macOS app property-list validation requires macOS"
+  fi
+  else
+    skip "macOS app packaging and update paths require macOS"
+    skip "packaged macOS engine loading requires macOS"
+    skip "macOS runtime bootstrap and tamper fallback require macOS"
+    skip "verified macOS runtime promotion and rollback require macOS"
+    skip "macOS runtime rejected-update handling requires macOS"
+    skip "macOS runtime version ordering requires macOS"
+    skip "macOS runtime manifest validation requires macOS"
+    skip "macOS runtime archive validation requires macOS"
+    skip "macOS runtime version-order mutation check requires macOS"
+    skip "macOS runtime digest mutation check requires macOS"
+    skip "macOS runtime symlink mutation check requires macOS"
+    skip "macOS runtime archive-safety mutation check requires macOS"
+    skip "macOS runtime fallback-order mutation check requires macOS"
+    skip "macOS launcher startup state check requires macOS"
+    skip "macOS launcher Homebrew dependency check requires macOS"
+    skip "macOS launcher update-probe timeout check requires macOS"
     skip "macOS app property-list validation requires macOS"
   fi
 
@@ -1145,9 +1167,18 @@ shared_function_checks() {
     && pass "a CLI run and a GUI run start from the same shipped config.txt" \
     || fail "the CLI and the GUI do not agree on the default config.txt"
 
+  if [ "$HOST_OS" == Linux ];then
+    package_arguments="$(run_in_engine 'package_installed() { return 1; }; sudo() { printf "%s\n" "$@"; }; status() { :; }; install_packages alpha beta gamma')"
+    [ "$package_arguments" == $'apt\nupdate\napt\ninstall\n-yf\nalpha\nbeta\ngamma\n--no-install-recommends' ] \
+      && pass "Linux dependency installation preserves individual package arguments" \
+      || fail "Linux dependency installation combines package names before invoking apt"
+  else
+    skip "Linux dependency argument handling requires Linux"
+  fi
+
   #the two front-ends used to keep their own export lists, so one could silently drop a setting
   exported_settings="$(run_in_engine 'SOURCE_FILE=/tmp/x.iso; set_default_config_txt; export_installer_settings
-    comm -23 <(printf "%s\n" "${WOR_INSTALLER_SETTINGS[@]}" | sort -u) <(bash -c compgen\ -e | sort -u)')"
+    comm -23 <(printf "%s\n" "${WOR_INSTALLER_SETTINGS[@]}" | sort -u) <(compgen -e | sort -u)')"
   [ -z "$exported_settings" ] \
     && [ "$(run_in_engine 'printf "%s\n" "${WOR_INSTALLER_SETTINGS[@]}" | sort | uniq -d | wc -l | tr -d " "')" == 0 ] \
     && pass "export_installer_settings hands the installer every collected setting exactly once" \
