@@ -3,6 +3,8 @@
 #Written by Botspot
 #This script is a GUI front-end for the install-wor.sh script
 
+: "${WOR_ANNOUNCEMENT_TIMEOUT:=30}"
+
 #shared app title, used for window titles and dialog titles across this file and install-wor.sh
 : "${WOR_APP_TITLE:=Windows on Raspberry}"
 
@@ -105,9 +107,9 @@ stop_loader() {
   loader_pid=''
 }
 
-macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label, optional action label/value, optional image path/next label/icon path/title/cancel value. Output: selected choice or action value.
+macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label, optional action label/value, optional image path/next label/icon path/title/cancel value/timeout. Output: selected choice or action value.
   local result
-  result="$(osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$DIRECTORY/logo.png}" "${10:-$WOR_APP_TITLE}" "${11:-}" <<'JXA'
+  result="$(osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_LOGO_PATH}" "${10:-$WOR_APP_TITLE}" "${11:-}" "${12:-0}" <<'JXA'
 ObjC.import('AppKit')
 ObjC.import('stdlib')
 ObjC.import('Foundation')
@@ -125,12 +127,18 @@ const nextLabel = ObjC.unwrap(args.objectAtIndex(11))
 const iconPath = ObjC.unwrap(args.objectAtIndex(12))
 const appTitle = ObjC.unwrap(args.objectAtIndex(13))
 const cancelValue = ObjC.unwrap(args.objectAtIndex(14))
+const announcementTimeout = Number(ObjC.unwrap(args.objectAtIndex(15) || '0'))
 //a message screen has no selectable rows; it may still show an image (e.g. the welcome screen)
 const isMessageMode = choices.length === 0
 
 function writeResult(value) {
   const data = $(value + '\n').dataUsingEncoding($.NSUTF8StringEncoding)
   $.NSFileHandle.fileHandleWithStandardOutput.writeData(data)
+}
+
+function cancelAndExit() {
+  writeResult('__WOR_CANCEL__')
+  $.exit(0)
 }
 
 if (ObjC.unwrap($.NSProcessInfo.processInfo.environment.objectForKey('WOR_CHOOSER_TEST') || '') === '1') {
@@ -147,9 +155,9 @@ if (iconPath.length > 0) {
 let tableView
 let window
 let selectedValue = null
-//set below, before the modal runs; read by linkClicked: when the user clicks a link button
-let linkMatches = []
-
+let countdownSeconds = announcementTimeout
+let countdownTimer = null
+let nextButton
 const Controller = ObjC.registerSubclass({
   name: 'WorChooserController',
   superclass: 'NSObject',
@@ -191,6 +199,33 @@ const Controller = ObjC.registerSubclass({
         window.orderOut(null)
       }
     },
+    'countdownTick:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        if (countdownSeconds <= 0) return
+        countdownSeconds -= 1
+        nextButton.title = nextLabel + ' (' + countdownSeconds + ')'
+        nextButton.sizeToFit
+        nextButton.frame = $.NSMakeRect((width - Math.max(180, nextButton.frame.size.width)) / 2, 22, Math.max(180, nextButton.frame.size.width), 32)
+        if (countdownSeconds === 0) {
+          countdownTimer.invalidate()
+          selectedValue = defaultChoice
+          app.stopModalWithCode($.NSOKButton)
+          window.orderOut(null)
+        }
+      }
+    },
+    'textView:clickedOnLink:atIndex:': {
+      types: ['BOOL', ['id', 'id', 'NSUInteger']],
+      implementation: function(_textView, link, _index) {
+        const url = ObjC.unwrap(link)
+        const pasteboard = $.NSPasteboard.generalPasteboard
+        pasteboard.clearContents
+        pasteboard.setStringForType($(url), $.NSPasteboardTypeString)
+        $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($(url)))
+        return true
+      }
+    },
     'actionClicked:': {
       types: ['void', ['id']],
       implementation: function() {
@@ -206,24 +241,12 @@ const Controller = ObjC.registerSubclass({
         app.stopModalWithCode($.NSCancelButton)
       }
     },
-    'linkClicked:': {
-      types: ['void', ['id']],
-      implementation: function() {
-        const linkIndex = Number(sender.tag)
-        if (!linkMatches[linkIndex]) return
-        const url = linkMatches[linkIndex][0]
-        const pasteboard = $.NSPasteboard.generalPasteboard
-        pasteboard.clearContents
-        pasteboard.setStringForType($(url), $.NSPasteboardTypeString)
-        $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($(url)))
-      }
-    },
     //right-click Quit from the Dock/app-switcher sends terminate: to NSApp; since this window is
     //hosted by osascript rather than a full NSApplicationMain run loop, that does not otherwise exit the process
     'handleQuitEvent:withReplyEvent:': {
       types: ['void', ['id', 'id']],
       implementation: function() {
-        $.exit(0)
+        cancelAndExit()
       }
     },
     'pumpEvents:': {
@@ -244,7 +267,7 @@ const Controller = ObjC.registerSubclass({
     'applicationShouldTerminate:': {
       types: ['NSUInteger', ['id']],
       implementation: function() {
-        $.exit(0)
+        cancelAndExit()
       }
     }
   }
@@ -268,15 +291,11 @@ window.contentView = content
 const prompt = $.NSTextField.labelWithString(promptText)
 prompt.font = $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightMedium)
 prompt.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
-let linkButton
 if (isMessageMode) {
   prompt.setUsesSingleLineMode(false)
   prompt.cell.setWraps(true)
   prompt.cell.setScrollable(false)
-  //Partnership announcements use named link buttons; other messages retain a generic URL button.
-  linkMatches = promptText.includes('Botspot and Blackout Secure')
-    ? [['https://github.com/Botspot', 'Botspot'], ['https://blackoutsecure.app', 'Blackout Secure']]
-    : (promptText.match(/https?:\/\/\S+/) ? [[promptText.match(/https?:\/\/\S+/)[0], 'Open link']] : [])
+  const isPartnershipAnnouncement = promptText.includes('Botspot and Blackout Secure')
   if (imagePath.length > 0) {
     prompt.frame = $.NSMakeRect(20, 76, width - 40, 44)
     const imageView = $.NSImageView.alloc.initWithFrame($.NSMakeRect(20, 140, width - 40, 320))
@@ -284,30 +303,29 @@ if (isMessageMode) {
     imageView.imageScaling = $.NSImageScaleProportionallyUpOrDown
     imageView.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
     content.addSubview(imageView)
-  } else if (linkMatches.length > 0) {
+  } else if (isPartnershipAnnouncement) {
     prompt.frame = $.NSMakeRect(20, 96, width - 40, height - 132)
   } else {
     prompt.frame = $.NSMakeRect(20, 72, width - 40, height - 112)
   }
-  if (linkMatches.length > 0) {
-    linkButton = []
-    linkMatches.forEach(function(link, index) {
-      const button = $.NSButton.buttonWithTitleTargetAction(link[1], controller, 'linkClicked:')
-      button.bezelStyle = $.NSBezelStyleInline
-      button.setBordered(false)
-      button.contentTintColor = $.NSColor.linkColor
-      button.tag = index
-      button.sizeToFit
-      const totalWidth = linkMatches.reduce(function(total, item) { return total + item[1].length * 8 + 24 }, 0)
-      const buttonWidth = Math.max(120, button.frame.size.width)
-      const startX = (width - totalWidth) / 2
-      button.frame = $.NSMakeRect(startX + index * (totalWidth / linkMatches.length), 54, buttonWidth, 22)
-      button.autoresizingMask = $.NSViewMinYMargin
-      linkButton.push(button)
-    })
+  if (isPartnershipAnnouncement) {
+    const attributedPrompt = $.NSMutableAttributedString.alloc.initWithString($(promptText))
+    const botspotIndex = promptText.indexOf('Botspot')
+    const blackoutIndex = promptText.indexOf('Blackout Secure')
+    attributedPrompt.addAttributeValueRange($.NSLinkAttributeName, $('https://github.com/Botspot'), $.NSMakeRange(botspotIndex, 7))
+    attributedPrompt.addAttributeValueRange($.NSLinkAttributeName, $('https://blackoutsecure.app'), $.NSMakeRange(blackoutIndex, 15))
+    const textView = $.NSTextView.alloc.initWithFrame($.NSMakeRect(20, 96, width - 40, height - 132))
+    textView.editable = false
+    textView.selectable = true
+    textView.drawsBackground = false
+    textView.textContainer.lineFragmentPadding = 0
+    textView.textStorage.setAttributedString(attributedPrompt)
+    textView.delegate = controller
+    textView.linkTextAttributes = $({ NSForegroundColorAttributeName: $.NSColor.linkColor, NSUnderlineStyleAttributeName: 1 })
+    content.addSubview(textView)
+  } else {
+    content.addSubview(prompt)
   }
-  content.addSubview(prompt)
-  if (linkButton) linkButton.forEach(function(button) { content.addSubview(button) })
 } else {
   prompt.frame = $.NSMakeRect(20, height - 52, width - 40, 24)
   content.addSubview(prompt)
@@ -339,14 +357,20 @@ if (!isMessageMode) {
 }
 
 //buttons are sized to their own text so any label (e.g. "Proceed with WoR-Flasher") fits without truncation
-const nextButton = $.NSButton.buttonWithTitleTargetAction(nextLabel, controller, 'nextClicked:')
+nextButton = $.NSButton.buttonWithTitleTargetAction(nextLabel, controller, 'nextClicked:')
 nextButton.bezelStyle = $.NSBezelStyleRounded
 nextButton.keyEquivalent = '\r'
+if (announcementTimeout > 0 && isMessageMode) nextButton.title = nextLabel + ' (' + announcementTimeout + ')'
 nextButton.sizeToFit
-let nextWidth = Math.max(96, nextButton.frame.size.width)
-nextButton.frame = $.NSMakeRect((width - nextWidth) / 2, 22, nextWidth, 32)
+let nextWidth = Math.max(180, nextButton.frame.size.width)
+const nextX = isMessageMode ? (width - nextWidth) / 2 : width - 20 - nextWidth
+nextButton.frame = $.NSMakeRect(nextX, 22, nextWidth, 32)
 nextButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxXMargin | $.NSViewMaxYMargin
 content.addSubview(nextButton)
+
+if (announcementTimeout > 0 && isMessageMode) {
+  countdownTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(1, controller, 'countdownTick:', $(), true)
+}
 
 //a message screen only hides Cancel for the image-based welcome screen; an explicitly empty cancelLabel hides it everywhere else
 const showCancelButton = cancelLabel.length > 0 && !(isMessageMode && imagePath.length > 0)
@@ -405,7 +429,7 @@ JXA
 macos_show_announcement() { #Output: proceed or project partner.
   local announcement_choices announcement_choice
   announcement_choices=''
-  announcement_choice="$(macos_choose "$announcement_choices" 'Botspot and Blackout Secure are working together to keep WoR-Flasher useful, supported and moving forward for the Windows on Raspberry Pi community. Click either name to learn more.' 'Proceed with WoR-Flasher' Cancel '' '' "$DIRECTORY/partnership.png" 'Proceed with WoR-Flasher' "$DIRECTORY/logo.png")" || return 1
+  announcement_choice="$(macos_choose "$announcement_choices" 'Botspot and Blackout Secure are working together to keep WoR-Flasher useful, supported and moving forward for the Windows on Raspberry Pi community. Click either name to learn more.' 'Proceed with WoR-Flasher' Cancel '' '' "$DIRECTORY/partnership.png" 'Proceed with WoR-Flasher' "$WOR_LOGO_PATH" '' "$WOR_ANNOUNCEMENT_TIMEOUT")" || return 1
 
   case "$announcement_choice" in
     'Proceed with WoR-Flasher') echo "$announcement_choice" ;;
@@ -675,7 +699,7 @@ app.terminate(null)
 JXA
 )"
 
-  result="$(osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" <<<"$advanced_jxa" 2>/dev/null)"
+  result="$(osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" <<<"$advanced_jxa" 2>/dev/null)"
   status="$(printf '%s\n' "$result" | sed -n '1p')"
   [ "$status" == OK ] || return 1
 
@@ -750,7 +774,7 @@ macos_start_cli() {
 All data on the target drive will be erased.
 
 To continue, click Flash. To review or change these settings, click Advanced. To cancel, click Back or close this window."
-        confirmation="$(macos_choose '' "$confirm_summary" Flash Back 'Advanced...' Advanced '' Flash "$DIRECTORY/logo.png" "$WOR_APP_TITLE" Back)" || confirmation=Cancel
+        confirmation="$(macos_choose '' "$confirm_summary" Flash Back 'Advanced...' Advanced '' Flash "$WOR_LOGO_PATH" "$WOR_APP_TITLE" Back)" || confirmation=Cancel
         [ "$confirmation" == Cancel ] && exit 0
         if [ "$confirmation" == Advanced ];then
           macos_advanced_options
@@ -769,6 +793,7 @@ const args = $.NSProcessInfo.processInfo.arguments
 const message = ObjC.unwrap(args.objectAtIndex(4))
 const iconPath = ObjC.unwrap(args.objectAtIndex(5))
 const appTitle = ObjC.unwrap(args.objectAtIndex(6))
+const imagePath = ObjC.unwrap(args.objectAtIndex(7) || '')
 
 const app = $.NSApplication.sharedApplication
 $.NSProcessInfo.processInfo.processName = appTitle
@@ -848,7 +873,7 @@ const controller = $.WorCompletionController.alloc.init
 app.setDelegate(controller)
 
 const width = 600
-const height = 240
+const height = imagePath.length > 0 ? 360 : 240
 const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable
 window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
 window.title = appTitle
@@ -859,12 +884,19 @@ const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
 window.contentView = content
 
 const label = $.NSTextField.labelWithString(message)
-label.frame = $.NSMakeRect(20, 70, width - 40, height - 100)
+label.frame = $.NSMakeRect(20, imagePath.length > 0 ? 178 : 70, width - 40, imagePath.length > 0 ? 84 : height - 100)
 label.font = $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightMedium)
 label.setUsesSingleLineMode(false)
 label.cell.setWraps(true)
 label.cell.setScrollable(false)
 content.addSubview(label)
+
+if (imagePath.length > 0) {
+  const imageView = $.NSImageView.alloc.initWithFrame($.NSMakeRect(20, 42, width - 40, 126))
+  imageView.image = $.NSImage.alloc.initWithContentsOfFile($(imagePath))
+  imageView.imageScaling = $.NSImageScaleProportionallyUpOrDown
+  content.addSubview(imageView)
+}
 
 //extract the log file path if present (after "Full log: ") and create clickable buttons
 let logPath = ''
@@ -1141,7 +1173,7 @@ JXA
 
   gui_start_installer
 
-  osascript -l JavaScript - "$progress_file" "$done_marker" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
+  osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
 
   #Command-Q or a crashed/killed osascript can bypass the JXA abort handler. Never leave the flash unattended.
   [ -f "$done_marker" ] || touch "$abort_marker"
@@ -1157,7 +1189,7 @@ JXA
 
 $DEVICE is now in an unusable state and has to be flashed again before it can boot.
 
-Full log: $saved_log" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" <<<"$completion_jxa" >/dev/null 2>&1
+  Full log: $saved_log" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" '' <<<"$completion_jxa" >/dev/null 2>&1
     exit 1
   fi
 
@@ -1186,7 +1218,9 @@ $(gui_log_tail "$saved_log")
 
 Full log: $saved_log"
   fi
-  osascript -l JavaScript - "$completion_text" "$DIRECTORY/logo.png" "$WOR_APP_TITLE" <<<"$completion_jxa" >/dev/null 2>&1
+  completion_image=''
+  [ "$installer_status" == 0 ] && completion_image="$DIRECTORY/next-steps.png"
+  osascript -l JavaScript - "$completion_text" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$completion_image" <<<"$completion_jxa" >/dev/null 2>&1
   exit "$installer_status"
 }
 
@@ -1201,18 +1235,18 @@ fi
 setup || exit 1
 
 #this array stores flags that are used in all yad windows - saves on the typing and makes it easy to change an attribute on all dialogs from one place.
-yadflags=(--center --width=400 --height=250 --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" --separator='\n')
+yadflags=(--center --width=400 --height=250 --window-icon="$WOR_LOGO_PATH" --title="$WOR_APP_TITLE" --separator='\n')
 
 #display partnership announcement
-yad "${yadflags[@]}" --buttons-layout=center \
+yad "${yadflags[@]}" --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT" --timeout-indicator=bottom \
   --image="$DIRECTORY/partnership.png" \
-  --text=$'&lt;a href="https://github.com/Botspot"&gt;Botspot&lt;/a&gt; and &lt;a href="https://blackoutsecure.app"&gt;Blackout Secure&lt;/a&gt; are working together to keep WoR-Flasher useful, supported and moving forward for the Windows on Raspberry Pi community.\nOngoing maintenance, support and improvements help make Windows installation from Linux and macOS more reliable.' \
+  --text=$'<a href="https://github.com/Botspot">Botspot</a> and <a href="https://blackoutsecure.app">Blackout Secure</a> are working together to keep WoR-Flasher useful, supported and moving forward for the Windows on Raspberry Pi community.\nOngoing maintenance, support and improvements help make Windows installation from Linux and macOS more reliable.' \
   --button='<b>Proceed with WoR-Flasher</b>':0
 
 { #choose destination RPi model and windows build ID
 if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
   output="$(yad "${yadflags[@]}" --height=0 --form --columns=2 \
-    --image="$DIRECTORY/logo-full.png" \
+    --image="$WOR_LOGO_PATH" \
     --text=$'<big><b>Welcome to WoR-Flasher</b></big>\nThis Blackout Secure fork keeps Botspot\'s upstream project visible while adding macOS support, safer image verification, native GUI polish and a broader maintenance/test pipeline for Raspberry Pi Windows installs.' \
     --field="Install":CB "Windows 11!Windows 10!More options" \
     --field="on a":CB "Pi5!Pi4/Pi400!Pi3/Pi2_v1.2" \
@@ -1809,7 +1843,7 @@ fi
 if [ "$exitcode" == 0 ];then
   rm -f "$output_log" "$error_marker"
   #display "next steps" window
-  yad --center --window-icon="$DIRECTORY/logo.png" --title="$WOR_APP_TITLE" \
+  yad --center --window-icon="$WOR_LOGO_PATH" --title="$WOR_APP_TITLE" \
     --image="$DIRECTORY/next-steps.png" --button=Close:0
 else
   #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on

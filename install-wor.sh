@@ -1,8 +1,39 @@
 #!/bin/bash
 
-#WoR-Flasher - install Windows 10/11 on a Raspberry Pi from Linux or macOS.
-#Originally written by Botspot: https://github.com/Botspot/wor-flasher
-#Automates this tutorial: https://worproject.com/guides/how-to-install/from-other-os
+#WoR-Flasher - install Windows 10/11 ARM64 on a Raspberry Pi from Linux or macOS.
+#Version: 1.0.1
+#
+#Copyright (C) 2021-2026 Botspot and the WoR-Flasher contributors.
+#Copyright (C) 2026 Blackout Secure.
+#
+#Original project and author:
+#  Botspot: https://github.com/Botspot
+#  Upstream WoR-Flasher: https://github.com/Botspot/wor-flasher
+#This maintained fork and source repository:
+#  Blackout Secure: https://blackoutsecure.app
+#  Repository: https://github.com/blackoutsecure/wor-flasher
+#  Maintainer contact: https://linktr.ee/billmcilhargey
+#
+#Documentation and related projects:
+#  Installation guide: https://worproject.com/guides/how-to-install/from-other-os
+#  Windows on Raspberry: https://worproject.com/
+#  Issues and support: https://github.com/blackoutsecure/wor-flasher/issues
+#  Security reports: https://github.com/blackoutsecure/wor-flasher/security/policy
+#
+#License and attribution:
+#  GPL-3.0 is provided for the Blackout Secure additions; see LICENSE and NOTICE.
+#  Upstream WoR-Flasher currently ships without an explicit license. Do not assume
+#  that this notice relicenses pre-existing upstream code; preserve Botspot's credit
+#  and consult NOTICE before redistributing or relicensing this fork.
+#
+#Safety recommendations:
+#  Use an external, physical, writable whole disk and verify the target before flashing.
+#  Back up the target first. Flashing erases the selected disk and can destroy data.
+#  Do not run as root, remove power, or unplug the target until verification and eject finish.
+#  Read README.md before use and prefer the tested pinned firmware and driver versions.
+#
+#Originally written by Botspot. Automates this tutorial:
+#  https://worproject.com/guides/how-to-install/from-other-os
 #
 #This is the Blackout Secure fork: https://github.com/blackoutsecure/wor-flasher
 #Upstream has never published a git tag or a GitHub release, so this fork keeps its own
@@ -90,7 +121,7 @@ ASKPASS
       register_file_cleanup "$LINUX_ASKPASS"
     fi
     if [ -n "$LINUX_ASKPASS" ];then
-      WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$DIRECTORY/logo.png" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"
+      WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$WOR_LOGO_PATH" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"
       return
     fi
   fi
@@ -141,7 +172,7 @@ gui_error_dialog() { #Input: error message
     touch "$WOR_GUI_ERROR_MARKER" 2>/dev/null
     sync 2>/dev/null || true
   fi
-  [ -f "$DIRECTORY/logo.png" ] && icon_path="$DIRECTORY/logo.png" || icon_path=''
+  [ -f "$WOR_LOGO_PATH" ] && icon_path="$WOR_LOGO_PATH" || icon_path=''
   if command -v osascript >/dev/null ;then
     osascript -l JavaScript - "$plain" "$icon_path" "$WOR_APP_TITLE" <<'JXA' >/dev/null 2>&1
 ObjC.import('AppKit')
@@ -246,6 +277,21 @@ echo_red() { #announce the failure of a nonfatal action
 
 warning() { #Input: message. A nonfatal problem the user should know about, but which does not stop the run.
   printf '\033[93m%b\033[0m\n' "$1" 1>&2
+}
+
+cli_intro() {
+  [ "$RUN_MODE" == gui ] && return
+  printf '\n\033[1;96m'
+  cat 1>&2 <<'BANNER'
+ __        __       ____  _           _
+ \ \      / /__  __/ ___|| |__   __ _| |_ ___| |__   ___ _ __
+  \ \ /\ / / _ \/ _` \___ \| '_ \ / _` | __/ __| '_ \ / _ \ '__|
+   \ V  V /  __/ (_| |___) | | | | (_| | || (__| | | |  __/ |
+    \_/\_/ \___|\__,_|____/|_| |_|\__,_|\__\___|_| |_|\___|_|
+BANNER
+  printf '\033[0m\033[1;92m  STRONGER TOGETHER.  BETTER FOR EVERYONE.\033[0m\n' 1>&2
+  printf '  Botspot (creator) + Blackout Secure (community maintenance)\n' 1>&2
+  printf '  https://github.com/Botspot  |  https://blackoutsecure.app\n\n' 1>&2
 }
 
 emit_gui_progress() { #Input: line. Lets a native GUI progress window show live status without a visible terminal.
@@ -1692,12 +1738,16 @@ esac
 #Determine the directory that contains this script
 [ -z "$DIRECTORY" ] && DIRECTORY="$(resolve_path "$(dirname "$0")")"
 
+#Shared logo asset for README-linked UI branding and all GUI dialogs.
+[ -z "$WOR_LOGO_PATH" ] && WOR_LOGO_PATH="$DIRECTORY/logo-full.png"
+
 #clear the variable storing path to this script, if the folder does not contain a file named 'install-wor.sh'
 [ ! -f "${DIRECTORY}/install-wor.sh" ] && DIRECTORY=''
 IFS=$'\n'
 
 #Self-updater target: which repo/ref this script compares its local git commit against, and pulls from.
-[ -z "$UPDATE_REPO_URL" ] && UPDATE_REPO_URL='https://github.com/Botspot/wor-flasher'
+#The default is the original Botspot repository; override this for a controlled mirror or fork.
+[ -z "$UPDATE_REPO_URL" ] && UPDATE_REPO_URL='https://github.com/Botspot/wor-flasher.git'
 [ -z "$UPDATE_REF" ] && UPDATE_REF='HEAD' #the branch/ref on UPDATE_REPO_URL to compare against, e.g. HEAD or refs/heads/main
 
 #Set NO_UPDATE=0 to opt in to source-checkout updates. Packaged releases should use signed release updates instead.
@@ -1813,6 +1863,7 @@ require_free_space "$required_download_space" "$DL_DIR"
 
 #unless specified otherwise, run this script in cli mode
 [ -z "$RUN_MODE" ] && RUN_MODE=cli #RUN_MODE=gui
+cli_intro
 
 if [ "$USE_CACHE" != 0 ] && [ "$USE_CACHE" != 1 ] && [ "$USE_CACHE" != 2 ];then
   error "Unknown value for USE_CACHE. Expected '0', '1' or '2'."

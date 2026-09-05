@@ -1,4 +1,4 @@
-# ![WoR-Flasher icon](logo.png) WoR-Flasher
+# ![WoR-Flasher logo](logo-full.png) WoR-Flasher
 
 ![Maintainer partnership banner](partnership.png)
 
@@ -28,33 +28,36 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
 
 ## Table of contents
 
-- [Compatibility](#compatibility)
-- [Requirements](#requirements)
-- [Install](#install)
-- [Usage](#usage)
-  - [Graphical interface](#graphical-interface)
-  - [Terminal interface](#terminal-interface)
-  - [Non-interactive use](#non-interactive-use)
-- [Parameters](#parameters)
-- [Application setup](#application-setup)
-  - [Existing Windows ISO](#existing-windows-iso)
-  - [Pi 4 RAM unlock](#pi-4-ram-unlock)
-  - [Offline Windows setup](#offline-windows-setup)
-  - [Customization templates](#customization-templates)
-  - [WoR-PE options](#wor-pe-options)
-  - [Download cache](#download-cache)
-- [What to expect](#what-to-expect)
-- [Updating](#updating)
-- [Troubleshooting](#troubleshooting)
-- [Development](#development)
-- [Support](#support)
-- [Maintainer partnership](#maintainer-partnership)
-- [What this fork adds](#what-this-fork-adds)
-- [Related resources](#related-resources)
-- [Versions](#versions)
-- [Contributing](#contributing)
-- [Contributors](#contributors)
-- [License](#license)
+- [Table of contents](#table-of-contents)
+  - [Compatibility](#compatibility)
+  - [Requirements](#requirements)
+  - [Install](#install)
+  - [Usage](#usage)
+    - [Graphical interface](#graphical-interface)
+      - [macOS walkthrough](#macos-walkthrough)
+    - [Terminal interface](#terminal-interface)
+    - [Non-interactive use](#non-interactive-use)
+  - [Integration adapter](#integration-adapter)
+  - [Parameters](#parameters)
+  - [Application setup](#application-setup)
+    - [Existing Windows ISO](#existing-windows-iso)
+    - [Pi 4 RAM unlock](#pi-4-ram-unlock)
+    - [Offline Windows setup](#offline-windows-setup)
+    - [Customization templates](#customization-templates)
+    - [WoR-PE options](#wor-pe-options)
+    - [Download cache](#download-cache)
+  - [What to expect](#what-to-expect)
+  - [Updating](#updating)
+  - [Troubleshooting](#troubleshooting)
+  - [Development](#development)
+  - [Support](#support)
+  - [Maintainer partnership](#maintainer-partnership)
+  - [What this fork adds](#what-this-fork-adds)
+  - [Related resources](#related-resources)
+  - [Versions](#versions)
+  - [Contributing](#contributing)
+  - [Contributors](#contributors)
+  - [License](#license)
 
 ---
 
@@ -113,11 +116,26 @@ Both therefore write identical media from identical settings.
 ./install-wor.sh --gui
 ```
 
+![WoR-Flasher shared graphical interface overview](overview.png)
+
+The overview image shows the shared installation workflow. On macOS, the same choices are presented in native AppKit windows rather than Linux `yad` dialogs.
+
 The front-end is never chosen automatically. `DISPLAY` is also set over SSH and in CI, and a tool that erases a drive should do exactly what it was asked to do.
 
 An **Advanced Options** window is reachable from the confirmation screen on both platforms. It exposes every configuration-only option as a checkbox, plus an editable `config.txt`: [offline Windows setup](#offline-windows-setup), the [Pi 4 RAM unlock](#pi-4-ram-unlock), whether to use the latest UEFI firmware or drivers instead of the tested pinned versions (the pinned version is shown in each label), whether to skip the final written-image verification, and dry run. `APPLY_CUSTOM_CONFIG_TXT` controls whether the editable `config.txt` is applied at all; unchecking it dims the editor and leaves the UEFI firmware package's own default in place. A **Downloaded files** menu selects the [cache mode](#download-cache), since it has three settings rather than two.
 
 Administrator access is requested through a native password dialog on both platforms — there is no terminal to type into.
+
+#### macOS walkthrough
+
+1. Launch `./install-wor-gui.sh` or `./install-wor.sh --gui` from macOS 13 or newer.
+2. Review the partnership announcement. The **Botspot** and **Blackout Secure** names open their respective websites, and the Proceed button continues automatically after the countdown.
+3. Choose the Windows version, language, Raspberry Pi model and target drive in native AppKit windows. The target drive is clearly identified before any erase operation.
+4. Review the shared Installation Overview, then use **Advanced Options** for cache mode, firmware and driver choices, Pi 4 RAM handling, offline OOBE and `config.txt` customization.
+5. Confirm the flash. A native progress window reports each shared installer phase, supports aborting, and retains a failure log when something stops unexpectedly.
+6. After successful verification, the completion dialog provides the log controls and the next-steps guidance for moving the drive to the Raspberry Pi.
+
+The repository does not currently include desktop captures of the macOS windows because the GUI requires an interactive macOS display session. The workflow and shared overview artwork are kept here so the documented behavior stays accurate across both front-ends.
 
 ### Terminal interface
 
@@ -155,6 +173,23 @@ CAN_INSTALL_ON_SAME_DRIVE=1
 
 Sourcing with the `source` argument makes the engine's functions available without running a flash. Useful ones include `list_devs`, `list_dev_paths`, `drive_capability`, `describe_device`, `get_bid`, `get_os_name`, `list_langs`, `validate_iso_file`, `list_cached_winfiles`, `settings_summary` and `install_packages`.
 
+## Integration adapter
+
+`install-wor-hook.sh` is the stable command-line adapter for other front-ends and automation. It keeps device safety and the flashing engine in `install-wor.sh` while exposing a small integration surface:
+
+```bash
+./install-wor-hook.sh list-devices
+./install-wor-hook.sh describe-device /dev/sda
+./install-wor-hook.sh summary
+
+DEVICE=/dev/sda RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us \
+  CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh run
+```
+
+The adapter is transport-neutral. A GUI, desktop launcher, service, test harness or another imaging application can discover safe devices, present its own choices, and invoke the same engine with environment variables. `WOR_GUI_PROGRESS_FILE` remains available when a frontend wants structured `STATUS`, `STEP` and `SUBSTEP` progress events.
+
+Raspberry Pi Imager supports a custom image repository through `--repo`, which is useful for publishing image metadata and downloads. It does not by itself turn an arbitrary shell flasher into an Imager write target. A future Imager integration should therefore be a deliberate adapter on the Imager side that calls this contract, rather than embedding or forking the flashing logic. See the [Raspberry Pi Imager repository](https://github.com/raspberrypi/rpi-imager) for its current repository and application integration model.
+
 ## Parameters
 
 Every prompt has a matching environment variable.
@@ -175,6 +210,9 @@ Every prompt has a matching environment variable.
 | `UEFI_USE_LATEST`           | `0`                    | `1` queries GitHub for the newest UEFI firmware instead of the pinned version               |
 | `DRIVERS_USE_LATEST`        | `1`                    | `0` uses the pinned driver package version                                                  |
 | `SKIP_IMAGE_VERIFICATION`   | `0`                    | `1` skips post-flash verification. Not recommended                                          |
+| `UPDATE_REPO_URL`           | Botspot/wor-flasher    | Git repository used by the opt-in self-updater; override for a trusted mirror               |
+| `UPDATE_REF`                | `HEAD`                 | Branch or ref checked by the self-updater                                                   |
+| `NO_UPDATE`                 | `1`                    | `0` opts in to fast-forwarding a clean source checkout                                      |
 | `HIDE_EMPTY_DRIVES`         | `1`                    | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
 | `USE_CACHE`                 | `1`                    | See [Download cache](#download-cache)                                                       |
 | `DRY_RUN`                   | `0`                    | `1` runs every step except writing to the drive                                             |
@@ -268,6 +306,8 @@ Mode `1` refreshes changed, missing, extra or outdated cached content. Delete `~
 6. Unmounts and ejects the drive.
 
 Downloads and final verification take a long time, especially on slow SD cards. Progress is shown for long operations. **Do not remove the drive until WoR-Flasher reports success.**
+
+![Next steps after flashing](next-steps.png)
 
 Move the completed drive to the Pi and connect a display, a wired keyboard and a wired mouse. Windows Setup may restart several times; do not remove power or the drive until setup completes.
 

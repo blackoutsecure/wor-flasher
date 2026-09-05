@@ -207,15 +207,21 @@ static_checks() {
     && grep -qF 'macos_show_announcement()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'partnership.png' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Proceed with WoR-Flasher' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "['https://github.com/Botspot', 'Botspot']" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "['https://blackoutsecure.app', 'Blackout Secure']" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "textView:clickedOnLink:atIndex:" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'NSLinkAttributeName' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Botspot and Blackout Secure' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const isMessageMode = choices.length === 0' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const imageView = $.NSImageView' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const iconPath = ObjC.unwrap(args.objectAtIndex(12))' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const cancelValue = ObjC.unwrap(args.objectAtIndex(14))' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'app.setApplicationIconImage' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF '"$DIRECTORY/logo.png")' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "function cancelAndExit()" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "cancelAndExit()" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"$WOR_LOGO_PATH"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'WOR_LOGO_PATH="$DIRECTORY/logo-full.png"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF ': "${WOR_ANNOUNCEMENT_TIMEOUT:=30}"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "'countdownTick:'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--timeout="$WOR_ANNOUNCEMENT_TIMEOUT"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'function writeResult(value)' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'fileHandleWithStandardOutput.writeData(data)' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'echo -e "\\\\e[91m' "$REPO_DIR/install-wor-gui.sh" \
@@ -246,6 +252,8 @@ static_checks() {
     && grep -qF 'All data on the target drive will be erased.' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "name: 'WorCompletionController'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'osascript -l JavaScript - "$completion_text"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'next-steps.png' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const imagePath = ObjC.unwrap(args.objectAtIndex(7)' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'exit "$installer_status"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'WOR_GUI_ERROR_MARKER="$error_marker"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).' "$REPO_DIR/install-wor-gui.sh" \
@@ -444,7 +452,7 @@ static_checks() {
     && grep -qF $'STEP\t$STEP_NUM\t$STEP_TOTAL\t$1' "$REPO_DIR/install-wor.sh" \
     && grep -qF $'STATUS\t$1' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'LINUX_ASKPASS="$(mktemp)"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$DIRECTORY/logo.png" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$WOR_LOGO_PATH" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF "yad \"\${yadflags[@]}\" --progress --no-buttons" "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF '"$DIRECTORY/terminal-run"' "$REPO_DIR/install-wor-gui.sh" \
     && pass "GUI mode runs the installer without a visible terminal on macOS and Linux" \
@@ -560,7 +568,7 @@ static_checks() {
   progress_block="$(sed -n "/^  progress_jxa=\"\$(cat <<'JXA'\$/,/^JXA\$/p" "$REPO_DIR/install-wor-gui.sh")"
   ! printf '%s' "$progress_block" | grep -qF '$.exit(0)' \
     && printf '%s' "$progress_block" | grep -qF 'if (confirmAbort()) app.stopModalWithCode($.NSCancelButton)' \
-    && [ "$(grep -c '        \$.exit(0)' "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
+    && [ "$(grep -c '        \$.exit(0)' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
     && grep -qF '[ -f "$done_marker" ] || touch "$abort_marker"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'wait "$installer_pid" 2>/dev/null' "$REPO_DIR/install-wor-gui.sh" \
     && pass "quitting mid-flash confirms first and any unexpected window exit stops the installer" \
@@ -826,6 +834,14 @@ rc=1" ] \
     && grep -qF 'Version 3, 29 June 2007' "$REPO_DIR/LICENSE" \
     && pass "every community health file is present and the license is GPL-3.0" \
     || fail "these community health files are missing or empty:$missing_community"
+
+  [ -x "$REPO_DIR/install-wor-hook.sh" ] \
+    && grep -qF 'list-devices)' "$REPO_DIR/install-wor-hook.sh" \
+    && grep -qF 'describe-device)' "$REPO_DIR/install-wor-hook.sh" \
+    && grep -qF 'summary)' "$REPO_DIR/install-wor-hook.sh" \
+    && grep -qF 'exec "$ENGINE"' "$REPO_DIR/install-wor-hook.sh" \
+    && pass "integration adapter exposes the shared installer engine" \
+    || fail "integration adapter is missing or does not use the shared engine"
 
   #upstream ships no license, so the fork must say so rather than implying a grant it cannot make
   grep -qF 'ships no LICENSE file' "$REPO_DIR/NOTICE" \
