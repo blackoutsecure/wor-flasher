@@ -1,0 +1,190 @@
+#!/bin/bash
+
+#Native macOS launcher for the WoR-Flasher GUI and engine.
+#It is not a second implementation: it verifies the checkout, synchronizes bundle metadata from
+#src/lib/metadata.sh, installs missing Homebrew formulae, then execs install-wor-gui.sh.
+#Repair and update are deliberately bounded - restore only missing tracked files, fast-forward only.
+
+set -u
+
+REPO_DIR="$(cd "$(dirname "$0")/../../.." && pwd -P)"
+GUI_SCRIPT="$REPO_DIR/install-wor-gui.sh"
+METADATA_FILE="$REPO_DIR/src/lib/metadata.sh"
+DEPENDENCIES_FILE="$REPO_DIR/src/lib/dependencies.sh"
+INFO_PLIST="$REPO_DIR/WoR-Flasher.app/Contents/Info.plist"
+RESOURCES_DIR="$REPO_DIR/WoR-Flasher.app/Contents/Resources"
+WOR_FLASHER_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST" 2>/dev/null || printf 'WoR-Flasher')"
+
+load_metadata() {
+  #shellcheck source=../../../src/lib/metadata.sh
+  source "$METADATA_FILE"
+  #shellcheck source=../../../src/lib/dependencies.sh
+  source "$DEPENDENCIES_FILE"
+}
+
+run_apple_script() {
+  if declare -F wor_osascript >/dev/null ;then
+    wor_osascript "$@"
+  else
+    /usr/bin/osascript "$@"
+  fi
+}
+
+sync_bundle_metadata() {
+  local key value current logo_source logo_resource icon_resource iconset_root iconset icon_size icon_png
+  logo_source="$REPO_DIR/$WOR_ASSETS_DIRNAME/$WOR_LOGO_FILENAME"
+  logo_resource="$RESOURCES_DIR/$WOR_LOGO_FILENAME"
+  icon_resource="$RESOURCES_DIR/$WOR_ICON_FILENAME"
+  [ -f "$logo_source" ] || return 1
+  mkdir -p "$RESOURCES_DIR" || return 1
+  if [ ! -f "$logo_resource" ] || ! cmp -s "$logo_source" "$logo_resource" ;then
+    cp "$logo_source" "$logo_resource" || return 1
+  fi
+  iconset_root="$(mktemp -d "${TMPDIR:-/tmp}/wor-flasher-iconset.XXXXXX")" || return 1
+  iconset="$iconset_root/wor-flasher.iconset"
+  mkdir "$iconset" || return 1
+  trap 'rm -rf "$iconset_root"' RETURN
+  sips --resampleHeight 440 "$logo_source" --out "$iconset/source.png" >/dev/null || return 1
+  sips --padToHeightWidth 512 512 --padColor 000000 "$iconset/source.png" --out "$iconset/icon_512x512.png" >/dev/null || return 1
+  rm -f "$iconset/source.png"
+  for icon_size in 16 32 128 256 512 ;do
+    icon_png="$iconset/icon_${icon_size}x${icon_size}.png"
+    sips --resampleHeightWidth "$icon_size" "$icon_size" "$iconset/icon_512x512.png" --out "$icon_png" >/dev/null || return 1
+    if [ "$icon_size" != 512 ];then
+      local retina_size=$((icon_size * 2))
+      sips --resampleHeightWidth "$retina_size" "$retina_size" "$iconset/icon_512x512.png" --out "$iconset/icon_${icon_size}x${icon_size}@2x.png" >/dev/null || return 1
+    fi
+  done
+  sips --resampleHeightWidth 1024 1024 "$iconset/icon_512x512.png" --out "$iconset/icon_512x512@2x.png" >/dev/null || return 1
+  iconutil --convert icns --output "$icon_resource" "$iconset" || return 1
+  rm -rf "$iconset_root"
+  trap - RETURN
+  while IFS=$'\t' read -r key value ;do
+    current="$(/usr/libexec/PlistBuddy -c "Print :$key" "$INFO_PLIST" 2>/dev/null)"
+    if [ -z "$current" ];then
+      /usr/libexec/PlistBuddy -c "Add :$key string $value" "$INFO_PLIST" || return 1
+    elif [ "$current" != "$value" ];then
+      /usr/libexec/PlistBuddy -c "Set :$key $value" "$INFO_PLIST" || return 1
+    fi
+  done <<EOF
+CFBundleDisplayName	$WOR_FLASHER_NAME
+CFBundleExecutable	$WOR_FLASHER_NAME
+CFBundleIconFile	$WOR_ICON_FILENAME
+CFBundleIconName	$WOR_ICON_NAME
+CFBundleName	$WOR_FLASHER_NAME
+CFBundleShortVersionString	$WOR_FLASHER_VERSION
+CFBundleVersion	$WOR_FLASHER_VERSION
+EOF
+}
+
+show_error() { #Input: message.
+  run_apple_script - "$WOR_FLASHER_NAME" "$1" <<'APPLESCRIPT' >/dev/null
+on run argv
+  display alert (item 1 of argv) message (item 2 of argv) as critical buttons {"Quit"} default button "Quit"
+end run
+APPLESCRIPT
+}
+
+ask_to_continue() { #Input: message, action label. Exit 0 when accepted.
+  local result
+  result="$(run_apple_script - "$WOR_FLASHER_NAME" "$1" "$2" <<'APPLESCRIPT' 2>/dev/null
+on run argv
+  set dialogResult to display dialog (item 2 of argv) with title (item 1 of argv) buttons {"Quit", item 3 of argv} default button (item 3 of argv) cancel button "Quit" with icon caution
+  return button returned of dialogResult
+end run
+APPLESCRIPT
+)" || return 1
+  [ "$result" == "$2" ]
+}
+
+repair_missing_files() {
+  local required_path
+  local required_paths=(install-wor.sh install-wor-gui.sh src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh config-templates assets/logo-full.png assets/partnership.png)
+  local missing=()
+  if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
+    while IFS= read -r required_path ;do
+      [ -n "$required_path" ] && required_paths+=("$required_path")
+    done < <(git -C "$REPO_DIR" ls-tree -r --name-only HEAD -- config-templates)
+  fi
+  for required_path in "${required_paths[@]}" ;do
+    [ -e "$REPO_DIR/$required_path" ] || missing+=("$required_path")
+  done
+  [ "${#missing[@]}" -gt 0 ] || return 0
+
+  git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 \
+    || { show_error $'Required WoR-Flasher files are missing and this is not a Git checkout:\n\n'"${missing[*]}"; return 1; }
+  for required_path in "${missing[@]}" ;do
+    git -C "$REPO_DIR" cat-file -e "HEAD:$required_path" 2>/dev/null \
+      || { show_error $'Required file cannot be repaired from the local checkout:\n\n'"$required_path"; return 1; }
+  done
+  ask_to_continue $'WoR-Flasher is missing required files:\n\n'"${missing[*]}"$'\n\nRestore only these files from the local Git revision?' Repair \
+    || return 1
+  git -C "$REPO_DIR" restore --source=HEAD -- "${missing[@]}" \
+    || { show_error 'WoR-Flasher could not restore its missing files.'; return 1; }
+}
+
+check_for_update() {
+  command -v git >/dev/null || return 0
+  git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  [ -z "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no)" ] || return 0
+
+  local update_repository="${UPDATE_REPO_URL:-}"
+  local update_ref="${UPDATE_REF:-}"
+  local local_commit remote_commit
+  [ -n "$update_repository" ] || update_repository="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null)" || return 0
+  [ -n "$update_ref" ] || update_ref="refs/heads/$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null)" || return 0
+  local_commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)" || return 0
+  remote_commit="$(git ls-remote "$update_repository" "$update_ref" 2>/dev/null | awk 'NR == 1 {print $1}')"
+  [ -n "$remote_commit" ] && [ "$local_commit" != "$remote_commit" ] || return 0
+
+  ask_to_continue $'A WoR-Flasher update is available.\n\nCurrent: '"${local_commit:0:12}"$'\nAvailable: '"${remote_commit:0:12}"$'\n\nUpdate this clean checkout before launching?' 'Update Now' \
+    || return 0
+  if ! git -C "$REPO_DIR" fetch --quiet "$update_repository" "$update_ref" \
+    || ! git -C "$REPO_DIR" merge --ff-only FETCH_HEAD >/dev/null ;then
+    show_error 'The update could not be applied safely. Your current checkout was not replaced.'
+    return 1
+  fi
+}
+
+prepare_dependencies() {
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  if ! command -v brew >/dev/null ;then
+    ask_to_continue 'WoR-Flasher needs Homebrew to install its command-line dependencies. Open the official Homebrew website?' 'Open Homebrew' \
+      && /usr/bin/open 'https://brew.sh'
+    return 1
+  fi
+
+  local formula
+  local missing=()
+  for formula in "${WOR_MACOS_BREW_FORMULAE[@]}" ;do
+    brew list --formula "$formula" >/dev/null 2>&1 || missing+=("$formula")
+  done
+  [ "${#missing[@]}" -gt 0 ] || return 0
+
+  ask_to_continue $'WoR-Flasher needs these Homebrew formulae:\n\n'"${missing[*]}"$'\n\nInstall only the missing dependencies now?' Install \
+    || return 1
+  export HOMEBREW_NO_AUTO_UPDATE=1
+  local install_log="${TMPDIR:-/tmp}/wor-flasher-brew-install.log"
+  if ! brew install "${missing[@]}" >"$install_log" 2>&1 ;then
+    show_error "Homebrew could not install every dependency.\n\nLog: $install_log"
+    return 1
+  fi
+  rm -f "$install_log"
+}
+
+if [ -r "$METADATA_FILE" ];then
+  load_metadata || exit 1
+fi
+repair_missing_files || exit 1
+load_metadata || { show_error 'Canonical WoR-Flasher metadata could not be loaded.'; exit 1; }
+check_for_update || exit 1
+repair_missing_files || exit 1
+load_metadata || { show_error 'Updated WoR-Flasher metadata could not be loaded.'; exit 1; }
+sync_bundle_metadata || { show_error 'The updated macOS app metadata could not be synchronized.'; exit 1; }
+prepare_dependencies || exit 1
+
+[ -x "$GUI_SCRIPT" ] || { show_error $'The GUI is not executable:\n\n'"$GUI_SCRIPT"; exit 1; }
+export NO_UPDATE=1
+export HOMEBREW_NO_AUTO_UPDATE=1
+export WOR_NATIVE_APP=1
+exec "$GUI_SCRIPT"

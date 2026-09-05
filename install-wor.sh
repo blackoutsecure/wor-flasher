@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #WoR-Flasher - install Windows 10/11 ARM64 on a Raspberry Pi from Linux or macOS.
-#Version: 1.0.1
+#Version is defined in src/lib/metadata.sh.
 #
 #Copyright (C) 2021-2026 Botspot and the WoR-Flasher contributors.
 #Copyright (C) 2026 Blackout Secure.
@@ -22,9 +22,9 @@
 #
 #License and attribution:
 #  GPL-3.0 is provided for the Blackout Secure additions; see LICENSE and NOTICE.
-#  Upstream WoR-Flasher currently ships without an explicit license. Do not assume
-#  that this notice relicenses pre-existing upstream code; preserve Botspot's credit
-#  and consult NOTICE before redistributing or relicensing this fork.
+#  The pre-existing Botspot code shipped without an explicit license. This notice does
+#  not relicense that code; preserve Botspot's credit and consult NOTICE before
+#  redistributing or relicensing it.
 #
 #Safety recommendations:
 #  Use an external, physical, writable whole disk and verify the target before flashing.
@@ -35,12 +35,16 @@
 #Originally written by Botspot. Automates this tutorial:
 #  https://worproject.com/guides/how-to-install/from-other-os
 #
-#This is the Blackout Secure fork: https://github.com/blackoutsecure/wor-flasher
-#Upstream has never published a git tag or a GitHub release, so this fork keeps its own
-#version line. WOR_FLASHER_VERSION below is the single source of truth for it.
+#This source is directly maintained by Blackout Secure:
+#  https://github.com/blackoutsecure/wor-flasher
+#WOR_FLASHER_VERSION below is the single source of truth for its version line.
 #
 #Version history
 #---------------
+#1.0.2 - A standalone install-wor-hook.sh now obtains a complete trusted checkout automatically.
+#        Fixed the native macOS partnership announcement construction, dark-mode text contrast
+#          and layout on current JXA runtimes.
+#        Direct maintenance messaging and default update checks now use Blackout Secure's source.
 #1.0.1 - Pi 4 UEFI pinned to v1.50, the only release where both the Ethernet MAC and microSD
 #          boot work. v1.51 (the previous pin) and v1.52 report a MAC of 00:00:00:00:00:00,
 #          leaving Windows on an APIPA address with no DHCP; v1.53 fixes that but still does
@@ -71,11 +75,17 @@
 #        support, Pi 5 support, GitHub API fallback for UEFI firmware, empty block devices filtered
 #        out of the drive list, and SHA-256 hashed ESD image handling.
 
-#Single source of truth for this fork's version. Reported by '--version'.
-WOR_FLASHER_VERSION='1.0.1'
-
-#shared app title, used for window titles and dialog titles across this file and install-wor-gui.sh
-: "${WOR_APP_TITLE:=Windows on Raspberry}"
+#Single source of truth for the product name, window title, and version.
+#shellcheck source=src/lib/metadata.sh
+WOR_METADATA_FILE="$(dirname "${BASH_SOURCE[0]}")/src/lib/metadata.sh"
+source "$WOR_METADATA_FILE"
+#shellcheck source=src/lib/dependencies.sh
+source "$(dirname "$WOR_METADATA_FILE")/dependencies.sh"
+#shellcheck source=src/lib/paths.sh
+source "$(dirname "$WOR_METADATA_FILE")/paths.sh"
+#shellcheck source=src/lib/cleanup.sh
+source "$(dirname "$WOR_METADATA_FILE")/cleanup.sh"
+export WOR_METADATA_FILE WOR_FLASHER_NAME WOR_FLASHER_VERSION WOR_APP_TITLE WOR_WINDOW_TITLE
 
 CLEANUP_MOUNTS=()
 CLEANUP_DEVICES=()
@@ -92,11 +102,14 @@ sudo() { #On the GUI, show a native password dialog instead of blocking a hidden
     if [ -z "$MACOS_ASKPASS" ] && MACOS_ASKPASS="$(mktemp)" && chmod +x "$MACOS_ASKPASS";then
       cat > "$MACOS_ASKPASS" <<'ASKPASS'
 #!/bin/bash
-osascript - "$WOR_FLASH_TARGET" <<'APPLESCRIPT'
+#shellcheck disable=SC1090
+source "$WOR_METADATA_FILE"
+wor_osascript - "$WOR_APP_TITLE" "$WOR_FLASH_TARGET" <<'APPLESCRIPT'
 on run argv
-  set targetDevice to item 1 of argv
+  set appTitle to item 1 of argv
+  set targetDevice to item 2 of argv
   set promptText to "WoR-Flasher needs administrator access to flash the drive." & return & return & "Formatting " & targetDevice & return & return & "There is no turning back now."
-  set dialogResult to display dialog promptText default answer "" with hidden answer with title "Windows on Raspberry" with icon caution
+  set dialogResult to display dialog promptText default answer "" with hidden answer with title appTitle with icon caution
   return text returned of dialogResult
 end run
 APPLESCRIPT
@@ -104,7 +117,7 @@ ASKPASS
       register_file_cleanup "$MACOS_ASKPASS"
     fi
     if [ -n "$MACOS_ASKPASS" ];then
-      WOR_FLASH_TARGET="$DEVICE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"
+      WOR_FLASH_TARGET="$DEVICE" WOR_METADATA_FILE="$WOR_METADATA_FILE" WOR_APP_TITLE="$WOR_APP_TITLE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"
       return
     fi
   elif ! is_macos && [ "$RUN_MODE" == gui ];then
@@ -128,41 +141,6 @@ ASKPASS
   command sudo "$@"
 }
 
-cleanup_mounts() {
-  local mountpoint
-  for mountpoint in "${CLEANUP_MOUNTS[@]}" ;do
-    if is_macos ;then
-      sudo diskutil unmount force "$mountpoint" >/dev/null 2>&1
-    else
-      sudo umount -q "$mountpoint" 2>/dev/null
-    fi
-  done
-  for mountpoint in "${CLEANUP_DEVICES[@]}" ;do
-    if is_macos ;then
-      sudo hdiutil detach "$mountpoint" >/dev/null 2>&1
-    fi
-  done
-  local file
-  for file in "${CLEANUP_FILES[@]}" ;do
-    rm -f "$file"
-  done
-}
-
-register_mount_cleanup() { #Input: mountpoint
-  CLEANUP_MOUNTS+=("$1")
-  trap cleanup_mounts EXIT
-}
-
-register_device_cleanup() { #Input: hdiutil device
-  CLEANUP_DEVICES+=("$1")
-  trap cleanup_mounts EXIT
-}
-
-register_file_cleanup() { #Input: file path
-  CLEANUP_FILES+=("$1")
-  trap cleanup_mounts EXIT
-}
-
 gui_error_dialog() { #Input: error message
   local plain icon_path
   plain="$(echo -e "An error has occurred:\n$1\nExiting now." | sed 's/\x1b\[[0-9;]*m//g' | sed 's/\x1b\[[0-9;]*//g' | sed "s,\x1B\[[0-9;]*[a-zA-Z],,g")"
@@ -174,7 +152,7 @@ gui_error_dialog() { #Input: error message
   fi
   [ -f "$WOR_LOGO_PATH" ] && icon_path="$WOR_LOGO_PATH" || icon_path=''
   if command -v osascript >/dev/null ;then
-    osascript -l JavaScript - "$plain" "$icon_path" "$WOR_APP_TITLE" <<'JXA' >/dev/null 2>&1
+    wor_osascript -l JavaScript - "$plain" "$icon_path" "$WOR_APP_TITLE" <<'JXA' >/dev/null 2>&1
 ObjC.import('AppKit')
 const args = $.NSProcessInfo.processInfo.arguments
 const message = ObjC.unwrap(args.objectAtIndex(4))
@@ -283,16 +261,15 @@ cli_intro() {
   [ "$RUN_MODE" == gui ] && return
   printf '\n\033[1;96m'
   cat 1>&2 <<'BANNER'
-   __        __      ____        _____ _           _
-   \ \      / /__   |  _ \      |  ___| | __ _ ___| |__   ___ _ __
-    \ \ /\ / / _ \  | |_) |_____| |_  | |/ _` / __| '_ \ / _ \ '__|
-     \ V  V / (_) | |  _ <_____|  _| | | (_| \__ \ | | |  __/ |
-    \_/\_/ \___/  |_| \_\    |_|   |_|\__,_|___/_| |_|\___|_|
-               WoR-Flasher
+ __        __    ____       _____ _           _
+ \ \      / /__ |  _ \     |  ___| | __ _ ___| |__   ___ _ __
+  \ \ /\ / / _ \| |_) |____| |_  | |/ _` / __| '_ \ / _ \ '__|
+   \ V  V / (_) |  _ <_____|  _| | | (_| \__ \ | | |  __/ |
+    \_/\_/ \___/|_| \_\    |_|   |_|\__,_|___/_| |_|\___|_|
 BANNER
-  printf '\033[0m\033[1;92m  STRONGER TOGETHER.  BETTER FOR EVERYONE.\033[0m\n' 1>&2
-  printf '  Botspot (creator) + Blackout Secure (community maintenance)\n' 1>&2
-  printf '  https://github.com/Botspot  |  https://blackoutsecure.app\n\n' 1>&2
+  printf '\033[0m\033[1;96m %s\033[0m \033[1;92m| STRONGER TOGETHER. BETTER FOR EVERYONE.\033[0m\n' "$WOR_FLASHER_NAME" 1>&2
+  printf ' Botspot + Blackout Secure | Community maintained\n' 1>&2
+  printf ' github.com/Botspot | blackoutsecure.app\n\n' 1>&2
 }
 
 emit_gui_progress() { #Input: line. Lets a native GUI progress window show live status without a visible terminal.
@@ -358,25 +335,6 @@ cli_pause() {
   if [ "$RUN_MODE" != gui ] && [ -t 0 ];then
     printf 'Press Enter to exit.\n'
     read -r </dev/tty
-  fi
-}
-
-resolve_path() { #Input: path. Output: absolute path, using GNU or BSD tools when available
-  [ -z "$1" ] && return 1
-  if command -v realpath >/dev/null ;then
-    realpath "$1" && return 0
-  fi
-  if readlink -f "$1" >/dev/null 2>&1 ;then
-    readlink -f "$1" && return 0
-  fi
-  if [ -d "$1" ];then
-    (cd "$1" && pwd -P)
-  else
-    local dir
-    local base
-    dir="$(dirname "$1")"
-    base="$(basename "$1")"
-    printf '%s/%s\n' "$(cd "$dir" && pwd -P)" "$base"
   fi
 }
 
@@ -523,17 +481,37 @@ darwin_mount_iso() { #Input: ISO path. Sets ISO_MOUNTPOINT and ISO_DEVICE.
 unattend_xml() { #Output: the answer file for this run, or nothing when neither customization is wanted.
   local auto_disable_3gb=0
   [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ] && auto_disable_3gb=1
-  [ "$OOBE_NETWORK_BYPASS" == 1 ] || [ "$auto_disable_3gb" == 1 ] || return 1
+  [ "$OOBE_NETWORK_BYPASS" == 1 ] || [ "$auto_disable_3gb" == 1 ] || [ "$WINDOWS_ACCOUNT_SETUP" == 1 ] || [ "$WINDOWS_LOCALE_SETUP" == 1 ] || return 1
 
   cat <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
-<unattend xmlns="urn:schemas-microsoft-com:unattend">
+<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 EOF
   [ "$auto_disable_3gb" == 1 ] && read_config_template pi4-ram-unlock-specialize.xml
   [ "$OOBE_NETWORK_BYPASS" == 1 ] && read_config_template oobe-network-bypass.xml
+  if [ "$WINDOWS_ACCOUNT_SETUP" == 1 ];then
+    cat <<EOF
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <UserAccounts><LocalAccounts><LocalAccount wcm:action="add"><Password><Value>$(xml_escape "$WINDOWS_ACCOUNT_PASSWORD")</Value><PlainText>true</PlainText></Password><Description>WoR-Flasher local administrator</Description><DisplayName>$(xml_escape "$WINDOWS_ACCOUNT_USERNAME")</DisplayName><Group>Administrators</Group><Name>$(xml_escape "$WINDOWS_ACCOUNT_USERNAME")</Name></LocalAccount></LocalAccounts></UserAccounts>
+    </component>
+  </settings>
+EOF
+  fi
+  if [ "$WINDOWS_LOCALE_SETUP" == 1 ];then
+    cat <<EOF
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><InputLocale>$WINDOWS_LOCALE</InputLocale><SystemLocale>$WINDOWS_LOCALE</SystemLocale><UILanguage>$WINDOWS_LOCALE</UILanguage><UILanguageFallback>en-US</UILanguageFallback><UserLocale>$WINDOWS_LOCALE</UserLocale></component>
+  </settings>
+EOF
+  fi
   cat <<'EOF'
 </unattend>
 EOF
+}
+
+xml_escape() { #Input: text. Output: XML-safe text.
+  printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'"'"'/\&apos;/g'
 }
 
 install_windows_setup_configuration() { #Input: mounted boot partition, mounted installation partition.
@@ -662,12 +640,22 @@ get_esd_catalog_entry() { #Input: catalog text, language. Output: the language's
   ' <<<"$1"
 }
 
-sha1_file() { #Input: file. Output: SHA1 hash
-  if command -v sha1sum >/dev/null ;then
-    sha1sum "$1" | awk '{print $1}'
+set_hash_command() { #Input: SHA bit length. Sets WOR_HASH_COMMAND to the host's hashing tool and its arguments.
+  #GNU coreutils ships shaNsum; BSD userlands ship only shasum -a N
+  if command -v "sha${1}sum" >/dev/null ;then
+    WOR_HASH_COMMAND=("sha${1}sum")
   else
-    shasum -a 1 "$1" | awk '{print $1}'
+    WOR_HASH_COMMAND=(shasum -a "$1")
   fi
+}
+
+hash_file() { #Input: SHA bit length, file. Output: hash
+  set_hash_command "$1"
+  "${WOR_HASH_COMMAND[@]}" "$2" | awk '{print $1}'
+}
+
+sha1_file() { #Input: file. Output: SHA1 hash
+  hash_file 1 "$1"
 }
 
 remark_pe_cache() { #Re-records the manifest after editing cached PE payload, or the next run treats the cache as corrupt and re-downloads.
@@ -718,27 +706,29 @@ configure_pe_prefinalize() { #Stages the answer file and WoR-PE's prefinalize ho
 }
 
 sha256_file() { #Input: file. Output: SHA256 hash
-  if command -v sha256sum >/dev/null ;then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
+  hash_file 256 "$1"
 }
 
-copy_file_with_progress() { #Input: progress label, source file, destination file
-  local label="$1" source="$2" destination="$3" size pipe_status
+copy_with_progress() { #Input: write mode (sudo or local), progress label, source file, destination file
+  local mode="$1" label="$2" source="$3" destination="$4" size
+  local -a writer pipe_status
   size="$(get_file_size "$source")" || return 1
-  with_progress_capture pv -f -N "$label" -s "$size" "$source" | sudo tee "$destination" >/dev/null
+  if [ "$mode" == sudo ];then
+    writer=(sudo tee)
+  else
+    writer=(tee)
+  fi
+  with_progress_capture pv -f -N "$label" -s "$size" "$source" | "${writer[@]}" "$destination" >/dev/null
   pipe_status=("${PIPESTATUS[@]}")
   [ "${pipe_status[0]}" == 0 ] && [ "${pipe_status[1]}" == 0 ]
+}
+
+copy_file_with_progress() { #Input: progress label, source file, destination file. Writes as root.
+  copy_with_progress sudo "$@"
 }
 
 copy_local_file_with_progress() { #Input: progress label, source file, destination file
-  local label="$1" source="$2" destination="$3" size pipe_status
-  size="$(get_file_size "$source")" || return 1
-  with_progress_capture pv -f -N "$label" -s "$size" "$source" | tee "$destination" >/dev/null
-  pipe_status=("${PIPESTATUS[@]}")
-  [ "${pipe_status[0]}" == 0 ] && [ "${pipe_status[1]}" == 0 ]
+  copy_with_progress local "$@"
 }
 
 copy_startup_environment_with_progress() { #Input: source boot-media root, destination root, optional local flag
@@ -754,24 +744,19 @@ copy_startup_environment_with_progress() { #Input: source boot-media root, desti
   fi
 }
 
-sha1_file_with_progress() { #Input: progress label, file. Output: SHA1 hash
-  local label="$1" file="$2" size
+hash_file_with_progress() { #Input: SHA bit length, progress label, file. Output: hash
+  local bits="$1" label="$2" file="$3" size
   size="$(get_file_size "$file")" || return 1
-  if command -v sha1sum >/dev/null ;then
-    (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | sha1sum | awk '{print $1}')
-  else
-    (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | shasum -a 1 | awk '{print $1}')
-  fi
+  set_hash_command "$bits"
+  (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | "${WOR_HASH_COMMAND[@]}" | awk '{print $1}')
+}
+
+sha1_file_with_progress() { #Input: progress label, file. Output: SHA1 hash
+  hash_file_with_progress 1 "$1" "$2"
 }
 
 sha256_file_with_progress() { #Input: progress label, file. Output: SHA256 hash
-  local label="$1" file="$2" size
-  size="$(get_file_size "$file")" || return 1
-  if command -v sha256sum >/dev/null ;then
-    (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | sha256sum | awk '{print $1}')
-  else
-    (set -o pipefail; with_progress_capture pv -f -N "$label" -s "$size" "$file" | shasum -a 256 | awk '{print $1}')
-  fi
+  hash_file_with_progress 256 "$1" "$2"
 }
 
 verify_written_image() { #Input: device, boot partition, install partition, boot mount, install mount, source install.wim
@@ -1114,7 +1099,7 @@ install_packages() { #input: space-separated list of apt packages to install
   if is_macos ;then
     command -v brew >/dev/null || error "macOS support requires Homebrew. Install it from https://brew.sh, then run this script again."
     local formula
-    for formula in aria2 cabextract jq wget wimlib gptfdisk pv; do
+    for formula in "${WOR_MACOS_BREW_FORMULAE[@]}"; do
       brew list --formula "$formula" >/dev/null 2>&1 || brew install "$formula" || error "Failed to install Homebrew dependency '$formula'."
     done
     return 0
@@ -1476,13 +1461,15 @@ wor_log_file() { #Output: where a failed run's log is kept. Resolved on use, sin
 }
 
 settings_summary() { #Output: tab-separated "label<TAB>value" lines describing this run. One source of truth for the CLI banner and both GUI confirmation screens.
-  printf 'WoR-Flasher version\t%s\n' "$WOR_FLASHER_VERSION"
+  printf '%s version\t%s\n' "$WOR_FLASHER_NAME" "$WOR_FLASHER_VERSION"
   printf 'Target drive\t%s\n' "$(describe_device "$DEVICE")"
   printf 'Target hardware\tRaspberry Pi %s\n' "$RPI_MODEL"
   printf 'Operating system\t%s\n' "$(get_os_name "$BID" | sed "s/ build / ($WIN_LANG) arm64 build /g")"
   printf 'Installation mode\t%s\n' "$(install_mode_label "$CAN_INSTALL_ON_SAME_DRIVE")"
   [ -n "$SOURCE_FILE" ] && printf 'Windows source\t%s\n' "$SOURCE_FILE"
   printf 'Offline OOBE\t%s\n' "$([ "$OOBE_NETWORK_BYPASS" == 1 ] && echo 'Allowed' || echo 'Disabled')"
+  printf 'Windows local account\t%s\n' "$([ "$WINDOWS_ACCOUNT_SETUP" == 1 ] && printf 'Administrator (%s)' "$WINDOWS_ACCOUNT_USERNAME" || echo 'Windows setup will ask')"
+  printf 'Windows keyboard and regional settings\t%s\n' "$([ "$WINDOWS_LOCALE_SETUP" == 1 ] && echo "$WINDOWS_LOCALE" || echo 'Windows setup defaults')"
   [ "$RPI_MODEL" == 4 ] && printf 'Pi 4 RAM unlock\t%s\n' "$([ "$PI4_AUTO_DISABLE_3GB" == 1 ] && echo 'Enabled' || echo 'Disabled')"
   printf 'UEFI firmware\t%s\n' "$([ "$UEFI_USE_LATEST" == 1 ] && echo 'Latest' || echo "Pinned ($(uefi_pinned_version))")"
   printf 'Windows ARM64 drivers\t%s\n' "$([ "$DRIVERS_USE_LATEST" == 1 ] && echo 'Latest' || echo "Pinned ($DRIVER_VER)")"
@@ -1561,7 +1548,7 @@ settings_summary_markup() { #Output: one pango-markup line per setting, for a ya
 #Every setting a GUI front-end collects and the installer subprocess has to see. Kept in one place so
 #the macOS and Linux front-ends can never drift into exporting different subsets of the same run.
 WOR_INSTALLER_SETTINGS=(DIRECTORY DL_DIR RPI_MODEL BID WIN_LANG DEVICE CAN_INSTALL_ON_SAME_DRIVE SOURCE_FILE
-  CONFIG_TXT APPLY_CUSTOM_CONFIG_TXT PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS UEFI_USE_LATEST DRIVERS_USE_LATEST
+  CONFIG_TXT APPLY_CUSTOM_CONFIG_TXT PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS WINDOWS_ACCOUNT_SETUP WINDOWS_ACCOUNT_USERNAME WINDOWS_ACCOUNT_PASSWORD WINDOWS_LOCALE_SETUP WINDOWS_LOCALE UEFI_USE_LATEST DRIVERS_USE_LATEST
   SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE DRY_RUN WOR_APP_TITLE)
 
 export_installer_settings() { #Exports every collected setting, so the installer subprocess runs exactly what was confirmed.
@@ -1614,7 +1601,7 @@ If this error persists, contact Botspot - the WoR-flasher developer."
 
   #install dependencies before using them for setup checks
   if [ "$SKIP_PACKAGE_INSTALL" != 1 ];then
-    install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc parted dosfstools unzip git pv' || exit 1
+    install_packages "${WOR_LINUX_PACKAGES[*]}" || exit 1
 
     #install exfat partition manipulation utility. exfatprogs replaces exfat-utils, but they cannot both be installed at once.
     if [ "$HOST_OS" == Linux ];then
@@ -1674,6 +1661,23 @@ esac
 if [ "$OOBE_NETWORK_BYPASS" != 0 ] && [ "$OOBE_NETWORK_BYPASS" != 1 ];then
   error "Unknown value for OOBE_NETWORK_BYPASS. Expected '0' or '1'."
 fi
+
+#Optional Windows setup customization. Passwords are written to Autounattend.xml only when explicitly enabled.
+[ -z "$WINDOWS_ACCOUNT_SETUP" ] && WINDOWS_ACCOUNT_SETUP=0
+[ -z "$WINDOWS_ACCOUNT_USERNAME" ] && WINDOWS_ACCOUNT_USERNAME=''
+[ -z "$WINDOWS_ACCOUNT_PASSWORD" ] && WINDOWS_ACCOUNT_PASSWORD=''
+[ -z "$WINDOWS_LOCALE_SETUP" ] && WINDOWS_LOCALE_SETUP=0
+[ -z "$WINDOWS_LOCALE" ] && WINDOWS_LOCALE='en-US'
+case "$WINDOWS_ACCOUNT_SETUP" in
+  0) ;;
+  1) [ -n "$WINDOWS_ACCOUNT_USERNAME" ] && [ -n "$WINDOWS_ACCOUNT_PASSWORD" ] || error "Windows account setup requires a username and password." ;;
+  *) error "Unknown value for WINDOWS_ACCOUNT_SETUP. Expected '0' or '1'." ;;
+esac
+case "$WINDOWS_LOCALE_SETUP" in
+  0) ;;
+  1) [[ "$WINDOWS_LOCALE" =~ ^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$ ]] || error "WINDOWS_LOCALE must look like en-US or en-GB." ;;
+  *) error "Unknown value for WINDOWS_LOCALE_SETUP. Expected '0' or '1'." ;;
+esac
 
 #Pinned versions. Used by default, or as a fallback when the GitHub API is unreachable.
 [ -z "$UEFI_VER_PI3" ] && UEFI_VER_PI3='v1.39'
@@ -1739,8 +1743,9 @@ esac
 #Determine the directory that contains this script
 [ -z "$DIRECTORY" ] && DIRECTORY="$(resolve_path "$(dirname "$0")")"
 
-#Shared logo asset for README-linked UI branding and all GUI dialogs.
-[ -z "$WOR_LOGO_PATH" ] && WOR_LOGO_PATH="$DIRECTORY/logo-full.png"
+#Shared UI artwork for README-linked branding, both GUIs and the macOS app icon.
+[ -z "$WOR_ASSETS_DIR" ] && WOR_ASSETS_DIR="$DIRECTORY/$WOR_ASSETS_DIRNAME"
+[ -z "$WOR_LOGO_PATH" ] && WOR_LOGO_PATH="$WOR_ASSETS_DIR/$WOR_LOGO_FILENAME"
 
 #clear the variable storing path to this script, if the folder does not contain a file named 'install-wor.sh'
 [ ! -f "${DIRECTORY}/install-wor.sh" ] && DIRECTORY=''
@@ -1748,7 +1753,7 @@ IFS=$'\n'
 
 #Self-updater target: which repo/ref this script compares its local git commit against, and pulls from.
 #The default is the original Botspot repository; override this for a controlled mirror or fork.
-[ -z "$UPDATE_REPO_URL" ] && UPDATE_REPO_URL='https://github.com/Botspot/wor-flasher.git'
+[ -z "$UPDATE_REPO_URL" ] && UPDATE_REPO_URL='https://github.com/blackoutsecure/wor-flasher.git'
 [ -z "$UPDATE_REF" ] && UPDATE_REF='HEAD' #the branch/ref on UPDATE_REPO_URL to compare against, e.g. HEAD or refs/heads/main
 
 #Set NO_UPDATE=0 to opt in to source-checkout updates. Packaged releases should use signed release updates instead.
@@ -1806,12 +1811,12 @@ Both scripts must be in the same directory."
   exec "$DIRECTORY/install-wor-gui.sh" "$@"
 fi
 if [ "$1" == '--version' ] || [ "$1" == '-V' ];then
-  printf 'WoR-Flasher %s\n' "$WOR_FLASHER_VERSION"
+  printf '%s %s\n' "$WOR_FLASHER_NAME" "$WOR_FLASHER_VERSION"
   exit 0
 fi
 if [ "$1" == '--help' ] || [ "$1" == '-h' ];then
   cat <<HELP
-WoR-Flasher $WOR_FLASHER_VERSION
+$WOR_FLASHER_NAME $WOR_FLASHER_VERSION
 Usage: $(basename "$0") [--gui]
 
   (no arguments)  run the interactive text-mode installer

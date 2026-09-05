@@ -1,7 +1,7 @@
 # Contributing
 
-Thanks for wanting to help. This is a fork of [Botspot/wor-flasher][upstream], and
-it tries hard to stay a good citizen of that project.
+Thanks for wanting to help. Blackout Secure directly maintains this source while
+preserving Botspot's original authorship and the project's community connections.
 
 ## Table of contents
 
@@ -15,23 +15,15 @@ it tries hard to stay a good citizen of that project.
 
 ## Where to send your change
 
-Ask one question first: **does this fix a bug that upstream also has?**
-
-- **Yes** — please send it to [Botspot/wor-flasher][upstream] instead, or as well.
-  Upstream [is looking for a maintainer][maintainer] and benefits far more from your
-  patch than this fork does. Everyone using WoR-Flasher wins.
-- **No, it is specific to this fork** — macOS support, the native progress windows,
-  the test harness, the written-image verification — then open it here.
-
-We do not want this fork to drift into a hostile parallel project. Anything
-generally useful should end up upstream.
+Open bug fixes, features and documentation changes at [blackoutsecure/wor-flasher][issues].
+Keep changes focused, preserve original attribution and explain user-visible behavior
+in the pull request.
 
 ## Getting set up
 
 ```bash
 git clone https://github.com/blackoutsecure/wor-flasher
 cd wor-flasher
-git remote add upstream https://github.com/Botspot/wor-flasher
 ```
 
 You need `bash`, `shellcheck`, and — for the Linux integration suite on a non-Linux
@@ -53,6 +45,10 @@ Two things to know about the harness:
 - On macOS only the **Static checks** and **Shared engine functions** sections run.
   Everything else is gated behind `command -v losetup`. A test added elsewhere will
   not execute on macOS — validate it with `run-linux-integration.sh`.
+- On a non-Linux host the run prints three summaries: the Docker container's nested
+  run, the integration wrapper, then the host's own run. Every one must report
+  `failed 0`. A failing host-side check is reported in its own summary, so do not
+  read the container summary alone.
 - Tests call the real functions out of `install-wor.sh` through the `run_in_engine`
   helper. Please do not restate product logic inside a test; a test that reimplements
   what it is checking can pass against code that no longer works.
@@ -109,6 +105,8 @@ Please read these before touching the relevant code. Each one cost real debuggin
   is worth more than any amount of review.
 - If you changed behaviour, update the README and the version history at the top of
   `install-wor.sh` in the same commit.
+- For a release, update `WOR_FLASHER_VERSION` in `src/lib/metadata.sh` and both version
+  fields in `WoR-Flasher.app/Contents/Info.plist`; the test suite checks all release metadata.
 - Be honest about what you did not test. Nobody has every Pi model.
 
 ## Reporting a bug
@@ -125,8 +123,6 @@ For real-time help, the [Botspot Software Discord][botspot-discord] is the best 
 for WoR-Flasher itself, and the [WoR project Discord][wor-discord] is the place for
 questions about Windows on Raspberry as an operating system.
 
-[upstream]: https://github.com/Botspot/wor-flasher
-[maintainer]: https://github.com/Botspot/wor-flasher#-this-repository-is-looking-for-a-maintainer
 [issues]: https://github.com/blackoutsecure/wor-flasher/issues/new/choose
 [botspot-discord]: https://discord.gg/RXSTvaUvuu
 [wor-discord]: https://discord.gg/jQCpfVK

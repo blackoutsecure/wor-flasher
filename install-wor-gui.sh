@@ -1,17 +1,26 @@
 #!/bin/bash
 
-#Written by Botspot
-#This script is a GUI front-end for the install-wor.sh script
+#WoR-Flasher graphical front-end for Linux and macOS.
+#Presentation only: every decision, validation and device operation belongs to install-wor.sh,
+#which this script sources so the two can never disagree about what actually gets flashed.
+#Native AppKit/JXA dialogs are used on macOS and yad dialogs on Linux; the two must stay aligned.
+#Version, licensing and attribution are defined in src/lib/metadata.sh and install-wor.sh.
+#
+#Original author: Botspot - https://github.com/Botspot/wor-flasher
+#Maintained fork: Blackout Secure - https://github.com/blackoutsecure/wor-flasher
 
 : "${WOR_ANNOUNCEMENT_TIMEOUT:=30}"
-
-#shared app title, used for window titles and dialog titles across this file and install-wor.sh
-: "${WOR_APP_TITLE:=Windows on Raspberry}"
 
 export RUN_MODE=gui #this variable is detected by install-wor.sh to display gui error messages
 
 #Determine the directory that contains this script
 [ -z "$DIRECTORY" ] && DIRECTORY="$(cd "$(dirname "$0")" && pwd -P)"
+
+#The native app owns macOS preflight and dependency setup. A direct script launch
+#hands off to that app; WOR_NATIVE_APP prevents the app's own exec from looping back.
+if [ "$(uname -s)" == Darwin ] && [ "${WOR_NATIVE_APP:-0}" != 1 ] && [ -x "$DIRECTORY/WoR-Flasher.app/Contents/MacOS/WoR-Flasher" ];then
+  exec /usr/bin/open -W "$DIRECTORY/WoR-Flasher.app"
+fi
 
 #This script and cli-based install-wor.sh must be in the same directory. Source it before anything else
 #so every shared behaviour - error dialogs, status output, drive detection, the settings summary - comes
@@ -22,8 +31,66 @@ if [ ! -d "$DIRECTORY" ] || [ ! -f "$cli_script" ];then
   printf '\033[91m%b\033[0m\n' "No script found named install-wor.sh\nBoth scripts must be in the same directory." 1>&2
   exit 1
 fi
+
 #shellcheck disable=SC1090
 source "$cli_script" source #by sourcing, this script checks for and applies updates.
+
+find_macos_gui_process() { #Input: parent pid. Output: first descendant WoR-Flasher script-host pid.
+  local child found process_name
+  for child in $(pgrep -P "$1" 2>/dev/null) ;do
+    process_name="$(ps -p "$child" -o comm= 2>/dev/null)"
+    if [ "${process_name##*/}" == "$WOR_FLASHER_NAME" ];then
+      printf '%s\n' "$child"
+      return 0
+    fi
+    found="$(find_macos_gui_process "$child")" && { printf '%s\n' "$found"; return 0; }
+  done
+  return 1
+}
+
+activate_macos_gui() { #Input: owning shell pid. Brings its current JXA window forward.
+  local gui_pid
+  gui_pid="$(find_macos_gui_process "$1")" || return 1
+  wor_osascript -l JavaScript - "$gui_pid" <<'JXA' >/dev/null 2>&1
+ObjC.import('AppKit')
+const pid = Number(ObjC.unwrap($.NSProcessInfo.processInfo.arguments.objectAtIndex(4)))
+const runningApp = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid)
+if (!runningApp) $.exit(1)
+runningApp.unhide
+if (!runningApp.activateWithOptions($.NSApplicationActivateAllWindows | $.NSApplicationActivateIgnoringOtherApps)) $.exit(1)
+JXA
+}
+
+release_gui_instance() {
+  local owner_pid
+  owner_pid="$(cat "$WOR_GUI_INSTANCE_DIR/pid" 2>/dev/null)"
+  [ "$owner_pid" == "$$" ] || return 0
+  rm -f "$WOR_GUI_INSTANCE_DIR/pid"
+  rmdir "$WOR_GUI_INSTANCE_DIR" 2>/dev/null
+}
+
+acquire_gui_instance() {
+  local owner_command owner_pid
+  WOR_GUI_INSTANCE_DIR="${TMPDIR:-/tmp}/wor-flasher-gui-${UID}.lock"
+  if ! mkdir "$WOR_GUI_INSTANCE_DIR" 2>/dev/null ;then
+    owner_pid="$(cat "$WOR_GUI_INSTANCE_DIR/pid" 2>/dev/null)"
+    owner_command="$(ps -p "$owner_pid" -o args= 2>/dev/null)"
+    if [ -n "$owner_pid" ] && kill -0 "$owner_pid" 2>/dev/null && [[ "$owner_command" == *install-wor-gui.sh* ]];then
+      [ "$(uname -s)" != Darwin ] || activate_macos_gui "$owner_pid"
+      return 1
+    fi
+    rm -f "$WOR_GUI_INSTANCE_DIR/pid"
+    rmdir "$WOR_GUI_INSTANCE_DIR" 2>/dev/null
+    mkdir "$WOR_GUI_INSTANCE_DIR" 2>/dev/null || return 1
+  fi
+  printf '%s\n' "$$" > "$WOR_GUI_INSTANCE_DIR/pid"
+  export WOR_GUI_INSTANCE_DIR
+  trap release_gui_instance EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' HUP TERM
+}
+
+acquire_gui_instance || exit 0
 
 echo "DIRECTORY: $DIRECTORY"
 echo "DL_DIR: $DL_DIR"
@@ -109,7 +176,7 @@ stop_loader() {
 
 macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label, optional action label/value, optional image path/next label/icon path/title/cancel value/timeout. Output: selected choice or action value.
   local result
-  result="$(osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_LOGO_PATH}" "${10:-$WOR_APP_TITLE}" "${11:-}" "${12:-0}" <<'JXA'
+  result="$(wor_osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_LOGO_PATH}" "${10:-$WOR_APP_TITLE}" "${11:-}" "${12:-0}" "${13:-$WOR_APP_TITLE}" <<'JXA'
 ObjC.import('AppKit')
 ObjC.import('stdlib')
 ObjC.import('Foundation')
@@ -128,8 +195,10 @@ const iconPath = ObjC.unwrap(args.objectAtIndex(12))
 const appTitle = ObjC.unwrap(args.objectAtIndex(13))
 const cancelValue = ObjC.unwrap(args.objectAtIndex(14))
 const announcementTimeout = Number(ObjC.unwrap(args.objectAtIndex(15) || '0'))
+const processTitle = ObjC.unwrap(args.objectAtIndex(16) || appTitle)
 //a message screen has no selectable rows; it may still show an image (e.g. the welcome screen)
 const isMessageMode = choices.length === 0
+const isPartnershipAnnouncement = imagePath.endsWith('/partnership.png')
 
 function writeResult(value) {
   const data = $(value + '\n').dataUsingEncoding($.NSUTF8StringEncoding)
@@ -147,8 +216,20 @@ if (ObjC.unwrap($.NSProcessInfo.processInfo.environment.objectForKey('WOR_CHOOSE
 }
 
 const app = $.NSApplication.sharedApplication
-$.NSProcessInfo.processInfo.processName = appTitle
+$.NSProcessInfo.processInfo.processName = processTitle
 app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+const mainMenu = $.NSMenu.alloc.initWithTitle(appTitle)
+const appMenuItem = $.NSMenuItem.alloc.init
+const appMenu = $.NSMenu.alloc.initWithTitle(appTitle)
+appMenu.addItemWithTitleActionKeyEquivalent('About ' + appTitle, 'orderFrontStandardAboutPanel:', '')
+appMenu.addItemWithTitleActionKeyEquivalent('Hide ' + appTitle, 'hide:', 'h')
+appMenu.addItemWithTitleActionKeyEquivalent('Hide Others', 'hideOtherApplications:', 'h')
+appMenu.addItemWithTitleActionKeyEquivalent('Show All', 'unhideAllApplications:', '')
+appMenu.addItem($.NSMenuItem.separatorItem)
+appMenu.addItemWithTitleActionKeyEquivalent('Quit ' + appTitle, 'terminate:', 'q')
+appMenuItem.submenu = appMenu
+mainMenu.addItem(appMenuItem)
+app.mainMenu = mainMenu
 if (iconPath.length > 0) {
   app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
 }
@@ -205,10 +286,7 @@ const Controller = ObjC.registerSubclass({
         if (countdownSeconds <= 0) return
         countdownSeconds -= 1
         nextButton.title = nextLabel + ' (' + countdownSeconds + ')'
-        nextButton.sizeToFit
-        nextButton.frame = $.NSMakeRect((width - Math.max(180, nextButton.frame.size.width)) / 2, 22, Math.max(180, nextButton.frame.size.width), 32)
         if (countdownSeconds === 0) {
-          countdownTimer.invalidate()
           selectedValue = defaultChoice
           app.stopModalWithCode($.NSOKButton)
           window.orderOut(null)
@@ -219,9 +297,6 @@ const Controller = ObjC.registerSubclass({
       types: ['BOOL', ['id', 'id', 'NSUInteger']],
       implementation: function(_textView, link, _index) {
         const url = ObjC.unwrap(link)
-        const pasteboard = $.NSPasteboard.generalPasteboard
-        pasteboard.clearContents
-        pasteboard.setStringForType($(url), $.NSPasteboardTypeString)
         $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($(url)))
         return true
       }
@@ -275,12 +350,13 @@ const Controller = ObjC.registerSubclass({
 
 const controller = $.WorChooserController.alloc.init
 app.setDelegate(controller)
-const width = 760
-const height = 500
-const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskResizable
+const screenFrame = $.NSScreen.mainScreen.visibleFrame
+const width = isPartnershipAnnouncement ? Math.min(760, screenFrame.size.width - 40) : 760
+const height = isPartnershipAnnouncement ? Math.min(600, screenFrame.size.height - 60) : 500
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable | (isPartnershipAnnouncement ? 0 : $.NSWindowStyleMaskResizable)
 window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
 window.title = appTitle
-window.minSize = $.NSMakeSize(640, 260)
+if (!isPartnershipAnnouncement) window.minSize = $.NSMakeSize(640, 260)
 window.setDelegate(controller)
 window.center
 
@@ -295,13 +371,16 @@ if (isMessageMode) {
   prompt.setUsesSingleLineMode(false)
   prompt.cell.setWraps(true)
   prompt.cell.setScrollable(false)
-  const isPartnershipAnnouncement = promptText.includes('Botspot and Blackout Secure')
   if (imagePath.length > 0) {
-    prompt.frame = $.NSMakeRect(20, 76, width - 40, 44)
-    const imageView = $.NSImageView.alloc.initWithFrame($.NSMakeRect(20, 140, width - 40, 320))
+    prompt.frame = $.NSMakeRect(20, 76, width - 40, 122)
+    const imageHeight = isPartnershipAnnouncement ? Math.min(315, height - 185) : 320
+    const imageFrame = isPartnershipAnnouncement
+      ? $.NSMakeRect(20, height - imageHeight - 12, width - 40, imageHeight)
+      : $.NSMakeRect(20, 140, width - 40, imageHeight)
+    const imageView = $.NSImageView.alloc.initWithFrame(imageFrame)
     imageView.image = $.NSImage.alloc.initWithContentsOfFile($(imagePath))
     imageView.imageScaling = $.NSImageScaleProportionallyUpOrDown
-    imageView.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
+    imageView.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
     content.addSubview(imageView)
   } else if (isPartnershipAnnouncement) {
     prompt.frame = $.NSMakeRect(20, 96, width - 40, height - 132)
@@ -309,19 +388,56 @@ if (isMessageMode) {
     prompt.frame = $.NSMakeRect(20, 72, width - 40, height - 112)
   }
   if (isPartnershipAnnouncement) {
-    const attributedPrompt = $.NSMutableAttributedString.alloc.initWithString($(promptText))
-    const botspotIndex = promptText.indexOf('Botspot')
-    const blackoutIndex = promptText.indexOf('Blackout Secure')
-    attributedPrompt.addAttributeValueRange($.NSLinkAttributeName, $('https://github.com/Botspot'), $.NSMakeRange(botspotIndex, 7))
-    attributedPrompt.addAttributeValueRange($.NSLinkAttributeName, $('https://blackoutsecure.app'), $.NSMakeRange(blackoutIndex, 15))
-    const textView = $.NSTextView.alloc.initWithFrame($.NSMakeRect(20, 96, width - 40, height - 132))
+    const attributedPrompt = $.NSMutableAttributedString.alloc.init
+    attributedPrompt.mutableString.appendString($(promptText))
+    const fullPromptRange = $.NSMakeRange(0, promptText.length)
+    const paragraphStyle = $.NSMutableParagraphStyle.alloc.init
+    paragraphStyle.alignment = $.NSTextAlignmentCenter
+    paragraphStyle.lineBreakMode = $.NSLineBreakByWordWrapping
+    paragraphStyle.lineSpacing = 1
+    paragraphStyle.paragraphSpacing = 4
+    attributedPrompt.addAttributeValueRange($.NSForegroundColorAttributeName, $.NSColor.labelColor, fullPromptRange)
+    attributedPrompt.addAttributeValueRange($.NSFontAttributeName, $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightMedium), fullPromptRange)
+    attributedPrompt.addAttributeValueRange($.NSParagraphStyleAttributeName, paragraphStyle, fullPromptRange)
+    function addPromptLink(label, url) {
+      const index = promptText.indexOf(label)
+      if (index < 0) return
+      const range = $.NSMakeRange(index, label.length)
+      attributedPrompt.addAttributeValueRange($.NSLinkAttributeName, $(url), range)
+      attributedPrompt.addAttributeValueRange($.NSForegroundColorAttributeName, $.NSColor.linkColor, range)
+      attributedPrompt.addAttributeValueRange($.NSUnderlineStyleAttributeName, $(1), range)
+    }
+    addPromptLink('Blackout Secure', 'https://blackoutsecure.app/')
+    addPromptLink('Botspot', 'https://github.com/Botspot')
+    addPromptLink('Windows on R', 'https://worproject.com/')
+    addPromptLink('Botspot/wor-flasher', 'https://github.com/Botspot/wor-flasher')
+    addPromptLink('sponsoring Botspot', 'https://github.com/sponsors/Botspot')
+    addPromptLink('buying Blackout Secure a coffee', 'https://github.com/sponsors/blackoutsecure?frequency=one-time&amount=8')
+    const textFrame = isPartnershipAnnouncement
+      ? (() => {
+          const textWidth = 680
+          const textBounds = attributedPrompt.boundingRectWithSizeOptions($.NSMakeSize(textWidth, 1000), $.NSStringDrawingUsesLineFragmentOrigin | $.NSStringDrawingUsesFontLeading)
+          const textHeight = Math.ceil(textBounds.size.height) + 12
+          return $.NSMakeRect((width - textWidth) / 2, 58, textWidth, textHeight)
+        })()
+      : imagePath.length > 0
+        ? $.NSMakeRect(32, 76, width - 64, 122)
+        : $.NSMakeRect(20, 96, width - 40, height - 132)
+    const textView = $.NSTextView.alloc.initWithFrame(textFrame)
     textView.editable = false
-    textView.selectable = true
+    textView.selectable = false
     textView.drawsBackground = false
+    textView.alignment = $.NSTextAlignmentCenter
+    textView.textContainerInset = $.NSMakeSize(0, 0)
     textView.textContainer.lineFragmentPadding = 0
+    textView.textContainer.widthTracksTextView = true
+    textView.horizontallyResizable = false
+    textView.verticallyResizable = false
+    textView.autoresizingMask = isPartnershipAnnouncement
+      ? $.NSViewMinXMargin | $.NSViewMaxXMargin | $.NSViewMinYMargin
+      : $.NSViewWidthSizable | $.NSViewMinYMargin
     textView.textStorage.setAttributedString(attributedPrompt)
     textView.delegate = controller
-    textView.linkTextAttributes = $({ NSForegroundColorAttributeName: $.NSColor.linkColor, NSUnderlineStyleAttributeName: 1 })
     content.addSubview(textView)
   } else {
     content.addSubview(prompt)
@@ -369,7 +485,8 @@ nextButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxXMargin | $.NSView
 content.addSubview(nextButton)
 
 if (announcementTimeout > 0 && isMessageMode) {
-  countdownTimer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(1, controller, 'countdownTick:', $(), true)
+  countdownTimer = $.NSTimer.timerWithTimeIntervalTargetSelectorUserInfoRepeats(1, controller, 'countdownTick:', $(), true)
+  $.NSRunLoop.currentRunLoop.addTimerForMode(countdownTimer, $.NSModalPanelRunLoopMode)
 }
 
 //a message screen only hides Cancel for the image-based welcome screen; an explicitly empty cancelLabel hides it everywhere else
@@ -427,9 +544,13 @@ JXA
 }
 
 macos_show_announcement() { #Output: proceed or project partner.
-  local announcement_choices announcement_choice
+  local announcement_choices announcement_choice announcement_text
   announcement_choices=''
-  announcement_choice="$(macos_choose "$announcement_choices" 'Botspot and Blackout Secure are working together to keep WoR-Flasher useful, supported and moving forward for the Windows on Raspberry Pi community. Click either name to learn more.' 'Proceed with WoR-Flasher' Cancel '' '' "$DIRECTORY/partnership.png" 'Proceed with WoR-Flasher' "$WOR_LOGO_PATH" '' "$WOR_ANNOUNCEMENT_TIMEOUT")" || return 1
+  printf -v announcement_text '%s\n\n%s\n\n%s\n' \
+    "Blackout Secure is proud to partner with Botspot and the Windows on R community, carrying WoR-Flasher forward while preserving Botspot's original authorship and project direction." \
+    "Report issues, share feedback, or contribute at Botspot/wor-flasher." \
+    "Support continued development by sponsoring Botspot or buying Blackout Secure a coffee on GitHub."
+  announcement_choice="$(macos_choose "$announcement_choices" "$announcement_text" 'Proceed with WoR-Flasher' Cancel '' '' "$WOR_ASSETS_DIR/partnership.png" 'Proceed with WoR-Flasher' "$WOR_LOGO_PATH" "$WOR_WINDOW_TITLE" '' "$WOR_ANNOUNCEMENT_TIMEOUT" "$WOR_APP_TITLE")" || return 1
 
   case "$announcement_choice" in
     'Proceed with WoR-Flasher') echo "$announcement_choice" ;;
@@ -464,7 +585,9 @@ $pi4_label	$([ "$pi4_applicable" == 1 ] && echo "$PI4_AUTO_DISABLE_3GB" || echo 
 Use the latest UEFI firmware instead of the tested pinned version ($uefi_pinned)	$UEFI_USE_LATEST	1
 Use the latest Windows ARM64 drivers instead of the pinned version ($DRIVER_VER)	$DRIVERS_USE_LATEST	1
 Skip verifying the written image after flashing (not recommended)	$SKIP_IMAGE_VERIFICATION	1
-Skip flashing the device (dry run)	$DRY_RUN	1"
+Skip flashing the device (dry run)	$DRY_RUN	1
+Create an optional local Windows administrator account	$WINDOWS_ACCOUNT_SETUP	1
+Configure Windows keyboard and regional settings	$WINDOWS_LOCALE_SETUP	1"
 
   advanced_jxa="$(cat <<'JXA'
 ObjC.import('AppKit')
@@ -478,6 +601,9 @@ const iconPath = ObjC.unwrap(args.objectAtIndex(7))
 const appTitle = ObjC.unwrap(args.objectAtIndex(8))
 const configScope = ObjC.unwrap(args.objectAtIndex(9))
 const cacheModeDefault = ObjC.unwrap(args.objectAtIndex(10))
+const accountUsernameDefault = ObjC.unwrap(args.objectAtIndex(11))
+const accountPasswordDefault = ObjC.unwrap(args.objectAtIndex(12))
+const localeDefault = ObjC.unwrap(args.objectAtIndex(13))
 
 const rows = checkboxSpec.split('\n').map(function(line) {
   const parts = line.split('\t')
@@ -503,7 +629,7 @@ editMenu.addItemWithTitleActionKeyEquivalent('Paste', 'paste:', 'v')
 editMenu.addItemWithTitleActionKeyEquivalent('Select All', 'selectAll:', 'a')
 app.mainMenu = mainMenu
 
-let window, textView, scrollView, applyConfigCheckbox, cachePopup
+let window, textView, scrollView, applyConfigCheckbox, cachePopup, accountUsernameField, accountPasswordField, localeField
 let checkboxes = []
 let confirmed = false
 
@@ -628,6 +754,22 @@ cachePopup.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
 content.addSubview(cachePopup)
 y -= rowHeight + 8
 
+function addAdvancedField(label, value, secure) {
+  const fieldLabel = $.NSTextField.labelWithString(label)
+  fieldLabel.frame = $.NSMakeRect(20, y, 170, 20)
+  fieldLabel.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
+  content.addSubview(fieldLabel)
+  const field = secure ? $.NSSecureTextField.alloc.initWithFrame($.NSMakeRect(196, y - 2, width - 216, 24)) : $.NSTextField.alloc.initWithFrame($.NSMakeRect(196, y - 2, width - 216, 24))
+  field.stringValue = $(value)
+  field.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+  content.addSubview(field)
+  y -= rowHeight
+  return field
+}
+accountUsernameField = addAdvancedField('Windows username:', accountUsernameDefault, false)
+accountPasswordField = addAdvancedField('Windows password:', accountPasswordDefault, true)
+localeField = addAdvancedField('Windows locale:', localeDefault, false)
+
 const configLabel = $.NSTextField.labelWithString('config.txt (' + configScope + '):')
 configLabel.font = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightMedium)
 configLabel.frame = $.NSMakeRect(20, y - 4, width - 40, 20)
@@ -692,6 +834,9 @@ for (let i = 0; i < checkboxes.length; i++) {
 }
 out.push(applyConfigCheckbox.state == 1 ? '1' : '0')
 out.push(String(cachePopup.indexOfSelectedItem))
+out.push(ObjC.unwrap(accountUsernameField.stringValue))
+out.push(ObjC.unwrap(accountPasswordField.stringValue))
+out.push(ObjC.unwrap(localeField.stringValue))
 out.push('---CONFIG_TXT---')
 out.push(ObjC.unwrap(textView.string))
 writeResult(out)
@@ -699,7 +844,7 @@ app.terminate(null)
 JXA
 )"
 
-  result="$(osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" <<<"$advanced_jxa" 2>/dev/null)"
+  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" <<<"$advanced_jxa" 2>/dev/null)"
   status="$(printf '%s\n' "$result" | sed -n '1p')"
   [ "$status" == OK ] || return 1
 
@@ -714,10 +859,17 @@ JXA
       5) SKIP_IMAGE_VERIFICATION="$line" ;;
       6) DRY_RUN="$line" ;;
       7) APPLY_CUSTOM_CONFIG_TXT="$line" ;;
-      #the popup reports its index, which lines up with USE_CACHE's 0/1/2
-      8) [ "$line" == 0 ] || [ "$line" == 1 ] || [ "$line" == 2 ] && USE_CACHE="$line" ;;
+      8) WINDOWS_ACCOUNT_SETUP="$line" ;;
+      9) WINDOWS_LOCALE_SETUP="$line" ;;
     esac
-  done < <(printf '%s\n' "$result" | sed -n '2,9p')
+  done < <(printf '%s\n' "$result" | sed -n '2,10p')
+  APPLY_CUSTOM_CONFIG_TXT="$(printf '%s\n' "$result" | sed -n '11p')"
+  case "$(printf '%s\n' "$result" | sed -n '12p')" in
+    0 | 1 | 2) USE_CACHE="$(printf '%s\n' "$result" | sed -n '12p')" ;;
+  esac
+  WINDOWS_ACCOUNT_USERNAME="$(printf '%s\n' "$result" | sed -n '13p')"
+  WINDOWS_ACCOUNT_PASSWORD="$(printf '%s\n' "$result" | sed -n '14p')"
+  WINDOWS_LOCALE="$(printf '%s\n' "$result" | sed -n '15p')"
 
   CONFIG_TXT="$(printf '%s\n' "$result" | sed -n '/^---CONFIG_TXT---$/,$p' | tail -n +2)"
 }
@@ -1173,7 +1325,7 @@ JXA
 
   gui_start_installer
 
-  osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
+  wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
 
   #Command-Q or a crashed/killed osascript can bypass the JXA abort handler. Never leave the flash unattended.
   [ -f "$done_marker" ] || touch "$abort_marker"
@@ -1185,7 +1337,7 @@ JXA
     wait "$installer_pid" 2>/dev/null
     rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker" "$error_marker"
     saved_log="$(gui_save_failure_log)"
-    osascript -l JavaScript - "Flashing was stopped before it finished.
+    wor_osascript -l JavaScript - "Flashing was stopped before it finished.
 
 $DEVICE is now in an unusable state and has to be flashed again before it can boot.
 
@@ -1219,8 +1371,8 @@ $(gui_log_tail "$saved_log")
 Full log: $saved_log"
   fi
   completion_image=''
-  [ "$installer_status" == 0 ] && completion_image="$DIRECTORY/next-steps.png"
-  osascript -l JavaScript - "$completion_text" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$completion_image" <<<"$completion_jxa" >/dev/null 2>&1
+  [ "$installer_status" == 0 ] && completion_image="$WOR_ASSETS_DIR/next-steps.png"
+  wor_osascript -l JavaScript - "$completion_text" "$WOR_LOGO_PATH" "$WOR_APP_TITLE" "$completion_image" <<<"$completion_jxa" >/dev/null 2>&1
   exit "$installer_status"
 }
 
@@ -1239,8 +1391,8 @@ yadflags=(--center --width=400 --height=250 --window-icon="$WOR_LOGO_PATH" --tit
 
 #display partnership announcement
 yad "${yadflags[@]}" --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT" --timeout-indicator=bottom \
-  --image="$DIRECTORY/partnership.png" \
-  --text=$'<a href="https://github.com/Botspot">Botspot</a> and <a href="https://blackoutsecure.app">Blackout Secure</a> are working together to keep WoR-Flasher useful, supported and moving forward for the Windows on Raspberry Pi community.\nOngoing maintenance, support and improvements help make Windows installation from Linux and macOS more reliable.' \
+  --image="$WOR_ASSETS_DIR/partnership.png" \
+  --text=$'<a href="https://blackoutsecure.app/">Blackout Secure</a> is proud to partner with <a href="https://github.com/Botspot">Botspot</a> and the <a href="https://worproject.com/">Windows on R</a> community, carrying WoR-Flasher forward while preserving Botspot\'s original authorship and project direction.\n\nReport issues, share feedback, or contribute at <a href="https://github.com/Botspot/wor-flasher">Botspot/wor-flasher</a>.\n\nSupport continued development by <a href="https://github.com/sponsors/Botspot">sponsoring Botspot</a> or <a href="https://github.com/sponsors/blackoutsecure?frequency=one-time&amp;amount=8">buying Blackout Secure a coffee</a> on GitHub.' \
   --button='<b>Proceed with WoR-Flasher</b>':0
 
 { #choose destination RPi model and windows build ID
@@ -1517,7 +1669,7 @@ Choose this if:
 - You don't have enough space in $HOME
 - You want your system storage to last as long as possible
 - You don't plan to use WoR-Flasher often:LBL" \
-        --image="$DIRECTORY/ram.png" --image-on-top \
+        --image="$WOR_ASSETS_DIR/ram.png" --image-on-top \
         --button="Use ${DL_DIR}":2 \
         --button="<b>Use RAM</b>!!${tooltip}":0
       button=$?
@@ -1525,7 +1677,7 @@ Choose this if:
       if [ "$button" == 0 ];then
         status "User chose to download everything to RAM."
         echo "For best results, please close all other programs. (especially web browsers and games)"
-        yad "${yadflags[@]}" --width=500 --image="$DIRECTORY/ram.png" --image-on-top \
+        yad "${yadflags[@]}" --width=500 --image="$WOR_ASSETS_DIR/ram.png" --image-on-top \
           --form --field="OK! Will download everything to RAM. For best results, please close all other programs. (especially web browsers and games):LBL" \
           --button='<b>OK</b>':0 >/dev/null
 
@@ -1542,7 +1694,7 @@ Choose this if:
             exitcode=$?
           elif [ -f /usr/local/bin/pi-apps ] && [ -f "$(dirname "$(cat /usr/local/bin/pi-apps | sed -n 2p)")/manage" ];then
             #if Pi-Apps installed to another folder, install More RAM from there
-            "$(dirname "$(cat /usr/local/bin/pi-apps | sed -n 2p)")/manage"
+            "$(dirname "$(cat /usr/local/bin/pi-apps | sed -n 2p)")/manage" install 'More RAM'
             exitcode=$?
           else
             #Pi-Apps is not installed, so run More RAM script straight from the pi-apps github repo
@@ -1614,7 +1766,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
     deletion_warning_2="$deletion_warning Backup any files before it's too late!"
   fi
 
-  output="$(yad "${yadflags[@]}" --width=500 --height=400 --image="$DIRECTORY/overview.png" --image-on-top \
+  output="$(yad "${yadflags[@]}" --width=500 --height=400 --image="$WOR_ASSETS_DIR/overview.png" --image-on-top \
     --form --field="$window_text":LBL '' \
     "${existing_img_chk[@]}" \
     --field="<b>Edit config.txt:</b>     <small><a href=\"https://www.raspberrypi.com/documentation/computers/config_txt.html\">Configuration reference</a></small>":TXT "$CONFIG_TXT" \
@@ -1715,6 +1867,11 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         *) cache_items='Reuse cached files when they still match (recommended)!Re-download everything, ignoring the cache!Trust the cache without checking it' ;;
       esac
       fields+=("--field=Downloaded files":CB "$cache_items")
+      fields+=("--field=Create an optional local Windows administrator account":CHK "$(echo "$WINDOWS_ACCOUNT_SETUP" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
+      fields+=("--field=Configure Windows keyboard and regional settings":CHK "$(echo "$WINDOWS_LOCALE_SETUP" | sed 's/1/TRUE/g' | sed 's/0/FALSE/g')")
+      fields+=("--field=Windows username":TXT "$WINDOWS_ACCOUNT_USERNAME")
+      fields+=("--field=Windows password":H "$WINDOWS_ACCOUNT_PASSWORD")
+      fields+=("--field=Windows locale":TXT "$WINDOWS_LOCALE")
 
       output="$(yad "${yadflags[@]}" --width=500 --height=400 --image-on-top \
         "${refresh_prompt[@]}" \
@@ -1780,6 +1937,11 @@ while true;do #repeat the Installation Overview window until Flash button clicke
             'Trust the cache'*) USE_CACHE=2 ;;
             'Reuse cached files'*) USE_CACHE=1 ;;
           esac
+          [ "$(echo "$output" | sed -n 18p)" == TRUE ] && WINDOWS_ACCOUNT_SETUP=1 || WINDOWS_ACCOUNT_SETUP=0
+          [ "$(echo "$output" | sed -n 19p)" == TRUE ] && WINDOWS_LOCALE_SETUP=1 || WINDOWS_LOCALE_SETUP=0
+          WINDOWS_ACCOUNT_USERNAME="$(echo "$output" | sed -n 20p)"
+          WINDOWS_ACCOUNT_PASSWORD="$(echo "$output" | sed -n 21p)"
+          WINDOWS_LOCALE="$(echo "$output" | sed -n 22p)"
           #end of parsing check-box values for advanced options window
 
           break #as the DL_DIR value was not changed, go back to the Installation Overview window
@@ -1844,7 +2006,7 @@ if [ "$exitcode" == 0 ];then
   rm -f "$output_log" "$error_marker"
   #display "next steps" window
   yad --center --window-icon="$WOR_LOGO_PATH" --title="$WOR_APP_TITLE" \
-    --image="$DIRECTORY/next-steps.png" --button=Close:0
+    --image="$WOR_ASSETS_DIR/next-steps.png" --button=Close:0
 else
   #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
   saved_log="$(gui_save_failure_log)"

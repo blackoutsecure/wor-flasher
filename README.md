@@ -1,21 +1,22 @@
-# ![WoR-Flasher logo](logo-full.png) WoR-Flasher
+<a href="https://github.com/Botspot/pi-apps"><img src="https://github.com/Botspot/pi-apps/raw/master/icons/badge.png?raw=true" align="right" alt="Available on Pi-Apps"/></a>
 
-![Maintainer partnership banner](partnership.png)
+# ![WoR-Flasher logo](assets/logo-full.png) WoR-Flasher
 
-[![Version](https://img.shields.io/badge/version-1.0.1-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
+![Maintainer partnership banner](assets/partnership.png)
+
+[![Version](https://img.shields.io/badge/version-1.0.2-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
 [![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=555555&logo=githubactions&logoColor=ffffff&color=0a7ea4&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
 [![License](https://img.shields.io/badge/license-GPL--3.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnu&logoColor=ffffff)](LICENSE)
 [![Platform](https://img.shields.io/badge/host-Linux%20%7C%20macOS-0a7ea4?style=for-the-badge&labelColor=555555&logo=linux&logoColor=ffffff)](#requirements)
 [![Shell](https://img.shields.io/badge/written%20in-bash-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnubash&logoColor=ffffff)](install-wor.sh)
 
-[![Upstream](https://img.shields.io/github/stars/Botspot/wor-flasher?style=for-the-badge&labelColor=555555&logo=github&logoColor=ffffff&color=0a7ea4&label=upstream)](https://github.com/Botspot/wor-flasher)
 [![Discord](https://img.shields.io/badge/Discord-Botspot%20Software-5865F2?style=for-the-badge&labelColor=555555&logo=discord&logoColor=ffffff)](https://discord.gg/RXSTvaUvuu)
 [![Sponsor](https://img.shields.io/badge/sponsor-Botspot-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/Botspot)
 [![Sponsor](https://img.shields.io/badge/sponsor-Blackout%20Secure-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/blackoutsecure)
 [![Blackout Secure](https://img.shields.io/badge/maintained%20by-Blackout%20Secure-0a7ea4?style=for-the-badge&labelColor=555555&logo=shieldsdotio&logoColor=ffffff)](https://blackoutsecure.app)
 
 > [!NOTE]
-> [Blackout Secure](https://blackoutsecure.app) is proud to partner with [Botspot](https://github.com/Botspot) and the [Windows on R](https://worproject.com/) communities as part of this endeavour. Together, we are carrying the project forward while keeping Botspot's original authorship, project direction, and upstream community connections visible. If a fix also applies to the upstream project at [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), please consider sending it there as well.
+> [Blackout Secure](https://blackoutsecure.app/) is proud to partner with [Botspot](https://github.com/Botspot) and the [Windows on R](https://worproject.com/) community as part of this endeavour. Together, we are carrying WoR-Flasher forward while keeping Botspot's original authorship, project direction, and community connections visible.
 
 Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi from Linux or macOS.
 
@@ -32,6 +33,7 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
   - [Compatibility](#compatibility)
   - [Requirements](#requirements)
   - [Install](#install)
+  - [Pi-Apps](#pi-apps)
   - [Usage](#usage)
     - [Graphical interface](#graphical-interface)
       - [macOS walkthrough](#macos-walkthrough)
@@ -50,9 +52,10 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
   - [Updating](#updating)
   - [Troubleshooting](#troubleshooting)
   - [Development](#development)
+    - [Repository layout](#repository-layout)
   - [Support](#support)
   - [Maintainer partnership](#maintainer-partnership)
-  - [What this fork adds](#what-this-fork-adds)
+  - [What this maintained source adds](#what-this-maintained-source-adds)
   - [Related resources](#related-resources)
   - [Versions](#versions)
   - [Contributing](#contributing)
@@ -95,9 +98,21 @@ cd wor-flasher
 ./install-wor-gui.sh
 ```
 
+On macOS, Finder users can instead double-click **WoR-Flasher.app** in the cloned folder. The app opens the same native GUI without leaving a Terminal window open.
+
+WoR-Flasher runs one GUI session per signed-in user, even if more than one checkout or version is present. Opening the app again brings the current macOS window forward instead of starting another installer workflow.
+
 Use the complete repository. Neither script is designed to be downloaded on its own or piped into Bash.
 
-To install the original upstream version instead, clone `https://github.com/Botspot/wor-flasher`. On a Raspberry Pi, the [Pi-Apps app store](https://github.com/Botspot/pi-apps) packages upstream WoR-Flasher with a Start menu entry and one-click uninstall.
+## Pi-Apps
+
+[Pi-Apps](https://github.com/Botspot/pi-apps) provides a graphical installation and removal path for the Linux version of WoR-Flasher. Install the **Windows Flasher** app from Pi-Apps, then open **Accessories -> WoR-Flasher** or run:
+
+```bash
+~/wor-flasher/install-wor-gui.sh
+```
+
+Pi-Apps installs the application to `~/wor-flasher` from the maintained Blackout Secure `patch-1` branch and manages its launcher and removal. See [Maintainer partnership](#maintainer-partnership) for the project history and support links.
 
 ## Usage
 
@@ -116,7 +131,7 @@ Both therefore write identical media from identical settings. The built-in GUI i
 ./install-wor.sh --gui
 ```
 
-![WoR-Flasher shared graphical interface overview](overview.png)
+![WoR-Flasher shared graphical interface overview](assets/overview.png)
 
 The overview image shows the shared installation workflow. On macOS, the same choices are presented in native AppKit windows rather than Linux `yad` dialogs.
 
@@ -128,7 +143,7 @@ Administrator access is requested through a native password dialog on both platf
 
 #### macOS walkthrough
 
-1. Launch `./install-wor-gui.sh` or `./install-wor.sh --gui` from macOS 13 or newer.
+1. Double-click **WoR-Flasher.app**, or launch `./install-wor-gui.sh` or `./install-wor.sh --gui`, from macOS 13 or newer.
 2. Review the partnership announcement. The **Botspot** and **Blackout Secure** names open their respective websites, and the Proceed button continues automatically after the countdown.
 3. Choose the Windows version, language, Raspberry Pi model and target drive in native AppKit windows. The target drive is clearly identified before any erase operation.
 4. Review the shared Installation Overview, then use **Advanced Options** for cache mode, firmware and driver choices, Pi 4 RAM handling, offline OOBE and `config.txt` customization.
@@ -175,7 +190,7 @@ Sourcing with the `source` argument makes the engine's functions available witho
 
 ## Integration adapter
 
-`install-wor-hook.sh` is the stable command-line adapter for external front-ends and automation. Keep it executable and next to `install-wor.sh`; it sources that shared engine for discovery and summaries, then executes the engine directly for a flash.
+`install-wor-hook.sh` is the stable command-line adapter for external front-ends and automation. When it is kept next to `install-wor.sh`, it uses that engine directly. When distributed by itself, it automatically obtains a shallow copy of the complete WoR-Flasher repository in `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook`; fetching the complete checkout ensures required assets such as `config-templates/` are present. It sources the selected engine for discovery and summaries, then executes it directly for a flash.
 
 | Command                  | Output or behavior                                                                  |
 | ------------------------ | ----------------------------------------------------------------------------------- |
@@ -195,6 +210,14 @@ DEVICE=/dev/sda RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us \
   CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh run
 ```
 
+Standalone bootstrap requires `git`. These variables control where the hook obtains the engine; only point them at a repository and ref you trust:
+
+| Variable               | Default                                             | Purpose                                      |
+| ---------------------- | --------------------------------------------------- | -------------------------------------------- |
+| `WOR_HOOK_REPOSITORY`  | `https://github.com/blackoutsecure/wor-flasher.git` | Git repository containing the complete tool  |
+| `WOR_HOOK_REF`         | `main`                                              | Branch or tag cloned by the hook             |
+| `WOR_HOOK_INSTALL_DIR` | `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook`  | Persistent checkout used by standalone hooks |
+
 Discovery is a snapshot, not authorization to erase a path later. `list-devices` rejects unsupported hosts and excludes the current boot drive, but device state can change. `describe-device` formats any supplied path and `summary` previews settings; neither validates that a device is currently safe. Call `list-devices` again before `run`, and let `run` perform the engine's final host, device, capacity and installation-mode checks. For unattended operation, provide all required values from [Parameters](#parameters); otherwise the engine can prompt for missing choices.
 
 The adapter is transport-neutral. A GUI, desktop launcher, test harness or another local imaging application can present its own choices and invoke the same engine without copying its flashing logic. Set `WOR_GUI_PROGRESS_FILE` to a writable path to receive line-oriented, tab-separated events while `run` is active:
@@ -213,33 +236,38 @@ Raspberry Pi Imager supports a custom image repository through `--repo`, which i
 
 Every prompt has a matching environment variable.
 
-| Variable                    | Default                | Function                                                                                    |
-| --------------------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
-| `DL_DIR`                    | `~/wor-flasher-files`  | Where components are downloaded and Windows images are extracted                            |
-| `RPI_MODEL`                 | _ask_                  | Target Raspberry Pi: `3`, `4` or `5`                                                        |
-| `BID`                       | _ask_                  | Exact Windows build ID, e.g. `22631.2861`                                                   |
-| `WIN_LANG`                  | _ask_                  | Windows language code, e.g. `en-us`                                                         |
-| `DEVICE`                    | _ask_                  | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                               |
-| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                  | `1` to install Windows onto the target itself, `0` to make recovery media for another drive |
-| `SOURCE_FILE`               | unset                  | Path to an existing Windows ARM64 ISO, instead of downloading                               |
-| `CONFIG_TXT`                | shipped template       | Body of `config.txt` written to the boot partition                                          |
-| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                    | `0` leaves the UEFI firmware package's own `config.txt` in place                            |
-| `OOBE_NETWORK_BYPASS`       | `1`                    | `0` requires the standard network-connected Windows setup flow                              |
-| `PI4_AUTO_DISABLE_3GB`      | `1`                    | Pi 4 only. `0` keeps the 3 GB RAM limit                                                     |
-| `UEFI_USE_LATEST`           | `0`                    | `1` queries GitHub for the newest UEFI firmware instead of the pinned version               |
-| `DRIVERS_USE_LATEST`        | `1`                    | `0` uses the pinned driver package version                                                  |
-| `SKIP_IMAGE_VERIFICATION`   | `0`                    | `1` skips post-flash verification. Not recommended                                          |
-| `UPDATE_REPO_URL`           | Botspot/wor-flasher    | Git repository used by the opt-in self-updater; override for a trusted mirror               |
-| `UPDATE_REF`                | `HEAD`                 | Branch or ref checked by the self-updater                                                   |
-| `NO_UPDATE`                 | `1`                    | `0` opts in to fast-forwarding a clean source checkout                                      |
-| `HIDE_EMPTY_DRIVES`         | `1`                    | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
-| `USE_CACHE`                 | `1`                    | See [Download cache](#download-cache)                                                       |
-| `DRY_RUN`                   | `0`                    | `1` runs every step except writing to the drive                                             |
-| `WOR_LOG_FILE`              | `$DL_DIR/last-run.log` | Where a failed run's log is kept                                                            |
-| `VERIFY_TLS`                | `1`                    | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                |
-| `NO_UPDATE`                 | `1`                    | `0` opts in to the self-updater. See [Updating](#updating)                                  |
-| `RUN_MODE`                  | `cli`                  | `gui` makes the engine show graphical error dialogs                                         |
-| `SKIP_PACKAGE_INSTALL`      | unset                  | `1` assumes dependencies are already present                                                |
+| Variable                    | Default                    | Function                                                                                    |
+| --------------------------- | -------------------------- | ------------------------------------------------------------------------------------------- |
+| `DL_DIR`                    | `~/wor-flasher-files`      | Where components are downloaded and Windows images are extracted                            |
+| `RPI_MODEL`                 | _ask_                      | Target Raspberry Pi: `3`, `4` or `5`                                                        |
+| `BID`                       | _ask_                      | Exact Windows build ID, e.g. `22631.2861`                                                   |
+| `WIN_LANG`                  | _ask_                      | Windows language code, e.g. `en-us`                                                         |
+| `DEVICE`                    | _ask_                      | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                               |
+| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                      | `1` to install Windows onto the target itself, `0` to make recovery media for another drive |
+| `SOURCE_FILE`               | unset                      | Path to an existing Windows ARM64 ISO, instead of downloading                               |
+| `CONFIG_TXT`                | shipped template           | Body of `config.txt` written to the boot partition                                          |
+| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                        | `0` leaves the UEFI firmware package's own `config.txt` in place                            |
+| `OOBE_NETWORK_BYPASS`       | `1`                        | `0` requires the standard network-connected Windows setup flow                              |
+| `WINDOWS_ACCOUNT_SETUP`     | `0`                        | `1` creates the optional local Windows administrator configured in Advanced Options         |
+| `WINDOWS_ACCOUNT_USERNAME`  | unset                      | Username for the optional local Windows account                                             |
+| `WINDOWS_ACCOUNT_PASSWORD`  | unset                      | Password for the optional account; written to unattended setup only when enabled            |
+| `WINDOWS_LOCALE_SETUP`      | `0`                        | `1` applies `WINDOWS_LOCALE` to Windows keyboard and regional settings                      |
+| `WINDOWS_LOCALE`            | `en-US`                    | Locale such as `en-US` or `en-GB` used when locale setup is enabled                         |
+| `PI4_AUTO_DISABLE_3GB`      | `1`                        | Pi 4 only. `0` keeps the 3 GB RAM limit                                                     |
+| `UEFI_USE_LATEST`           | `0`                        | `1` queries GitHub for the newest UEFI firmware instead of the pinned version               |
+| `DRIVERS_USE_LATEST`        | `1`                        | `0` uses the pinned driver package version                                                  |
+| `SKIP_IMAGE_VERIFICATION`   | `0`                        | `1` skips post-flash verification. Not recommended                                          |
+| `UPDATE_REPO_URL`           | blackoutsecure/wor-flasher | Git repository used by the opt-in self-updater; override for a trusted mirror               |
+| `UPDATE_REF`                | `HEAD`                     | Branch or ref checked by the self-updater                                                   |
+| `NO_UPDATE`                 | `1`                        | `0` opts in to fast-forwarding a clean source checkout                                      |
+| `HIDE_EMPTY_DRIVES`         | `1`                        | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
+| `USE_CACHE`                 | `1`                        | See [Download cache](#download-cache)                                                       |
+| `DRY_RUN`                   | `0`                        | `1` runs every step except writing to the drive                                             |
+| `WOR_LOG_FILE`              | `$DL_DIR/last-run.log`     | Where a failed run's log is kept                                                            |
+| `VERIFY_TLS`                | `1`                        | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                |
+| `NO_UPDATE`                 | `1`                        | `0` opts in to the self-updater. See [Updating](#updating)                                  |
+| `RUN_MODE`                  | `cli`                      | `gui` makes the engine show graphical error dialogs                                         |
+| `SKIP_PACKAGE_INSTALL`      | unset                      | `1` assumes dependencies are already present                                                |
 
 Example:
 
@@ -274,7 +302,9 @@ Windows Setup changes the pftf `RamLimitTo3GB` firmware variable during the `spe
 
 ### Offline Windows setup
 
-Enabled by default. WoR-Flasher writes a minimal Microsoft unattended-setup answer file that hides the OOBE network and online-account screens, so setup can continue with a local account when Pi networking is not ready yet. It does not automate accounts, licenses, partitions or privacy choices.
+Enabled by default. WoR-Flasher writes a minimal Microsoft unattended-setup answer file that hides the OOBE network and online-account screens, so setup can continue with a local account when Pi networking is not ready yet. It does not automate accounts, licenses, partitions or privacy choices by default.
+
+Advanced Options can optionally configure a Windows local administrator account and a locale profile before the first boot. The account username and password are written to `Autounattend.xml` only when explicitly enabled; the password is never shown in summaries or logs, but Windows setup necessarily stores it in plaintext on the prepared media temporarily. Remove `Autounattend.xml` after setup completes. The locale profile applies one value such as `en-US` or `en-GB` to the Windows keyboard/input, system, user and UI locale settings.
 
 ```bash
 OOBE_NETWORK_BYPASS=0 ./install-wor.sh  # require network
@@ -326,7 +356,7 @@ Mode `1` refreshes changed, missing, extra or outdated cached content. Delete `~
 
 Downloads and final verification take a long time, especially on slow SD cards. Progress is shown for long operations. **Do not remove the drive until WoR-Flasher reports success.**
 
-![Next steps after flashing](next-steps.png)
+![Next steps after flashing](assets/next-steps.png)
 
 Move the completed drive to the Pi and connect a display, a wired keyboard and a wired mouse. Windows Setup may restart several times; do not remove power or the drive until setup completes.
 
@@ -345,7 +375,20 @@ An opt-in self-updater is also built in. It is **off by default** (`NO_UPDATE=1`
 NO_UPDATE=0 ./install-wor.sh
 ```
 
+The macOS app checks the checkout's configured `origin` and current branch for an update before launch. It prompts before changing a clean checkout and applies only a fast-forward update. It silently skips the update when tracked files are modified or `HEAD` is detached, and continues with the installed revision when no update is available. Set `UPDATE_REPO_URL` and `UPDATE_REF` before opening the app from a shell to test another trusted remote or ref.
+
 Check what you are running with `./install-wor.sh --version`.
+
+### Launch repair on macOS
+
+The app performs a bounded preflight rather than a destructive general-purpose "self-heal":
+
+- If a required tracked script, template directory or image is absent, the app offers to restore only that missing path from the local Git `HEAD`.
+- If a required Homebrew formula is absent, the app lists the exact formulae and asks before installing only those dependencies. It never runs `brew upgrade`.
+- If Homebrew itself is absent, the app offers to open the official [Homebrew website](https://brew.sh/). It does not run a remote installer automatically.
+- Existing modified files, untracked files, downloaded Windows content and user settings are never reset or replaced. Download recovery remains controlled by the selected [cache mode](#download-cache).
+
+This preflight requires a complete Git checkout for file repair and updates. If the checkout cannot be repaired safely, the app stops with a native error instead of guessing or overwriting local work.
 
 ## Troubleshooting
 
@@ -422,35 +465,55 @@ This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unloc
 ./tests/run-tests.sh --gui          # walk the GUI in DRY_RUN mode
 ./tests/run-tests.sh --walkthrough  # fake drives, then the CLI interactively
 ./tests/run-linux-integration.sh    # force the Dockerised Linux suite
-shellcheck --severity=error install-wor.sh install-wor-gui.sh install-wor-hook.sh tests/*.sh
+shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher tests/*.sh
 ```
 
 The suite creates loopback devices as stand-in drives, so nothing can be written to physical storage. Tests call the real functions out of `install-wor.sh` rather than restating their logic, which means a test cannot pass against behaviour the shipped script no longer has.
 
+On a non-Linux host the run prints three summaries — the Docker container's nested run, the integration wrapper, then the host's own run. All three must report `failed 0`.
+
 CI runs ShellCheck plus the suite on Ubuntu and macOS, and a one-model dry-run integration pass. See [CONTRIBUTING.md](CONTRIBUTING.md) for house style and for the traps that have already caught us.
+
+### Repository layout
+
+The root entry points remain stable for existing users and integrations: `install-wor.sh` is the engine and CLI, `install-wor-gui.sh` is the Linux/macOS front end, `install-wor-hook.sh` is the automation adapter, and `WoR-Flasher.app` is the native macOS launcher that Finder users double-click.
+
+Shared UI artwork lives in `assets/`, and boot and setup inputs live in `config-templates/`.
+
+Shared data and low-level helpers live under `src/lib/`. Entry points load these modules explicitly; the library files do not source one another:
+
+| Module            | Responsibility                                                                               |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| `metadata.sh`     | Product identity, asset metadata and the named macOS AppleScript host                        |
+| `dependencies.sh` | Homebrew and Linux package declarations shared by launcher preflight and engine installation |
+| `paths.sh`        | Platform-neutral path resolution used by engine bootstrap                                    |
+| `cleanup.sh`      | Shared mount, device and temporary-file cleanup registration                                 |
 
 ## Support
 
-| Where                                                                                 | For                                              |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| [This fork's issues](https://github.com/blackoutsecure/wor-flasher/issues/new/choose) | Bugs in macOS support, the GUI or the test suite |
-| [Upstream issues](https://github.com/Botspot/wor-flasher/issues/new/choose)           | Bugs that also affect Botspot/wor-flasher        |
-| [Botspot Software Discord](https://discord.gg/RXSTvaUvuu)                             | Real-time help with WoR-Flasher                  |
-| [WoR project Discord](https://discord.gg/jQCpfVK)                                     | Windows on Raspberry, the operating system       |
-| [worproject.com contact](https://worproject.com/contact)                              | The WoR developers directly                      |
-| [Security policy](SECURITY.md)                                                        | Anything that should not be public               |
+| Where                                                         | For                                                           |
+| ------------------------------------------------------------- | ------------------------------------------------------------- |
+| [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher) | Report issues, share feedback, request features or contribute |
+| [Botspot Software Discord](https://discord.gg/RXSTvaUvuu)     | Real-time help with WoR-Flasher                               |
+| [WoR project Discord](https://discord.gg/jQCpfVK)             | Windows on Raspberry, the operating system                    |
+| [worproject.com contact](https://worproject.com/contact)      | The WoR developers directly                                   |
+| [Security policy](SECURITY.md)                                | Anything that should not be public                            |
 
 ## Maintainer partnership
 
-WoR-Flasher is a community project created by **[Botspot](https://github.com/Botspot)**. **[Blackout Secure](https://blackoutsecure.app)** is partnering with Botspot to help maintain this fork, improve its documentation and testing, and make the tool more useful for people working with Raspberry Pi, Windows on Raspberry and cross-platform development.
+WoR-Flasher is a community project created by **[Botspot](https://github.com/Botspot)** and directly maintained by **[Blackout Secure](https://blackoutsecure.app/)**. This partnership improves its documentation, testing and cross-platform experience while keeping Botspot's original authorship and project direction visible.
+
+Report issues, share feedback, request features or contribute through the [Botspot/wor-flasher repository](https://github.com/Botspot/wor-flasher).
+
+Support continued development by [sponsoring Botspot](https://github.com/sponsors/Botspot) or [buying Blackout Secure a coffee](https://github.com/sponsors/blackoutsecure?frequency=one-time&amount=8) through GitHub Sponsors.
 
 Blackout Secure is a cybersecurity, secure application development, cloud and AI security consultancy. Its open-source work focuses on practical automation, privacy-conscious tooling and dependable developer workflows. Learn more at [blackoutsecure.app](https://blackoutsecure.app), browse the organization's projects at [github.com/blackoutsecure](https://github.com/blackoutsecure), or find Dr Bill McIlhargey through [Linktree](https://linktr.ee/billmcilhargey).
 
-This partnership is intended to strengthen the wider community around [Botspot's projects](https://github.com/Botspot), [Windows on Raspberry](https://worproject.com/) and the people who use them. It is not a replacement for upstream credit or governance: fixes that belong in the original project should continue to be proposed to [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher).
+This directly maintained source is intended to strengthen the wider community around [Botspot's projects](https://github.com/Botspot), [Windows on Raspberry](https://worproject.com/) and the people who use them.
 
-## What this fork adds
+## What this maintained source adds
 
-The upstream project remains the foundation. Compared with the original upstream script, this maintained fork adds:
+Building on Botspot's original work, this maintained source adds:
 
 | Area                  | Added capability                                                                                                                                                         |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -463,11 +526,11 @@ The upstream project remains the foundation. Compared with the original upstream
 | Firmware and drivers  | Tested Pi 4 UEFI pinning, including the v1.50 choice that avoids both the v1.51 zero-MAC bug and the v1.52/v1.53 microSD boot regression                                 |
 | Quality               | Cross-platform static checks, ShellCheck, loopback-drive integration tests, XML validation, mutation-tested anti-drift checks and macOS/Linux CI                         |
 
-These additions are maintained in cooperation with Botspot and are intended to flow upstream where they are useful to the original project.
+These additions are maintained directly by Blackout Secure in cooperation with Botspot and the wider Windows on Raspberry community.
 
 ## Related resources
 
-- [worproject.com](https://worproject.com/) — the upstream WoR-PE installer, UEFI firmware and drivers that WoR-Flasher assembles
+- [worproject.com](https://worproject.com/) — the WoR-PE installer, UEFI firmware and drivers that WoR-Flasher assembles
 - [Advanced customization guide](https://worproject.com/guides/wor-imager-customization) — the `scripts/prefinalize.cmd` hook and `settings.ini` options. Written for the official WoR imager and not verified against WoR-Flasher's headless media
 - [How can I update the drivers?](https://worproject.com/faq#how-can-i-update-the-drivers) — updating drivers on an already-installed system
 - [Boot partition mount utility](https://worproject.com/downloads#boot-partition-mount-utility) — mount the boot partition later to edit `config.txt` or firmware
@@ -477,12 +540,19 @@ These additions are maintained in cooperation with Botspot and are intended to f
 
 ## Versions
 
-Upstream has never published a git tag or a GitHub release, so this fork keeps its own version line. The same history is repeated at the top of [`install-wor.sh`](install-wor.sh).
+This maintained source uses its own version line. The product name, window title and current version are defined once in [`src/lib/metadata.sh`](src/lib/metadata.sh). The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion` in the app property list. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
 
+- **1.0.2**
+  - A standalone `install-wor-hook.sh` now obtains a complete trusted checkout automatically when no adjacent engine is available.
+  - The native macOS partnership announcement now has compatible attributed-text construction, dark-mode contrast and non-overlapping layout on current JXA runtimes.
+  - A double-clickable macOS app now checks for clean fast-forward updates, installs missing Homebrew formulae with consent and offers non-destructive repair of missing tracked runtime files.
+  - Repeated GUI launches now activate the existing macOS window instead of opening concurrent workflows, including launches from another checkout or version.
+  - Partnership messaging and default update checks now use the directly maintained Blackout Secure source while preserving Botspot's original authorship.
+  - The engine, GUI, named macOS JXA host and app property list now share the canonical `WoR-Flasher` name and `1.0.2` version metadata.
 - **1.0.1**
   - **Pi 4 UEFI pinned to v1.50**, the only release where both the Ethernet MAC and microSD boot work. v1.51 (the previous pin) and v1.52 report a MAC of `00:00:00:00:00:00`, leaving Windows with no DHCP ([pftf/RPi4#283](https://github.com/pftf/RPi4/issues/283)); v1.53 fixes that but still does not boot from microSD ([pftf/RPi4#285](https://github.com/pftf/RPi4/issues/285)).
   - The Pi 4 RAM unlock and the offline-OOBE answer file now reach the installed OS through WoR-PE's prefinalize hook. The media-root copies alone were never read, because WoR-PE applies `install.wim` with DISM rather than running Windows Setup's media flow.
-- **1.0.0** — First versioned release of this fork.
+- **1.0.0** — First versioned Blackout Secure release.
   - **macOS host support**: `diskutil`/`hdiutil` drive discovery, and `sgdisk` GPT partitioning that keeps `WOR_BOOT` as partition 1. An extra ESP made the Pi 4 fall back to PXE boot.
   - **A native macOS interface**: AppKit/JXA wizard, progress window, Advanced Options window and error dialogs.
   - **No visible terminal in GUI mode**: the engine reports progress over a file, and each front-end renders it — AppKit on macOS, `yad` on Linux. Administrator access is requested through a native password dialog on both.
@@ -495,19 +565,17 @@ Upstream has never published a git tag or a GitHub release, so this fork keeps i
   - **One engine, two front-ends**: `install-wor-gui.sh` sources `install-wor.sh` and adds only windows. A function defined in both files now fails a test.
   - **Explicit `--gui` entry point.** The front-end is never chosen by sniffing `DISPLAY`.
   - **A test suite**, plus ShellCheck, macOS and Linux dry-run CI.
-- **0.x** — Upstream Botspot releases, never tagged. Highlights, oldest first: the initial WoR automation, the self-updater, the "next steps" window, a complete rewrite to use ESD releases, download-to-RAM support, Pi 5 support, a GitHub API fallback for UEFI firmware, empty block devices filtered out of the drive list, and SHA-256 hashed ESD image handling.
+- **0.x** — Original Botspot development history. Highlights, oldest first: the initial WoR automation, the self-updater, the "next steps" window, a complete rewrite to use ESD releases, download-to-RAM support, Pi 5 support, a GitHub API fallback for UEFI firmware, empty block devices filtered out of the drive list, and SHA-256 hashed ESD image handling.
 
 ## Contributing
 
-Pull requests are welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md) first, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
-
-The short version: if your fix also applies to [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher), send it there too. Upstream is looking for a maintainer and benefits far more from your patch than this fork does.
+Pull requests are welcome at [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher) — please read [CONTRIBUTING.md](CONTRIBUTING.md) first, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Contributors
 
-**Original author.** WoR-Flasher was created and is owned by **[Botspot](https://github.com/Botspot)**, who also created [Pi-Apps](https://github.com/Botspot/pi-apps) and [BVM](https://github.com/Botspot/bvm). Everything this fork does rests on five years of his work, given away for free. If you find WoR-Flasher useful, [consider sponsoring him](https://github.com/sponsors/Botspot).
+**Original author.** WoR-Flasher was created by **[Botspot](https://github.com/Botspot)**, who also created [Pi-Apps](https://github.com/Botspot/pi-apps) and [BVM](https://github.com/Botspot/bvm). This maintained source rests on five years of his work, given away for free. If you find WoR-Flasher useful, [consider sponsoring him](https://github.com/sponsors/Botspot).
 
-**Upstream contributors** ([full list](https://github.com/Botspot/wor-flasher/graphs/contributors)):
+**Project contributors** ([historical list](https://github.com/Botspot/wor-flasher/graphs/contributors)):
 
 |                                                                                                                      |                                                                                                                        |                                                                                                                          |                                                                                                                              |                                                                                                                        |                                                                                                                           |                                                                                                                              |
 | :------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------: |
@@ -515,7 +583,7 @@ The short version: if your fix also applies to [Botspot/wor-flasher](https://git
 
 **Maintainer partnership.** **[Blackout Secure](https://blackoutsecure.app)** — represented here by **Dr Bill McIlhargey** ([links](https://linktr.ee/billmcilhargey)) — is partnering with **[Botspot](https://github.com/Botspot)** to provide ongoing maintenance and support while helping improve this project. Blackout Secure's contributions include macOS host support, native progress and Advanced Options windows, post-flash verification, the shared-engine refactor, documentation, community health files, the expanded test suite, and continued community support. If WoR-Flasher helps you, [consider sending Blackout Secure a cup of coffee](https://github.com/sponsors/blackoutsecure?frequency=one-time&amount=8) to support that work.
 
-**Upstream projects** this tool assembles, each with its own authors and license:
+**Projects this tool assembles**, each with its own authors and license:
 
 - [Windows on Raspberry](https://worproject.com/) — the PE-based installer
 - [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers) — Windows ARM64 drivers for the Pi
@@ -528,7 +596,7 @@ The short version: if your fix also applies to [Botspot/wor-flasher](https://git
 Released under the [GNU General Public License v3.0](LICENSE), matching Botspot's [BVM](https://github.com/Botspot/bvm).
 
 > [!IMPORTANT]
-> Upstream `Botspot/wor-flasher` ships **no** license file, so its code carries no explicit grant. The Blackout Secure additions are offered under GPL-3.0 without reservation; the pre-existing upstream code is a different matter. Read [NOTICE](NOTICE) before redistributing this fork commercially or relicensing it.
+> The pre-existing Botspot code shipped **without** a license file and therefore carries no explicit grant. The Blackout Secure additions are offered under GPL-3.0 without reservation. Read [NOTICE](NOTICE) before commercial redistribution or relicensing.
 
 WoR-Flasher does **not** redistribute Windows. Proprietary components are downloaded straight from Microsoft's own update servers via [UUP dump](https://uupdump.net/). This is legal — Raspberry Pi employees [confirmed as much](https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=318599#p1907313) on the Raspberry Pi Forums. The resulting installation is unlicensed, exactly like a retail Windows ISO, and needs a product key or a pre-licensed Microsoft account to activate.
 

@@ -2,7 +2,6 @@
 * text=auto eol=lf
 
 *.sh text eol=lf
-terminal-run text eol=lf
 *.md text eol=lf
 
 # Stored with LF even though cmd.exe needs CRLF: install-wor.sh appends the CR when it
