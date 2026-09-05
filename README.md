@@ -98,11 +98,11 @@ cd wor-flasher
 ./install-wor-gui.sh
 ```
 
-On macOS, Finder users can instead double-click **WoR-Flasher.app** in the cloned folder. The app opens the same native GUI without leaving a Terminal window open.
+On macOS, Finder users can instead double-click **WoR-Flasher.app**. The app opens the same native GUI without leaving a Terminal window open. It works either inside the cloned repository or as a standalone copied application; keep the entire `.app` bundle together when moving it.
 
 WoR-Flasher runs one GUI session per signed-in user, even if more than one checkout or version is present. Opening the app again brings the current macOS window forward instead of starting another installer workflow.
 
-Use the complete repository. Neither script is designed to be downloaded on its own or piped into Bash.
+For command-line use, use the complete repository. Neither script is designed to be downloaded on its own or piped into Bash. The standalone macOS application carries a generated, integrity-checked copy of that same repository runtime rather than a second implementation.
 
 ## Pi-Apps
 
@@ -375,7 +375,9 @@ An opt-in self-updater is also built in. It is **off by default** (`NO_UPDATE=1`
 NO_UPDATE=0 ./install-wor.sh
 ```
 
-The macOS app checks the checkout's configured `origin` and current branch for an update before launch. It prompts before changing a clean checkout and applies only a fast-forward update. It silently skips the update when tracked files are modified or `HEAD` is detached, and continues with the installed revision when no update is available. Set `UPDATE_REPO_URL` and `UPDATE_REF` before opening the app from a shell to test another trusted remote or ref.
+When launched from a source checkout, the macOS app checks the checkout's configured `origin` and current branch for an update before launch. It prompts before changing a clean checkout and applies only a fast-forward update. It silently skips the update when tracked files are modified or `HEAD` is detached, and continues with the installed revision when no update is available. Set `UPDATE_REPO_URL` and `UPDATE_REF` before opening the app from a shell to test another trusted remote or ref.
+
+When the app is copied away from its checkout, it never modifies its own bundle. On first launch it validates the embedded runtime and copies it to `~/Library/Application Support/WoR-Flasher/runtimes/<version>/runtime`. Detached updates are staged there from release metadata over HTTPS, and are accepted only after the archive SHA-256, every extracted file digest, and every recorded file mode match the signed package manifest. Unsafe archive entries, incomplete payloads, equal versions, and downgrades are rejected. Runtime selection falls back in this order: active, previous, then the immutable embedded copy.
 
 Check what you are running with `./install-wor.sh --version`.
 
@@ -388,7 +390,7 @@ The app performs a bounded preflight rather than a destructive general-purpose "
 - If Homebrew itself is absent, the app offers to open the official [Homebrew website](https://brew.sh/). It does not run a remote installer automatically.
 - Existing modified files, untracked files, downloaded Windows content and user settings are never reset or replaced. Download recovery remains controlled by the selected [cache mode](#download-cache).
 
-This preflight requires a complete Git checkout for file repair and updates. If the checkout cannot be repaired safely, the app stops with a native error instead of guessing or overwriting local work.
+Source-file repair requires a complete Git checkout. A detached app instead validates its installed runtime and falls back to the previous or embedded runtime when the active copy is damaged; it does not attempt Git repair. If no runtime validates, the app stops with a native error instead of guessing or overwriting local work.
 
 ## Troubleshooting
 
@@ -465,7 +467,8 @@ This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unloc
 ./tests/run-tests.sh --gui          # walk the GUI in DRY_RUN mode
 ./tests/run-tests.sh --walkthrough  # fake drives, then the CLI interactively
 ./tests/run-linux-integration.sh    # force the Dockerised Linux suite
-shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher tests/*.sh
+./scripts/package-macos-app.sh --check  # verify the embedded runtime matches canonical sources
+shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
 ```
 
 The suite creates loopback devices as stand-in drives, so nothing can be written to physical storage. Tests call the real functions out of `install-wor.sh` rather than restating their logic, which means a test cannot pass against behaviour the shipped script no longer has.
@@ -474,9 +477,23 @@ On a non-Linux host the run prints three summaries — the Docker container's ne
 
 CI runs ShellCheck plus the suite on Ubuntu and macOS, and a one-model dry-run integration pass. See [CONTRIBUTING.md](CONTRIBUTING.md) for house style and for the traps that have already caught us.
 
+Pushing a semantic version tag matching the canonical version in
+[`src/lib/metadata.sh`](src/lib/metadata.sh) publishes a GitHub Release after those checks pass.
+The same workflow can be manually dispatched with `tag_name: auto` to select the next patch, or an
+explicit `vX.Y.Z` tag. By default, manual releases update the shared version metadata, macOS app
+bundle metadata, documentation histories, and embedded runtime before validation; select **Do not
+update project version files before validating a new manual tag** only when those changes are
+already committed. A new manual tag is created and published only after validation. Each release
+includes a
+portable `wor-flasher-<version>-linux-rpi.zip` for Linux and Raspberry Pi OS users, a
+`WoR-Flasher-<version>-macos.zip` app bundle, the app launcher's verified runtime-update payload,
+and `SHA256SUMS`. The portable ZIP is also the complete release source; GitHub additionally offers
+its standard source archive for each tag. The macOS app bundle is unsigned and unnotarized; verify
+downloaded artifacts against `SHA256SUMS` before use.
+
 ### Repository layout
 
-The root entry points remain stable for existing users and integrations: `install-wor.sh` is the engine and CLI, `install-wor-gui.sh` is the Linux/macOS front end, `install-wor-hook.sh` is the automation adapter, and `WoR-Flasher.app` is the native macOS launcher that Finder users double-click.
+The root entry points remain stable for existing users and integrations: `install-wor.sh` is the engine and CLI, `install-wor-gui.sh` is the Linux/macOS front end, `install-wor-hook.sh` is the automation adapter, and `WoR-Flasher.app` is the native macOS launcher that Finder users double-click. `scripts/package-macos-app.sh --write` deterministically rebuilds the app's generated runtime and manifest from those canonical files; do not edit the generated runtime directly.
 
 Shared UI artwork lives in `assets/`, and boot and setup inputs live in `config-templates/`.
 
@@ -543,6 +560,8 @@ These additions are maintained directly by Blackout Secure in cooperation with B
 This maintained source uses its own version line. The product name, window title and current version are defined once in [`src/lib/metadata.sh`](src/lib/metadata.sh). The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion` in the app property list. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
 
 - **1.0.2**
+  - `WoR-Flasher.app` can run independently of a Git checkout using an immutable embedded runtime, validated writable runtime copies under Application Support, and active/previous/embedded fallback.
+  - Detached runtime updates reject downgrades and verify the archive digest, extracted file digests, file modes, and archive entry safety before atomic promotion.
   - A standalone `install-wor-hook.sh` now obtains a complete trusted checkout automatically when no adjacent engine is available.
   - The native macOS partnership announcement now has compatible attributed-text construction, dark-mode contrast and non-overlapping layout on current JXA runtimes.
   - A double-clickable macOS app now checks for clean fast-forward updates, installs missing Homebrew formulae with consent and offers non-destructive repair of missing tracked runtime files.

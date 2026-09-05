@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "version": "1.0.2",
+  "files": [
+    {"path": "assets/logo-full.png", "sha256": "bcada73ea809d8ae38ad00c3c55a5261e017626dbbbb78fc24a0cc3847d26d53", "mode": "644"},
+    {"path": "assets/next-steps.png", "sha256": "080f4320153bb93a2c573b74ee2e0825f3ed7b47eb4dbe1fe84261bb2454ca89", "mode": "644"},
+    {"path": "assets/overview.png", "sha256": "2905c5798da6a802cc5abcdfffc648e14825150d4459bd8050a4ba88c2e1a867", "mode": "644"},
+    {"path": "assets/partnership.png", "sha256": "0a4b683ccc530fe1a755096ff089f9b4dd2cd0bfcc2c4b87caa8ed049de48a80", "mode": "644"},
+    {"path": "assets/ram.png", "sha256": "a61b2a65c9c56e63a1e3c3698282ba31a05773f3466f62c0a2f5c0768af61333", "mode": "644"},
+    {"path": "config-templates/oobe-network-bypass.xml", "sha256": "b38a551085ed2b3f3030abd03eea7d794e8214ca8b4dd755e61221b7e111f735", "mode": "644"},
+    {"path": "config-templates/pi3.config.txt", "sha256": "09800fca5bc9cd7088629c66b21c22ea6449f2883ad843622450625639beaa42", "mode": "644"},
+    {"path": "config-templates/pi4-ram-unlock-specialize.xml", "sha256": "e6e18f24fd6d760543825ce2299bcbc2ce4ccce81d4d8927cb7a2e920fb2c89b", "mode": "644"},
+    {"path": "config-templates/pi4-ram-unlock.ps1", "sha256": "2ce15c56ec7fb86592daff94ff0b8fda987552557ac8e01f86be24d5c5f5d9c5", "mode": "644"},
+    {"path": "config-templates/pi4.config.txt", "sha256": "8601e17648d84f65dce5e00679349c65358d24d40508998f49f66ff001069eab", "mode": "644"},
+    {"path": "config-templates/pi5.config.txt", "sha256": "51c763d9848e320c641e52e2d5160f7ee089cdd78fb29a2ddfeaa1b35c11543e", "mode": "644"},
+    {"path": "config-templates/prefinalize.cmd", "sha256": "1d92e63f0961718d53c8a448a63eb7116d769a8e173d118fbea5e1e0fd97b7a3", "mode": "644"},
+    {"path": "install-wor-gui.sh", "sha256": "487d5c94d5f51dac46afb97e5ee41a016b2ee5469494bd6d80aaaf1aadf28ba4", "mode": "755"},
+    {"path": "install-wor-hook.sh", "sha256": "60b5dcbbe8b2fdcc2a2c644fd75d964a8bc5e658adfff2560cf8bdcbd756b350", "mode": "755"},
+    {"path": "install-wor.sh", "sha256": "b75c82328b20ca75c30604f8bac940843c0214d1a74dcbb8178f6337b5b27e87", "mode": "755"},
+    {"path": "src/lib/cleanup.sh", "sha256": "f02915494724090da444ed2da7de0a2d94784c4d56b3a1b765bf8f751725887f", "mode": "644"},
+    {"path": "src/lib/dependencies.sh", "sha256": "d9a16442bf9f848ced3775701620b4ec423e9b5b4470b3afbc48926ba4eb8b75", "mode": "644"},
+    {"path": "src/lib/metadata.sh", "sha256": "2b65ee6a9bf517337f95bb8895703a76b1bbb2f7db1641b0d169ec0a2e53eeae", "mode": "644"},
+    {"path": "src/lib/paths.sh", "sha256": "30ee67979e8194018cdcc602fe88c9c791e5f7729050f1385415b9a0c9b0bfc3", "mode": "644"}
+  ]
+}
