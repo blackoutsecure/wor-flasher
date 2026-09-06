@@ -1,0 +1,23 @@
+{
+  "name": "wor-flasher-release-tools",
+  "version": "1.0.2",
+  "private": true,
+  "type": "module",
+  "description": "Release tooling for WoR-Flasher packaging; disk flashing remains in the shell engine.",
+  "scripts": {
+    "clean": "node src/node/build-release.mjs --clean",
+    "build": "node src/node/build-release.mjs --platform=all",
+    "build:macos": "node src/node/build-release.mjs --platform=macos",
+    "build:linux": "node src/node/build-release.mjs --platform=linux",
+    "package:macos": "node src/node/build-release.mjs --platform=macos",
+    "package:all": "node src/node/build-release.mjs --platform=all",
+    "update-check": "node src/node/updater.mjs --check-git",
+    "version:set": "node src/node/set-version.mjs",
+    "test": "node --test tests/*.test.mjs && ./tests/run-tests.sh",
+    "test:node": "node --test tests/*.test.mjs",
+    "check": "bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh && node --check src/node/build-release.mjs && node --check src/node/updater.mjs && node --check src/node/package-macos-app.mjs && node --check src/node/set-version.mjs && node --test tests/*.test.mjs && node src/node/build-release.mjs --check --platform=all"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

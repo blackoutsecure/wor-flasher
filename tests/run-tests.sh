@@ -83,12 +83,50 @@ static_checks() {
     git -C "$REPO_DIR" diff --check >/dev/null 2>&1 \
       && pass "working tree has no whitespace errors" || fail "working tree has whitespace errors"
   fi
-  for f in src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh scripts/package-macos-app.sh 'WoR-Flasher.app/Contents/MacOS/WoR-Flasher' ;do
+  for f in src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh 'src/macos-app/Contents/MacOS/WoR-Flasher' ;do
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
+  grep -qF 'runtime-paths.json' "$REPO_DIR/src/node/build-release.mjs" \
+    && grep -qF 'npm run package:all' "$REPO_DIR/.github/workflows/release.yml" \
+    && grep -qF 'release/linux/wor-flasher' "$REPO_DIR/.github/workflows/release.yml" \
+    && grep -qF 'release/macos/WoR-Flasher.app' "$REPO_DIR/.github/workflows/release.yml" \
+    && pass "release tooling shares one runtime path manifest" \
+    || fail "release tooling duplicates the runtime path list"
+  release_package_line="$(grep -nF '      - name: Package release artifacts' "$REPO_DIR/.github/workflows/release.yml" | cut -d: -f1)"
+  release_tag_line="$(grep -nF '      - name: Create immutable release tag' "$REPO_DIR/.github/workflows/release.yml" | cut -d: -f1)"
+  release_publish_line="$(grep -nF '      - name: Publish GitHub Release' "$REPO_DIR/.github/workflows/release.yml" | cut -d: -f1)"
+  if [ -n "$release_package_line" ] && [ -n "$release_tag_line" ] && [ -n "$release_publish_line" ] \
+    && [ "$release_package_line" -lt "$release_tag_line" ] && [ "$release_tag_line" -lt "$release_publish_line" ] ;then
+    pass "release artifacts are packaged before the immutable tag is pushed"
+  else
+    fail "release workflow mutates the repository before packaging succeeds"
+  fi
+  if command -v node >/dev/null ;then
+    node --check "$REPO_DIR/src/node/build-release.mjs" >/dev/null 2>&1 \
+      && node --check "$REPO_DIR/src/node/updater.mjs" >/dev/null 2>&1 \
+      && node --check "$REPO_DIR/src/node/package-macos-app.mjs" >/dev/null 2>&1 \
+      && node --check "$REPO_DIR/src/node/set-version.mjs" >/dev/null 2>&1 \
+      && pass "src/node/*.mjs scripts parse cleanly" || fail "Node tooling scripts have syntax errors"
+    if node --test "$REPO_DIR/tests/node-tools.test.mjs" >/dev/null 2>&1 ;then
+      pass "Node.js unit test suite passed (tests/node-tools.test.mjs)"
+    else
+      fail "Node.js unit test suite failed"
+    fi
+    release_check_tmp="$(mktemp -d "${TMPDIR:-/tmp}/wor-release-check-test.XXXXXX")"
+    if TMPDIR="$release_check_tmp" node "$REPO_DIR/src/node/build-release.mjs" --check --platform=invalid >/dev/null 2>&1 ;then
+      fail "release tooling accepted an unsupported platform"
+    elif find "$release_check_tmp" -mindepth 1 -print -quit | grep -q . ;then
+      fail "failed release check left temporary staging files behind"
+    else
+      pass "failed release checks reject invalid input and clean temporary staging"
+    fi
+    rm -rf "$release_check_tmp"
+  else
+    skip "node is not installed; skipping release-tool syntax check"
+  fi
 
   if command -v shellcheck >/dev/null ;then
-    shellcheck --severity=error "$REPO_DIR"/src/lib/metadata.sh "$REPO_DIR"/src/lib/dependencies.sh "$REPO_DIR"/src/lib/paths.sh "$REPO_DIR"/src/lib/cleanup.sh "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/install-wor-hook.sh "$REPO_DIR"/scripts/package-macos-app.sh "$REPO_DIR"/WoR-Flasher.app/Contents/MacOS/WoR-Flasher >/dev/null 2>&1 \
+    shellcheck --severity=error "$REPO_DIR"/src/lib/metadata.sh "$REPO_DIR"/src/lib/dependencies.sh "$REPO_DIR"/src/lib/paths.sh "$REPO_DIR"/src/lib/cleanup.sh "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/install-wor-hook.sh "$REPO_DIR"/src/macos-app/Contents/MacOS/WoR-Flasher >/dev/null 2>&1 \
       && pass "shellcheck reports no errors" || fail "shellcheck reports errors"
   else
     skip "shellcheck is not installed"
@@ -105,13 +143,15 @@ static_checks() {
     && grep -qF 'register_mount_cleanup "$isomount"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'register_mount_cleanup "$mntpnt/bootpart"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'register_mount_cleanup "$mntpnt/winpart"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'diskutil unmount force "$mountpoint"' "$REPO_DIR/src/lib/cleanup.sh" \
+    && ! grep -qF 'sudo diskutil unmount force "$mountpoint"' "$REPO_DIR/src/lib/cleanup.sh" \
     && pass "all temporary mounts use the shared cleanup handler" \
     || fail "a temporary mount bypasses the shared cleanup handler"
 
-  grep -qF 'if ! command sudo -n -v >/dev/null 2>&1 && { [ "$RUN_MODE" == gui ] || ! sudo -v >/dev/null 2>&1; };then' "$REPO_DIR/install-wor.sh" \
+  grep -qF 'if [ "$RUN_MODE" != gui ] && ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1;then' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Administrator authentication failed or was canceled.' "$REPO_DIR/install-wor.sh" \
-    && pass "macOS checks administrator access before partitioning" \
-    || fail "macOS does not check administrator access before partitioning"
+    && pass "macOS authenticates administrator access before partitioning" \
+    || fail "macOS does not authenticate administrator access before partitioning"
 
   grep -qF 'require_free_space()' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'required_download_space' "$REPO_DIR/install-wor.sh" \
@@ -205,9 +245,9 @@ static_checks() {
     && grep -qF 'wor_osascript - "$WOR_APP_TITLE" "$WOR_FLASH_TARGET"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'with title appTitle' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'export RUN_MODE=gui' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'exec /usr/bin/open -W "$DIRECTORY/WoR-Flasher.app"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'exec /usr/bin/open -W "$DIRECTORY/release/macos/WoR-Flasher.app"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '[ "${WOR_NATIVE_APP:-0}" != 1 ]' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'export WOR_NATIVE_APP=1' "$REPO_DIR/WoR-Flasher.app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF 'export WOR_NATIVE_APP=1' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
     && grep -qF "name: 'WorErrorController'" "$REPO_DIR/install-wor.sh" \
     && grep -qF 'app.requestUserAttention($.NSInformationalRequest)' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'display alert' "$REPO_DIR/install-wor.sh" \
@@ -223,8 +263,14 @@ static_checks() {
     || fail "CLI ASCII banner does not name WoR-Flasher"
 
   if [ "$HOST_OS" == Darwin ];then
-    launcher="$REPO_DIR/WoR-Flasher.app/Contents/MacOS/WoR-Flasher"
-  "$REPO_DIR/scripts/package-macos-app.sh" --check >/dev/null 2>&1 \
+    if command -v node >/dev/null ;then
+      node "$REPO_DIR/src/node/build-release.mjs" --platform=macos >/dev/null 2>&1 \
+        || fail "generated macOS app could not be staged for launcher tests"
+    else
+      fail "node is required to stage the generated macOS app for launcher tests"
+    fi
+    launcher="$REPO_DIR/release/macos/WoR-Flasher.app/Contents/MacOS/WoR-Flasher"
+  node "$REPO_DIR/src/node/package-macos-app.mjs" --check >/dev/null 2>&1 \
     && grep -qF 'validate_runtime "$EMBEDDED_RUNTIME" "$EMBEDDED_MANIFEST"' "$launcher" \
     && grep -qF 'actual_digest="$(shasum -a 256 "$archive"' "$launcher" \
     && grep -qF 'archive_entries_are_safe "$archive"' "$launcher" \
@@ -257,7 +303,7 @@ static_checks() {
     source "$1/Contents/Resources/runtime/src/lib/metadata.sh"
     [ "$WOR_FLASHER_VERSION" == "$(sed -n "s/^[[:space:]]*\"version\": \"\([^\"]*\)\".*/\1/p" "$1/Contents/Resources/runtime-manifest.json")" ]
     [ ! -e "$1/Contents/Resources/runtime/cache" ]
-  ' _ "$REPO_DIR/WoR-Flasher.app" ;then
+  ' _ "$REPO_DIR/release/macos/WoR-Flasher.app" ;then
     pass "packaged macOS engine loads without modifying its immutable runtime"
   else
     fail "packaged macOS engine load failed or modified its immutable runtime"
@@ -274,6 +320,11 @@ static_checks() {
     select_runtime
     case "$REPO_DIR" in "$WOR_APP_SUPPORT_DIR"/runtimes/*/runtime) ;; *) exit 1 ;; esac
     validate_runtime "$REPO_DIR" "$RUNTIME_MANIFEST"
+    cp "$EMBEDDED_MANIFEST" "$RUNTIME_MANIFEST"
+    printf 'stale\n' >> "$REPO_DIR/install-wor.sh"
+    bootstrap_embedded_runtime
+    select_runtime
+    cmp -s "$RUNTIME_MANIFEST" "$EMBEDDED_MANIFEST"
     printf "tampered\n" >> "$REPO_DIR/install-wor.sh"
     select_runtime
     [ "$REPO_DIR" == "$EMBEDDED_RUNTIME" ]
@@ -408,8 +459,8 @@ static_checks() {
   rm -rf "$launcher_test_dir"
 
   launcher_test_dir="$(mktemp -d)"
-  resources_dir="$REPO_DIR/WoR-Flasher.app/Contents/Resources"
-  info_plist="$REPO_DIR/WoR-Flasher.app/Contents/Info.plist"
+  resources_dir="$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Resources"
+  info_plist="$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Info.plist"
 
   cp "$launcher" "$launcher_test_dir/version-mutant"
   perl -0pi -e 's/done\n  return 1\n}\n\nvalidate_runtime/done\n  return 0\n}\n\nvalidate_runtime/' "$launcher_test_dir/version-mutant"
@@ -569,15 +620,15 @@ static_checks() {
     metadata_logo="$(run_in_engine 'printf %s "$WOR_LOGO_FILENAME"')"
     metadata_assets="$(run_in_engine 'printf %s "$WOR_ASSETS_DIRNAME"')"
     metadata_icon="$(run_in_engine 'printf %s "$WOR_ICON_FILENAME"')"
-    info_plist="$REPO_DIR/WoR-Flasher.app/Contents/Info.plist"
+    info_plist="$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Info.plist"
     plutil -lint "$info_plist" >/dev/null 2>&1 \
       && [ "$(plutil -extract CFBundleDisplayName raw -o - "$info_plist")" == "$metadata_name" ] \
       && [ "$(plutil -extract CFBundleExecutable raw -o - "$info_plist")" == "$metadata_name" ] \
       && [ "$(plutil -extract CFBundleIconFile raw -o - "$info_plist")" == "$metadata_icon" ] \
       && [ "$(plutil -extract CFBundleIconName raw -o - "$info_plist")" == "$metadata_name" ] \
-      && [ -s "$REPO_DIR/WoR-Flasher.app/Contents/Resources/$metadata_icon" ] \
-      && [ -f "$REPO_DIR/WoR-Flasher.app/Contents/Resources/$metadata_logo" ] \
-      && cmp -s "$REPO_DIR/$metadata_assets/$metadata_logo" "$REPO_DIR/WoR-Flasher.app/Contents/Resources/$metadata_logo" \
+      && [ -s "$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Resources/$metadata_icon" ] \
+      && [ -f "$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Resources/$metadata_logo" ] \
+      && cmp -s "$REPO_DIR/$metadata_assets/$metadata_logo" "$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Resources/$metadata_logo" \
       && [ "$(plutil -extract CFBundleName raw -o - "$info_plist")" == "$metadata_name" ] \
       && [ "$(plutil -extract CFBundleShortVersionString raw -o - "$info_plist")" == "$metadata_version" ] \
       && [ "$(plutil -extract CFBundleVersion raw -o - "$info_plist")" == "$metadata_version" ] \
@@ -649,6 +700,11 @@ static_checks() {
 
   grep -qF 'WOR_WINDOW_TITLE' "$REPO_DIR/src/lib/metadata.sh" \
     && grep -qF '"$WOR_WINDOW_TITLE"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--title="$WOR_WINDOW_TITLE"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--class="$WOR_ICON_NAME"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'ensure_linux_desktop_identity()' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'StartupWMClass=$WOR_ICON_NAME' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Icon=$icon_path' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const isMessageMode = choices.length === 0' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const iconPath = ObjC.unwrap(args.objectAtIndex(12))' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const cancelValue = ObjC.unwrap(args.objectAtIndex(14))' "$REPO_DIR/install-wor-gui.sh" \
@@ -836,6 +892,8 @@ disk5 Second drive"
     && [ -f "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" ] \
     && [ -f "$REPO_DIR/config-templates/oobe-network-bypass.xml" ] \
     && [ -f "$REPO_DIR/config-templates/prefinalize.cmd" ] \
+    && [ -f "$REPO_DIR/config-templates/config.json" ] \
+    && [ -f "$REPO_DIR/config-templates/config.schema.json" ] \
     && grep -qF 'read_config_template() {' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'sync_repo_template' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'raw.githubusercontent.com' "$REPO_DIR/install-wor.sh" \
@@ -844,7 +902,7 @@ disk5 Second drive"
 
   #these must be committed: a fresh clone without them silently writes a blank config.txt and the Pi will not boot
   if command -v git >/dev/null && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
-    [ "$(git -C "$REPO_DIR" ls-files config-templates/ | wc -l | tr -d ' ')" == 7 ] \
+    [ "$(git -C "$REPO_DIR" ls-files config-templates/ | wc -l | tr -d ' ')" == 9 ] \
       && grep -qF 'This file ships with WoR-Flasher and is required to write a bootable drive.' "$REPO_DIR/install-wor.sh" \
       && pass "config-templates/ files are tracked by git and a missing one aborts instead of writing a blank config.txt" \
       || fail "config-templates/ files are untracked, or a missing template does not abort"
@@ -941,7 +999,18 @@ disk5 Second drive"
     || fail "Skip-verification option or confirm-screen guidance is missing or incomplete"
 
   grep -qF '[ -z "$APPLY_CUSTOM_CONFIG_TXT" ] && APPLY_CUSTOM_CONFIG_TXT=1' "$REPO_DIR/install-wor.sh" \
-    && grep -qF '[ -z "$CONFIG_TXT" ] || [ "$APPLY_CUSTOM_CONFIG_TXT" != 1 ] || echo "$CONFIG_TXT" | sudo tee "$boot_mount/config.txt" >/dev/null' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '[ -z "$CONFIG_TXT" ] || [ "$APPLY_CUSTOM_CONFIG_TXT" != 1 ] || printf' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'mkdir -p "$boot_mount/efi"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'cp -R "$PWD/peinstaller/efi/." "$boot_mount/efi"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'cp -RX "$PWD/pi${RPI_MODEL}-uefipackage"/* "$boot_mount"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'if is_macos;then' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'copy_mounted_file_with_progress()' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'mkdir -p "$destination/boot" "$destination/efi"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'cp -R "$source/boot/." "$destination/boot"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'cp -R "$source/efi/." "$destination/efi"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sudo cp -R "$source/boot" "$source/efi" "$destination"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'mounted_wimverify()' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'mounted_wimdir "$boot_mount/sources/boot.wim"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'if [ ! -z "$CONFIG_TXT" ] && [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ];then' "$REPO_DIR/install-wor.sh" \
     && grep -qF "applyConfigCheckbox = \$.NSButton.checkboxWithTitleTargetAction('Apply the customized config.txt below" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'function updateConfigEditableState() {' "$REPO_DIR/install-wor-gui.sh" \
@@ -983,26 +1052,52 @@ disk5 Second drive"
     && pass "both GUIs record the installer exit status from the job itself, not a sibling wait" \
     || fail "a GUI still waits on a sibling process, so it reports completion immediately"
 
-  #the password dialog cannot render in front of the progress window, so the installer authenticates
-  #itself and the front-end holds the window back until it has. Asking in the GUI instead would ask
-  #twice: a credential is recorded against the terminal of the process that collected it, and the
-  #installer runs as a separate job.
+  #macOS GUI launches have no reusable terminal timestamp, so a password-only preauth just creates
+  #one extra prompt. Linux still preauthenticates because its sudo timestamp is reusable there.
   gui_auth_wait_line="$(grep -n 'while \[ ! -e "\$auth_marker" \] && \[ ! -f "\$done_marker" \] ;do' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
   macos_progress_line="$(grep -n '<<<"\$progress_jxa"' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
   [ -n "$gui_auth_wait_line" ] && [ -n "$macos_progress_line" ] \
-    && [ "$gui_auth_wait_line" -lt "$macos_progress_line" ] \
     && grep -qF 'export WOR_GUI_AUTH_MARKER="$auth_marker"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'GUI_PROGRESS_EARLY=1 gui_start_installer' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'gui_preauthenticate() {' "$REPO_DIR/install-wor.sh" \
     && grep -qF '[ "$RUN_MODE" == gui ] && gui_preauthenticate' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Administrator access: the first privileged disk operation will request the macOS password.' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'command sudo -n -v >/dev/null 2>&1; sleep 30' "$REPO_DIR/install-wor.sh" \
-    && pass "the installer authenticates once, before the progress window opens, and keeps it alive" \
-    || fail "the password is asked for behind the progress window, or asked for twice"
+    && pass "macOS GUI avoids password-only preauth while Linux keeps its reusable timestamp alive" \
+    || fail "macOS GUI still does password-only preauth or Linux lost timestamp keepalive"
 
   #exactly one place may prompt: the GUI collecting a credential of its own was the second dialog users saw
   [ "$(grep -cE '(^|[^n]) *sudo -v' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
     && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 1 ] \
+    && grep -qF 'Administrator access: requesting macOS password with the native WoR-Flasher dialog.' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'if command sudo -n -v >/dev/null 2>&1;then' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'command sudo -n "$@"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'refusing to prompt in the console.' "$REPO_DIR/install-wor.sh" \
     && pass "the flash asks for the password once, in the process that uses it" \
     || fail "a credential is collected in more than one place, so the user is asked twice"
+
+  sudo_retry_dir="$(mktemp -d)"
+  cat > "$sudo_retry_dir/sudo" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SUDO_RETRY_LOG"
+case "$*" in
+  '-n -v') exit 0 ;;
+  '-n failing-command') exit 42 ;;
+  '-A failing-command') exit 99 ;;
+esac
+exit 0
+SH
+  chmod +x "$sudo_retry_dir/sudo"
+  sudo_retry_log="$sudo_retry_dir/log"
+  sudo_retry_status=0
+  PATH="$sudo_retry_dir:$PATH" SUDO_RETRY_LOG="$sudo_retry_log" run_in_engine 'RUN_MODE=gui MACOS_ASKPASS=/tmp/wor-test-askpass sudo failing-command' >/dev/null 2>&1 || sudo_retry_status=$?
+  [ "$sudo_retry_status" == 42 ] \
+    && grep -qF -- '-n -v' "$sudo_retry_log" \
+    && grep -qF -- '-n failing-command' "$sudo_retry_log" \
+    && ! grep -qF -- '-A failing-command' "$sudo_retry_log" \
+    && pass "GUI sudo does not ask again when an authenticated command fails" \
+    || fail "GUI sudo retries with askpass after a real command failure"
+  rm -rf "$sudo_retry_dir"
 
   #a failed flash must leave the log behind; the GUI has no terminal to fall back on
   grep -qF 'saved_log="$(wor_log_file)"' "$REPO_DIR/install-wor-gui.sh" \
@@ -1117,12 +1212,13 @@ disk5 Second drive"
     && pass "gui_error_dialog reliably creates error_marker with touch+sync before dialog" \
     || fail "gui_error_dialog does not reliably create error_marker"
 
-  #the GUI checks for error_marker with -s (non-empty) to ensure it was actually written, not just the file existing
+  #the error marker is a synchronization signal; gui_error_dialog creates it before opening its own native dialog
   marker_check_fn="$(sed -n '/^installer_showed_own_error() {/,/^}/p' "$REPO_DIR/install-wor-gui.sh")"
-  printf '%s' "$marker_check_fn" | grep -qF '[ -e "$error_marker" ] && [ -s "$error_marker" ]' \
+  printf '%s' "$marker_check_fn" | grep -qF '[ -e "$error_marker" ]' \
+    && ! printf '%s' "$marker_check_fn" | grep -qF '[ -s "$error_marker" ]' \
     && [ "$(grep -cF 'if installer_showed_own_error ;then' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
-    && pass "both GUIs check error_marker exists AND is non-empty before skipping the completion dialog" \
-    || fail "GUI does not verify error_marker is non-empty before trusting it"
+    && pass "both GUIs trust the native error marker before skipping the completion dialog" \
+    || fail "GUI ignores the native error marker and can show a duplicate failure dialog"
 
   #aborting must take down the sudo-owned children too, not just the top-level job
   kill_tree_dir="$(mktemp -d)"
@@ -1198,6 +1294,34 @@ shared_function_checks() {
     && grep -qF "settings_summary_plain '  %-24s %s" "$REPO_DIR/install-wor.sh" \
     && pass "the CLI banner and the macOS confirmation screen render one shared summary" \
     || fail "the CLI banner and the macOS confirmation screen do not share a renderer"
+
+  #config.json loading and precedence
+  cfg_test_dir="$(mktemp -d)"
+  cat > "$cfg_test_dir/config.json" <<'JSON'
+{
+  "target": {
+    "rpiModel": 5,
+    "device": "/dev/sdz",
+    "canInstallOnSameDrive": true
+  },
+  "media": {
+    "winLang": "de-de",
+    "bid": "22631.2861"
+  },
+  "execution": {
+    "dryRun": true
+  }
+}
+JSON
+  cfg_test_out="$(run_in_engine "WOR_CONFIG_FILE='$cfg_test_dir/config.json' load_config_json; printf '%s|%s|%s|%s|%s\n' \"\$RPI_MODEL\" \"\$WIN_LANG\" \"\$BID\" \"\$DEVICE\" \"\$DRY_RUN\"")"
+  cfg_override_out="$(run_in_engine "RPI_MODEL=4 WIN_LANG=en-us WOR_CONFIG_FILE='$cfg_test_dir/config.json' load_config_json; printf '%s|%s|%s|%s|%s\n' \"\$RPI_MODEL\" \"\$WIN_LANG\" \"\$BID\" \"\$DEVICE\" \"\$DRY_RUN\"")"
+  cfg_hook_out="$(cd "$REPO_DIR" && ./install-wor-hook.sh --config "$cfg_test_dir/config.json" summary | grep -E '^Target hardware|Operating system' | tr '\n' '|')"
+  rm -rf "$cfg_test_dir"
+  [ "$cfg_test_out" == "5|de-de|22631.2861|/dev/sdz|1" ] \
+    && [ "$cfg_override_out" == "4|en-us|22631.2861|/dev/sdz|1" ] \
+    && [ "$cfg_hook_out" == "Target hardware	Raspberry Pi 5|Operating system	Windows 11 (de-de) arm64 build 22631.2861|" ] \
+    && pass "config.json populates unset variables while preserving environment overrides" \
+    || fail "config.json loading failed: got '$cfg_test_out' / '$cfg_override_out' / '$cfg_hook_out'"
 
   #a Pi 3 or Pi 5 has no 3 GB RAM limit, so offering the line at all would be misleading
   ! run_in_engine 'RPI_MODEL=5 settings_summary' | grep -q 'Pi 4 RAM unlock' \
@@ -1316,6 +1440,9 @@ shared_function_checks() {
   #the GUI enumerated drives with its own lsblk call, so a filter added here would not apply there
   ! grep -qF 'lsblk -I 8,179,259' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'for device in $(list_dev_paths) ;do' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'linux_no_device_message()' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'No external writable target drive was found.' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'WoR-Flasher hides loop/snap devices' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'list_dev_paths() {' "$REPO_DIR/install-wor.sh" \
     && [ "$(grep -cF 'lsblk -I 8,179,259' "$REPO_DIR/install-wor.sh")" == 1 ] \
     && pass "both front-ends enumerate candidate drives through one function" \
@@ -1335,11 +1462,12 @@ shared_function_checks() {
   #one entry point, but never a guess: DISPLAY is also set over SSH and in CI, and this tool erases disks
   name="$(run_in_engine 'printf %s "$WOR_FLASHER_NAME"')"
   [ "$(cd "$REPO_DIR" && ./install-wor.sh --help | head -n1)" == "$name $(run_in_engine 'printf %s "$WOR_FLASHER_VERSION"')" ] \
+    && grep -qF 'gui|--gui|-g)' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'exec "$DIRECTORY/install-wor-gui.sh" "$@"' "$REPO_DIR/install-wor.sh" \
     && ! grep -qE 'if .*-n .\$DISPLAY|command -v yad .*&&.*exec' "$REPO_DIR/install-wor.sh" \
     && [ "$(cd "$REPO_DIR" && ./install-wor.sh --bogus 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; echo "rc=${PIPESTATUS[0]}")" == "Unknown argument '--bogus'. Run 'install-wor.sh --help' for usage.
 rc=1" ] \
-    && pass "install-wor.sh --gui hands over explicitly and never auto-detects a display" \
+    && pass "install-wor.sh gui/--gui hands over explicitly and never auto-detects a display" \
     || fail "the CLI entry point is missing, or it guesses whether to open a GUI"
 
   #a bug report is unactionable without knowing which version produced it
@@ -1359,8 +1487,8 @@ rc=1" ] \
   grep -qE "^#$version - \S" "$REPO_DIR/install-wor.sh" \
     && grep -qE "^- \*\*$version\*\*" "$REPO_DIR/README.md" \
     && grep -qF "version-$version-" "$REPO_DIR/README.md" \
-    && grep -A1 -F '<key>CFBundleShortVersionString</key>' "$REPO_DIR/WoR-Flasher.app/Contents/Info.plist" | grep -qF "<string>$version</string>" \
-    && grep -A1 -F '<key>CFBundleVersion</key>' "$REPO_DIR/WoR-Flasher.app/Contents/Info.plist" | grep -qF "<string>$version</string>" \
+    && grep -A1 -F '<key>CFBundleShortVersionString</key>' "$REPO_DIR/src/macos-app/Contents/Info.plist" | grep -qF "<string>$version</string>" \
+    && grep -A1 -F '<key>CFBundleVersion</key>' "$REPO_DIR/src/macos-app/Contents/Info.plist" | grep -qF "<string>$version</string>" \
     && pass "the version history, README and app bundle metadata all agree" \
     || fail "release metadata is out of step with WOR_FLASHER_VERSION"
 
@@ -1918,13 +2046,52 @@ if command -v jq >/dev/null ;then
     && grep -qF -- '-A 1:clear:63 -A 2:clear:63' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'boot_size_mb=$((boot_payload_kb / 1024 + 512))' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'diskutil partitionDisk' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'Failed to unmount newly created partitions on $DEVICE."' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'raw_part2="/dev/r${PART2#/dev/}"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'newfs_exfat -R -v WOR_INSTALL "$raw_part2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_prepare_disk_or_die "$DEVICE" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sudo bash -s -- "$device" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$part1" "$part2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_report_copy_failure "$boot_mount"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sudo -n touch "$probe"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '/usr/sbin/diskutil eraseVolume MS-DOS WOR_BOOT "$1"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '/usr/sbin/diskutil eraseVolume ExFAT WOR_INSTALL "$2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'command_output="$(sudo bash -s -- "$boot_partition" "$install_partition"' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'command_output="$(command sudo diskutil eraseVolume' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'less than 1 GiB remains unallocated for the Windows target partition' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'verify_written_image "$DEVICE" "$PART1" "$PART2" "$boot_mount" "$win_mount"' "$REPO_DIR/install-wor.sh" \
     && pass "Darwin creates WOR_BOOT as a real EFI System Partition" \
     || fail "Darwin does not type WOR_BOOT as an EFI System Partition"
+  #a raw-disk-write denial reads as a bare "Operation not permitted"; the helper must
+  #recognize that specific text and point the user at Full Disk Access instead of guessing
+  fda_message="$(run_in_engine 'fake_cmd() { echo "newfs_msdos: /dev/rdisk9s1: Operation not permitted" >&2; return 1; }; open() { :; }; darwin_format_or_die "format the boot partition on /dev/disk9s1" fake_cmd' 2>&1)"
+  echo "$fda_message" | grep -qF 'Full Disk Access' \
+    && echo "$fda_message" | grep -qF 'click the + button' \
+    && pass "darwin_format_or_die recognizes an Operation not permitted denial and explains adding the app via +" \
+    || fail "darwin_format_or_die gave no Full Disk Access guidance for a permission denial"
+  fda_message_native="$(run_in_engine 'export WOR_NATIVE_APP=1; fake_cmd() { echo "newfs_msdos: /dev/rdisk9s1: Operation not permitted" >&2; return 1; }; open() { :; }; darwin_format_or_die "format the boot partition on /dev/disk9s1" fake_cmd' 2>&1)"
+  echo "$fda_message_native" | grep -qF 'find WoR-Flasher.app' \
+    && pass "darwin_format_or_die names WoR-Flasher.app when launched as the native app" \
+    || fail "darwin_format_or_die did not name WoR-Flasher.app under WOR_NATIVE_APP=1"
+  fda_message_native_path="$(run_in_engine 'export WOR_NATIVE_APP=1 WOR_APP_BUNDLE_PATH=/Applications/WoR-Flasher.app; fake_cmd() { echo "newfs_msdos: /dev/rdisk9s1: Operation not permitted" >&2; return 1; }; open() { :; }; darwin_format_or_die "format the boot partition on /dev/disk9s1" fake_cmd' 2>&1)"
+  echo "$fda_message_native_path" | grep -qF 'WoR-Flasher.app at /Applications/WoR-Flasher.app' \
+    && pass "darwin_format_or_die includes the exact native app path when available" \
+    || fail "darwin_format_or_die did not include WOR_APP_BUNDLE_PATH in the Full Disk Access message"
+  fda_message_vscode="$(run_in_engine 'export WOR_NATIVE_APP=1 WOR_APP_BUNDLE_PATH=/Applications/WoR-Flasher.app TERM_PROGRAM=vscode; fake_cmd() { echo "newfs_msdos: /dev/rdisk9s1: Operation not permitted" >&2; return 1; }; open() { :; }; darwin_format_or_die "format the boot partition on /dev/disk9s1" fake_cmd' 2>&1)"
+  echo "$fda_message_vscode" | grep -qF 'also enable Visual Studio Code.app' \
+    && pass "darwin_format_or_die names the launcher app when macOS may attribute FDA to it" \
+    || fail "darwin_format_or_die did not include a launcher fallback in the Full Disk Access message"
+  removable_message="$(run_in_engine 'HOST_OS=Darwin; open() { :; }; touch() { echo "touch: /Volumes/WOR_BOOT/.wor-flasher-write-probe: Operation not permitted" >&2; return 1; }; darwin_require_mounted_volume_access /Volumes/WOR_BOOT "write to /Volumes/WOR_BOOT"' 2>&1)"
+  echo "$removable_message" | grep -qF 'Removable Volumes' \
+    && echo "$removable_message" | grep -qF 'Full Disk Access' \
+    && echo "$removable_message" | grep -qF 'Visual Studio Code.app, Terminal.app, or iTerm.app' \
+    && grep -qF 'darwin_require_mounted_volume_access "$boot_mount" "write to $boot_mount"' "$REPO_DIR/install-wor.sh" \
+    && pass "macOS preflights removable-volume privacy before copying mounted media" \
+    || fail "macOS mounted-media TCC guidance or preflight is missing"
+  generic_message="$(run_in_engine 'fake_cmd() { echo "some other disk error" >&2; return 1; }; open() { :; }; darwin_format_or_die "format the boot partition on /dev/disk9s1" fake_cmd' 2>&1)"
+  echo "$generic_message" | grep -qF 'Full Disk Access' \
+    && fail "darwin_format_or_die wrongly blames Full Disk Access for an unrelated failure" \
+    || pass "darwin_format_or_die does not misattribute an unrelated failure to Full Disk Access"
+  grep -qF 'open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_diskutil_format_pair_or_die()' "$REPO_DIR/install-wor.sh" \
+    && pass "macOS formats partitions through diskutil instead of raw partition writers" \
+    || fail "macOS still formats partitions through the raw disk writer path"
   DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","WritableMedia":true,"TotalSize":64000000000,"MediaName":"USB Drive"}'
   is_safe_target_device /dev/disk2 && pass "Darwin accepts current writable-media metadata" || fail "Darwin rejected current writable-media metadata"
   for safety_case in \

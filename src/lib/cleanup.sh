@@ -6,7 +6,7 @@ cleanup_mounts() {
   local mountpoint
   for mountpoint in "${CLEANUP_MOUNTS[@]}" ;do
     if is_macos ;then
-      sudo diskutil unmount force "$mountpoint" >/dev/null 2>&1
+      diskutil unmount force "$mountpoint" >/dev/null 2>&1
     else
       sudo umount -q "$mountpoint" 2>/dev/null
     fi

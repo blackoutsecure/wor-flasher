@@ -26,10 +26,14 @@ attribution text.
 Run the narrowest applicable check first. The repository has no compilation step.
 
 ```bash
-# Syntax and ShellCheck for all maintained Bash entry points, libraries and tests.
-# These are the exact target lists .github/workflows/shellcheck.yml uses.
-bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher tests/*.sh
-shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher tests/*.sh
+# Syntax and ShellCheck for all maintained Bash entry points, libraries, and tests.
+# These match the targets validated by CI (.github/workflows/shellcheck.yml).
+bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+
+# Release tooling validation and artifact staging cleanup
+npm run check
+npm run clean
 
 # Full automated suite; does not write physical media
 ./tests/run-tests.sh
@@ -76,10 +80,14 @@ compatibility changes, record real hardware coverage separately when available.
 - Both front-ends run the engine in-process and report progress through a native
   progress window. Do not reintroduce a spawned terminal emulator or launcher
   detection; the GUI must not depend on a visible terminal on either platform.
-- `WoR-Flasher.app/` is the native macOS launcher for the same GUI and engine. It
-  is not a second application implementation. Keep its property-list metadata and
-  bundled resources synchronized with the canonical metadata.
-- `config-templates/` contains required boot and setup inputs. Keep these files
+- `src/macos-app/` holds the canonical macOS application bundle template (`Info.plist`,
+  launcher executable, icons, and logo). The checked-in root `WoR-Flasher.app` is deleted;
+  staged bundles are written to `release/macos/WoR-Flasher.app` by Node release tooling
+  (`npm run build`).
+- Node release tooling (`package.json`, `src/node/build-release.mjs`, `src/node/runtime-paths.json`)
+  stages deterministic release artifacts into `release/` (ignored by Git and cleaned with
+  `npm run clean`).
+- `config-templates/` contains required boot, setup inputs, and JSON configuration schema/template files (`config.schema.json`, `config.json`). Keep these files
   tracked and validate changes carefully; a missing or empty template can produce
   unbootable media.
 - `tests/` contains static, shared-engine, dry-run, loop-device, GUI, and Docker
@@ -200,7 +208,7 @@ in and changes can be offered back. The working branch is `patch-1`.
 - Update `README.md` and the version history at the top of `install-wor.sh` with
   user-visible behavior changes. For a release, update `WOR_FLASHER_VERSION` in
   `src/lib/metadata.sh` and both version fields in
-  `WoR-Flasher.app/Contents/Info.plist`; the suite checks all release metadata.
+  `src/macos-app/Contents/Info.plist`; the suite checks all release metadata.
 - Preserve Botspot's original authorship, contributor credit, project links, and
   community support paths.
 

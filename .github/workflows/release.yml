@@ -75,8 +75,8 @@ jobs:
               create_tag=false
             else
               if [ "$SKIP_PROJECT_VERSION_UPDATE" != true ];then
-                ./scripts/set-version.sh "${tag#v}"
-                if [ -n "$(git status --porcelain -- src/lib/metadata.sh WoR-Flasher.app/Contents/Info.plist README.md install-wor.sh WoR-Flasher.app/Contents/Resources/runtime WoR-Flasher.app/Contents/Resources/runtime-manifest.json)" ];then
+                node src/node/set-version.mjs "${tag#v}"
+                if [ -n "$(git status --porcelain -- src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json)" ];then
                   source_branch="${REF#refs/heads/}"
                   [ "$source_branch" != "$REF" ] || {
                     echo "Manual releases must run from a branch." >&2
@@ -84,9 +84,7 @@ jobs:
                   }
                   git config user.name 'github-actions[bot]'
                   git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-                  git add src/lib/metadata.sh WoR-Flasher.app/Contents/Info.plist README.md install-wor.sh \
-                    WoR-Flasher.app/Contents/Resources/runtime \
-                    WoR-Flasher.app/Contents/Resources/runtime-manifest.json
+                  git add src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json
                   git commit -m "chore: prepare $tag"
                   git push origin "HEAD:$source_branch"
                 fi
@@ -137,13 +135,16 @@ jobs:
           sudo apt-get install -y -qq shellcheck
 
       - name: Check shell syntax
-        run: bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
+        run: bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Check ShellCheck errors
-        run: shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
+        run: shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
-        run: ./scripts/package-macos-app.sh --check
+        run: npm run build:macos && node src/node/package-macos-app.mjs --check
+
+      - name: Verify release packaging plan
+        run: npm run check
 
       - name: Run Linux test suite
         env:
@@ -161,10 +162,13 @@ jobs:
           ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Check shell syntax
-        run: /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
+        run: /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
-        run: ./scripts/package-macos-app.sh --check
+        run: npm run build:macos && node src/node/package-macos-app.mjs --check
+
+      - name: Verify release packaging plan
+        run: npm run check
 
       - name: Run macOS test suite
         run: ./tests/run-tests.sh
@@ -184,6 +188,35 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.ref }}
 
+      - name: Package release artifacts
+        id: package
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n "s/^WOR_FLASHER_VERSION=['\"]\([^'\"]*\)['\"]$/\1/p" src/lib/metadata.sh)"
+          archive_dir="$RUNNER_TEMP/release-artifacts"
+          release_commit="$(git rev-parse HEAD)"
+          mkdir -p "$archive_dir"
+          npm run package:all
+          ditto -c -k --keepParent release/linux/wor-flasher "$archive_dir/wor-flasher-$version-linux-rpi.zip"
+          ditto -c -k --keepParent release/macos/WoR-Flasher.app "$archive_dir/WoR-Flasher-$version-macos.zip"
+          tar -czf "$archive_dir/macos-runtime-$version.tar.gz" \
+            -C release/macos/WoR-Flasher.app/Contents/Resources runtime runtime-manifest.json
+          runtime_digest="$(shasum -a 256 "$archive_dir/macos-runtime-$version.tar.gz" | awk '{print $1}')"
+          printf '{\n  "version": "%s",\n  "url": "https://github.com/%s/releases/download/%s/macos-runtime-%s.tar.gz",\n  "sha256": "%s"\n}\n' \
+            "$version" "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$version" "$runtime_digest" > "$archive_dir/macos-runtime.json"
+          (
+            cd "$archive_dir"
+            shasum -a 256 wor-flasher-"$version"-linux-rpi.zip WoR-Flasher-"$version"-macos.zip \
+              macos-runtime-"$version".tar.gz macos-runtime.json > SHA256SUMS
+          )
+          {
+            echo "directory=$archive_dir"
+            echo "commit=$release_commit"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create immutable release tag
         if: needs.prepare.outputs.create_tag == 'true'
         env:
@@ -198,36 +231,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG" HEAD
           git push origin "refs/tags/$RELEASE_TAG"
-
-      - name: Package release artifacts
-        id: package
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-        run: |
-          set -euo pipefail
-          version="$(sed -n "s/^WOR_FLASHER_VERSION=['\"]\([^'\"]*\)['\"]$/\1/p" src/lib/metadata.sh)"
-          archive_dir="$RUNNER_TEMP/release-artifacts"
-          package_root="$RUNNER_TEMP/wor-flasher-$version"
-          release_commit="$(git rev-parse HEAD)"
-          mkdir -p "$archive_dir" "$package_root"
-          git archive --format=tar "$release_commit" | tar -x -C "$package_root"
-          ditto -c -k --keepParent "$package_root" "$archive_dir/wor-flasher-$version-linux-rpi.zip"
-          ditto -c -k --keepParent WoR-Flasher.app "$archive_dir/WoR-Flasher-$version-macos.zip"
-          tar -czf "$archive_dir/macos-runtime-$version.tar.gz" \
-            -C WoR-Flasher.app/Contents/Resources runtime runtime-manifest.json
-          runtime_digest="$(shasum -a 256 "$archive_dir/macos-runtime-$version.tar.gz" | awk '{print $1}')"
-          printf '{\n  "version": "%s",\n  "url": "https://github.com/%s/releases/download/%s/macos-runtime-%s.tar.gz",\n  "sha256": "%s"\n}\n' \
-            "$version" "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$version" "$runtime_digest" > "$archive_dir/macos-runtime.json"
-          (
-            cd "$archive_dir"
-            shasum -a 256 wor-flasher-"$version"-linux-rpi.zip WoR-Flasher-"$version"-macos.zip \
-              macos-runtime-"$version".tar.gz macos-runtime.json > SHA256SUMS
-          )
-          {
-            echo "directory=$archive_dir"
-            echo "commit=$release_commit"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0

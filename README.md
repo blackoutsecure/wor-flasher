@@ -98,7 +98,7 @@ cd wor-flasher
 ./install-wor-gui.sh
 ```
 
-On macOS, Finder users can instead double-click **WoR-Flasher.app**. The app opens the same native GUI without leaving a Terminal window open. It works either inside the cloned repository or as a standalone copied application; keep the entire `.app` bundle together when moving it.
+On macOS, Finder users can instead double-click the generated **WoR-Flasher.app** from a release download, or run `npm run build:macos` in a checkout and open `release/macos/WoR-Flasher.app`. The app opens the same native GUI without leaving a Terminal window open. Keep the entire `.app` bundle together when moving it.
 
 WoR-Flasher runs one GUI session per signed-in user, even if more than one checkout or version is present. Opening the app again brings the current macOS window forward instead of starting another installer workflow.
 
@@ -159,32 +159,32 @@ The repository does not currently include desktop captures of the macOS windows 
 ```
 
 ```text
-Usage: install-wor.sh [--gui]
+Usage: install-wor.sh [OPTIONS]
 
-  (no arguments)  run the interactive text-mode installer
-  --gui           run the graphical front-end instead
-  --version       print the version and exit
-  --help          show this message
+  (no arguments)     run the interactive text-mode installer
+  --gui              run the graphical front-end instead
+  --config <file>    load configuration settings from a JSON file
+  --version          print the version and exit
+  --help             show this message
 ```
 
 The selected drive is erased. Drives from 8 GB to under 25 GB can create recovery media for another drive. Drives of 25 GB or more can also install Windows onto themselves. The host's current boot drive is always excluded.
 
-### Non-interactive use
+### Non-interactive use & JSON Configuration
 
-`install-wor.sh` is designed to be driven from a larger script. Set the variables it would otherwise ask about and it will not prompt:
+`install-wor.sh` is designed to be driven non-interactively via environment variables or a `config.json` configuration file.
+
+Settings follow a 3-tier precedence cascade: **Environment Variables / CLI Options** > **JSON Configuration (`config.json` or `--config`)** > **Script Defaults**.
 
 ```bash
-set -a
-source ~/wor-flasher/install-wor.sh source
+# Using environment variables
+RPI_MODEL=4 WIN_LANG=en-us BID=22631.2861 DEVICE=/dev/sda CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor.sh
 
-BID="$(get_bid 11)"        # newest Windows 11 build this Pi model can run
-RPI_MODEL=4
-WIN_LANG=en-us
-DEVICE=/dev/sda
-CAN_INSTALL_ON_SAME_DRIVE=1
-
-~/wor-flasher/install-wor.sh
+# Using a JSON configuration file
+./install-wor.sh --config config-templates/config.json
 ```
+
+Refer to [`config-templates/config.json`](config-templates/config.json) and [`config-templates/config.schema.json`](config-templates/config.schema.json) for the full JSON configuration schema and default settings.
 
 Sourcing with the `source` argument makes the engine's functions available without running a flash. Useful ones include `list_devs`, `list_dev_paths`, `drive_capability`, `describe_device`, `get_bid`, `get_os_name`, `list_langs`, `validate_iso_file`, `list_cached_winfiles`, `settings_summary` and `install_packages`.
 
@@ -231,6 +231,23 @@ SUBSTEP<TAB>percent
 The adapter returns the underlying command's exit status. Usage errors, including an unknown command or a missing `DEVICE` for `describe-device`, return `2`.
 
 Raspberry Pi Imager supports a custom image repository through `--repo`, which is useful for publishing image metadata and downloads. It does not by itself turn an arbitrary shell flasher into an Imager write target. A future Imager integration should therefore be a deliberate adapter on the Imager side that calls this contract, rather than embedding or forking the flashing logic. See the [Raspberry Pi Imager repository](https://github.com/raspberrypi/rpi-imager) for its current repository and application integration model.
+
+## Release tooling
+
+The flashing engine remains `install-wor.sh`. Node.js is used only for release packaging and validation, where it is a better fit for deterministic file copying, checksum generation and future platform manifests. The tooling has no runtime dependencies.
+
+```bash
+npm run check          # shell syntax, macOS runtime freshness and release-plan validation
+npm run build          # stage fresh macOS, Linux and Windows-placeholder release folders
+npm run build:macos    # stage release/macos/WoR-Flasher.app and SHA256SUMS
+npm run build:linux    # stage release/linux/wor-flasher and SHA256SUMS
+npm run package:all    # refresh the embedded .app runtime, then stage every release folder
+npm run clean          # remove generated release output
+```
+
+Generated release output is written under `release/` and is intentionally ignored by Git. It is rebuilt from the source checkout and the embedded macOS runtime each time, so the release folder is not another maintained copy of the project. Review the staged app or Linux payload and the matching `SHA256SUMS` before publishing.
+
+Windows packaging is intentionally only a placeholder today. A Windows UI should drive the same `install-wor-hook.sh` / engine contract only after a separate device-safety design exists for Windows disks, elevation and removable media. Until then, Windows users should use the official Windows on Raspberry Imager.
 
 ## Parameters
 
@@ -312,10 +329,12 @@ OOBE_NETWORK_BYPASS=0 ./install-wor.sh  # require network
 
 ### Customization templates
 
-[`config-templates/`](config-templates) holds the files injected onto the media:
+[`config-templates/`](config-templates) holds the files injected onto the media or used for configuration validation:
 
 | File                            | Purpose                                                      |
 | ------------------------------- | ------------------------------------------------------------ |
+| `config.json`                   | Shipped default configuration parameter file                 |
+| `config.schema.json`            | JSON Schema definition for `config.json` parameters          |
 | `pi3.config.txt`                | `config.txt` body for Pi 2 v1.2 / Pi 3                       |
 | `pi4.config.txt`                | `config.txt` body for Pi 4 / Pi 400                          |
 | `pi5.config.txt`                | `config.txt` body for Pi 5                                   |
@@ -397,6 +416,21 @@ Source-file repair requires a complete Git checkout. A detached app instead vali
 If a flash fails from the GUI, the full log is kept at `$DL_DIR/last-run.log` — or wherever `WOR_LOG_FILE` points — and the path is shown in the error dialog. It is also listed on the confirmation screen before you start. Attach it to any bug report.
 
 <details>
+<summary><b>macOS: "Operation not permitted" formatting the drive</b></summary>
+
+An older WoR-Flasher runtime may report `newfs_msdos`, `newfs_exfat`, or `sgdisk` failing with `Operation not permitted` even though the script already has `sudo`. Since macOS Catalina, writing directly to a raw disk device (`/dev/rdiskN`) needs **Full Disk Access**, which `sudo` does not grant on its own — and this is a deliberate macOS security boundary, so no app (including WoR-Flasher) can turn the toggle on for you; only a person clicking it in System Settings satisfies it. Current macOS formatting uses `diskutil eraseVolume` for the created partitions and retains `sgdisk` only for partition layout and EFI attributes.
+
+If it worked before and fails now with no other change, the most likely cause is that `WoR-Flasher.app` was rebuilt or reinstalled since it was last granted access — see below.
+
+WoR-Flasher detects this specific failure and opens `System Settings > Privacy & Security > Full Disk Access` for you automatically, naming the exact app that needs the toggle: `WoR-Flasher.app` and its bundle path for the packaged app, or `Terminal.app`/`iTerm.app` for a CLI run. That app is often not in the list yet, so click the `+` button at the bottom-left of the list, add that exact app, turn its toggle on, then quit the app completely (not just the window) and try again. If an older WoR-Flasher entry is already listed, remove it and add the current copy again.
+
+If the exact `WoR-Flasher.app` is already enabled and macOS still blocks the write, also grant Full Disk Access to the app you launched it from, such as `Visual Studio Code.app`, `Terminal.app`, or `iTerm.app`. WoR-Flasher is a shell-script app bundle, and macOS can attribute protected disk access to the launcher or interpreter chain instead of the displayed app bundle.
+
+If you rebuild or move `WoR-Flasher.app` (for example after re-running the packaging script), macOS treats it as a new app and its previously granted Full Disk Access is revoked, so you will need to re-add and re-enable it once.
+
+</details>
+
+<details>
 <summary><b>Rainbow screen</b></summary>
 
 The Raspberry Pi firmware did not start UEFI. Reflash the drive and wait for verification to finish. Also update the Pi EEPROM bootloader, and avoid `UEFI_USE_LATEST=1` unless you are intentionally testing firmware.
@@ -467,8 +501,10 @@ This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unloc
 ./tests/run-tests.sh --gui          # walk the GUI in DRY_RUN mode
 ./tests/run-tests.sh --walkthrough  # fake drives, then the CLI interactively
 ./tests/run-linux-integration.sh    # force the Dockerised Linux suite
-./scripts/package-macos-app.sh --check  # verify the embedded runtime matches canonical sources
-shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
+npm run check                       # shell syntax, package-plan checks, and release-tool syntax
+npm run build:macos                 # generate release/macos/WoR-Flasher.app
+node src/node/package-macos-app.mjs --check  # verify generated macOS runtime matches canonical sources
+shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 ```
 
 The suite creates loopback devices as stand-in drives, so nothing can be written to physical storage. Tests call the real functions out of `install-wor.sh` rather than restating their logic, which means a test cannot pass against behaviour the shipped script no longer has.
@@ -493,7 +529,7 @@ downloaded artifacts against `SHA256SUMS` before use.
 
 ### Repository layout
 
-The root entry points remain stable for existing users and integrations: `install-wor.sh` is the engine and CLI, `install-wor-gui.sh` is the Linux/macOS front end, `install-wor-hook.sh` is the automation adapter, and `WoR-Flasher.app` is the native macOS launcher that Finder users double-click. `scripts/package-macos-app.sh --write` deterministically rebuilds the app's generated runtime and manifest from those canonical files; do not edit the generated runtime directly.
+The root entry points remain stable for existing users and integrations: `install-wor.sh` is the engine and CLI, `install-wor-gui.sh` is the Linux/macOS front end, and `install-wor-hook.sh` is the automation adapter. The macOS app template lives under `src/macos-app`, while `npm run build:macos` generates `release/macos/WoR-Flasher.app` with an embedded runtime and manifest from the canonical files. Do not edit generated release output directly.
 
 Shared UI artwork lives in `assets/`, and boot and setup inputs live in `config-templates/`.
 

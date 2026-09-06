@@ -26,8 +26,9 @@ git clone https://github.com/blackoutsecure/wor-flasher
 cd wor-flasher
 ```
 
-You need `bash`, `shellcheck`, and — for the Linux integration suite on a non-Linux
-host — Docker. Everything else the scripts install for themselves.
+You need `bash`, `shellcheck`, and Node.js 20 or newer for release packaging. For the
+Linux integration suite on a non-Linux host, you also need Docker. Everything else the
+scripts install for themselves.
 
 ## Running the tests
 
@@ -35,6 +36,7 @@ host — Docker. Everything else the scripts install for themselves.
 ./tests/run-tests.sh          # static checks, plus Linux integration where available
 ./tests/run-tests.sh --gui    # walk through the GUI in DRY_RUN mode
 ./tests/run-linux-integration.sh   # force the Dockerised Linux suite
+npm run check                 # shell syntax and an isolated release-package build
 ```
 
 The suite must be green and ShellCheck must be error-clean before a pull request can
@@ -106,7 +108,7 @@ Please read these before touching the relevant code. Each one cost real debuggin
 - If you changed behaviour, update the README and the version history at the top of
   `install-wor.sh` in the same commit.
 - For a release, update `WOR_FLASHER_VERSION` in `src/lib/metadata.sh` and both version
-  fields in `WoR-Flasher.app/Contents/Info.plist`; the test suite checks all release metadata.
+  fields in `src/macos-app/Contents/Info.plist`; the test suite checks all release metadata.
 - Be honest about what you did not test. Nobody has every Pi model.
 
 ## Reporting a bug

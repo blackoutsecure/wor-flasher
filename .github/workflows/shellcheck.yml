@@ -4,17 +4,23 @@ on:
   push:
     paths:
       - "**.sh"
+      - "**.mjs"
+      - "package.json"
       - "assets/**"
       - "config-templates/**"
-      - "WoR-Flasher.app/**"
+      - "src/macos-app/**"
+      - "src/node/runtime-paths.json"
       - ".github/workflows/shellcheck.yml"
       - "README.md"
   pull_request:
     paths:
       - "**.sh"
+      - "**.mjs"
+      - "package.json"
       - "assets/**"
       - "config-templates/**"
-      - "WoR-Flasher.app/**"
+      - "src/macos-app/**"
+      - "src/node/runtime-paths.json"
       - ".github/workflows/shellcheck.yml"
       - "README.md"
   workflow_dispatch:
@@ -43,17 +49,20 @@ jobs:
           sudo apt-get install -y -qq shellcheck
 
       - name: Check shell syntax
-        run: bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
+        run: bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Check for errors
-        run: shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
+        run: shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Report warnings
         continue-on-error: true
-        run: shellcheck --severity=warning src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
+        run: shellcheck --severity=warning src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
-        run: ./scripts/package-macos-app.sh --check
+        run: npm run build:macos && node src/node/package-macos-app.mjs --check
+
+      - name: Verify Node release tooling
+        run: npm run check
 
   macos-syntax:
     runs-on: macos-latest
@@ -61,10 +70,13 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Check syntax with the macOS system Bash
-        run: /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh WoR-Flasher.app/Contents/MacOS/WoR-Flasher scripts/*.sh tests/*.sh
+        run: /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
-        run: ./scripts/package-macos-app.sh --check
+        run: npm run build:macos && node src/node/package-macos-app.mjs --check
+
+      - name: Verify Node release tooling
+        run: npm run check
 
       # bash -n accepts a mis-parsed heredoc, so the suite must also run here to catch
       # structural breakage in the macOS-only JXA code paths

@@ -16,10 +16,19 @@ export RUN_MODE=gui #this variable is detected by install-wor.sh to display gui 
 #Determine the directory that contains this script
 [ -z "$DIRECTORY" ] && DIRECTORY="$(cd "$(dirname "$0")" && pwd -P)"
 
+#On Windows, hand off to the packaged Windows executable if present
+if [ "${OS:-}" == "Windows_NT" ] || [[ "$(uname -s 2>/dev/null)" =~ MINGW|MSYS|CYGWIN|Windows ]];then
+  if [ -x "$DIRECTORY/release/windows/wor-flasher.exe" ];then
+    exec "$DIRECTORY/release/windows/wor-flasher.exe" "$@"
+  elif [ -x "$DIRECTORY/release/windows/WoR-Flasher.exe" ];then
+    exec "$DIRECTORY/release/windows/WoR-Flasher.exe" "$@"
+  fi
+fi
+
 #The native app owns macOS preflight and dependency setup. A direct script launch
 #hands off to that app; WOR_NATIVE_APP prevents the app's own exec from looping back.
-if [ "$(uname -s)" == Darwin ] && [ "${WOR_NATIVE_APP:-0}" != 1 ] && [ -x "$DIRECTORY/WoR-Flasher.app/Contents/MacOS/WoR-Flasher" ];then
-  exec /usr/bin/open -W "$DIRECTORY/WoR-Flasher.app"
+if [ "$(uname -s 2>/dev/null)" == Darwin ] && [ "${WOR_NATIVE_APP:-0}" != 1 ] && [ -x "$DIRECTORY/release/macos/WoR-Flasher.app/Contents/MacOS/WoR-Flasher" ];then
+  exec /usr/bin/open -W "$DIRECTORY/release/macos/WoR-Flasher.app"
 fi
 
 #This script and cli-based install-wor.sh must be in the same directory. Source it before anything else
@@ -139,16 +148,17 @@ gui_start_installer() { #Starts install-wor.sh in the background and waits for i
   { "$cli_script" > "$output_log" 2>&1; echo $? > "$done_marker"; } &
   installer_pid=$!
 
-  #the installer asks for the password itself, and that dialog cannot render in front of a progress
-  #window, so do not open one until it has been answered. An early failure lands on the done marker.
-  while [ ! -e "$auth_marker" ] && [ ! -f "$done_marker" ] ;do
-    sleep 0.3
-  done
+  #macOS opens progress immediately; its askpass dialog activates itself when authentication is needed.
+  if [ "${GUI_PROGRESS_EARLY:-0}" != 1 ];then
+    while [ ! -e "$auth_marker" ] && [ ! -f "$done_marker" ] ;do
+      sleep 0.3
+    done
+  fi
 }
 
 installer_showed_own_error() { #Exit 0 if install-wor.sh already displayed its own native error dialog.
-  #the marker has to exist and be non-empty: an empty file means the write never actually landed
-  [ -e "$error_marker" ] && [ -s "$error_marker" ]
+  #gui_error_dialog creates the marker before opening its own native dialog; the log has the details
+  [ -e "$error_marker" ]
 }
 
 gui_save_failure_log() { #Output: where the installer log was kept. The dialog only shows a tail, and the GUI has no terminal to fall back on.
@@ -356,8 +366,23 @@ const controller = $.WorChooserController.alloc.init
 app.setDelegate(controller)
 const screenFrame = $.NSScreen.mainScreen.visibleFrame
 //clamp the desired size to whatever screen real estate is actually available, rather than assuming a full-size display
-const width = Math.min(760, screenFrame.size.width - 40)
-const height = Math.min(isPartnershipAnnouncement ? 600 : 500, screenFrame.size.height - 60)
+const maxWidth = Math.min(760, screenFrame.size.width - 40)
+const measureText = $.NSMutableAttributedString.alloc.init
+measureText.mutableString.appendString($(promptText))
+const measureRange = $.NSMakeRange(0, promptText.length)
+const promptFont = $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightMedium)
+measureText.addAttributeValueRange($.NSFontAttributeName, promptFont, measureRange)
+const naturalBounds = measureText.boundingRectWithSizeOptions($.NSMakeSize(1000, 1000), $.NSStringDrawingUsesLineFragmentOrigin | $.NSStringDrawingUsesFontLeading)
+const requestedWidth = isMessageMode && imagePath.length === 0
+  ? Math.max(360, Math.min(maxWidth, Math.ceil(naturalBounds.size.width) + 40))
+  : maxWidth
+const width = requestedWidth
+const measuredBounds = measureText.boundingRectWithSizeOptions($.NSMakeSize(width - 40, 1000), $.NSStringDrawingUsesLineFragmentOrigin | $.NSStringDrawingUsesFontLeading)
+const contentHeight = Math.ceil(measuredBounds.size.height) + 150
+const requestedHeight = isMessageMode && imagePath.length === 0
+  ? Math.max(220, contentHeight)
+  : isPartnershipAnnouncement ? 600 : 500
+const height = Math.min(requestedHeight, screenFrame.size.height - 60)
 //fixed layout: no drag-resize and no zoom/maximize button, only minimize (and restore) via the titlebar
 const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable
 window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
@@ -586,8 +611,8 @@ macos_choose_device() { #Input: newline-separated detected volume rows. Output: 
   fi
 }
 
-macos_advanced_options() { #Reads/updates OOBE_NETWORK_BYPASS, PI4_AUTO_DISABLE_3GB, UEFI_USE_LATEST, DRIVERS_USE_LATEST, SKIP_IMAGE_VERIFICATION, DRY_RUN, APPLY_CUSTOM_CONFIG_TXT, USE_CACHE, CONFIG_TXT.
-  local advanced_jxa checkbox_spec result status line i uefi_pinned pi4_applicable pi4_label config_scope
+macos_advanced_options() { #Reads/updates OOBE_NETWORK_BYPASS, PI4_AUTO_DISABLE_3GB, UEFI_USE_LATEST, DRIVERS_USE_LATEST, SKIP_IMAGE_VERIFICATION, DRY_RUN, APPLY_CUSTOM_CONFIG_TXT, USE_CACHE, CONFIG_TXT, WIN_LANG.
+  local advanced_jxa checkbox_spec result status line i uefi_pinned pi4_applicable pi4_label config_scope lang_spec l_code l_name sel_win_lang
   uefi_pinned="$(uefi_pinned_version)"
   #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4, so don't offer it as a live choice elsewhere
   [ "$RPI_MODEL" == 4 ] && pi4_applicable=1 || pi4_applicable=0
@@ -607,6 +632,12 @@ Skip flashing the device (dry run)	$DRY_RUN	1
 Create an optional local Windows administrator account	$WINDOWS_ACCOUNT_SETUP	1
 Configure Windows keyboard and regional settings	$WINDOWS_LOCALE_SETUP	1"
 
+  lang_spec=""
+  while IFS=: read -r l_code l_name ;do
+    [ -z "$l_code" ] && continue
+    lang_spec+="${l_code}	${l_name}"$'\n'
+  done < <(list_langs_preferred)
+
   advanced_jxa="$(cat <<'JXA'
 ObjC.import('AppKit')
 ObjC.import('Foundation')
@@ -622,11 +653,31 @@ const cacheModeDefault = ObjC.unwrap(args.objectAtIndex(10))
 const accountUsernameDefault = ObjC.unwrap(args.objectAtIndex(11))
 const accountPasswordDefault = ObjC.unwrap(args.objectAtIndex(12))
 const localeDefault = ObjC.unwrap(args.objectAtIndex(13))
+const langSpec = ObjC.unwrap(args.objectAtIndex(14))
+const currentLangCode = ObjC.unwrap(args.objectAtIndex(15))
 
 const rows = checkboxSpec.split('\n').map(function(line) {
   const parts = line.split('\t')
   return { label: parts[0], checked: parts[1] === '1', enabled: parts[2] !== '0' }
 })
+
+const langOptions = []
+let initialLangIdx = 0
+if (langSpec && langSpec.length > 0) {
+  const langLines = langSpec.split('\n')
+  for (let i = 0; i < langLines.length; i++) {
+    const line = langLines[i].trim()
+    if (!line) continue
+    const parts = line.split('\t')
+    const code = parts[0]
+    const name = parts[1] || code
+    const label = name + ' (' + code + ')'
+    langOptions.push({ code: code, label: label })
+    if (code === currentLangCode) {
+      initialLangIdx = langOptions.length - 1
+    }
+  }
+}
 
 $.NSProcessInfo.processInfo.processName = appTitle
 const app = $.NSApplication.sharedApplication
@@ -647,7 +698,7 @@ editMenu.addItemWithTitleActionKeyEquivalent('Paste', 'paste:', 'v')
 editMenu.addItemWithTitleActionKeyEquivalent('Select All', 'selectAll:', 'a')
 app.mainMenu = mainMenu
 
-let window, textView, scrollView, applyConfigCheckbox, cachePopup, accountUsernameField, accountPasswordField, localeField
+let window, textView, scrollView, applyConfigCheckbox, cachePopup, winLangPopup, accountUsernameField, accountPasswordField, localeField
 let checkboxes = []
 let confirmed = false
 
@@ -728,7 +779,7 @@ const screenFrame = $.NSScreen.mainScreen.visibleFrame
 const rowHeight = 26
 const desiredWidth = 640
 //height grows with the number of advanced-option rows, so clamp both dimensions to the visible screen instead of assuming they fit
-const desiredHeight = (rows.length + 1) * rowHeight + 20 + 220 + 140 + rowHeight + 8
+const desiredHeight = (rows.length + 1) * rowHeight + 20 + 220 + 175 + rowHeight + 8
 const width = Math.min(desiredWidth, screenFrame.size.width - 40)
 const height = Math.min(desiredHeight, screenFrame.size.height - 60)
 //fixed layout: no drag-resize and no zoom/maximize button, only minimize (and restore) via the titlebar
@@ -778,6 +829,22 @@ cachePopup.selectItemAtIndex(cacheModeDefault === '0' ? 0 : (cacheModeDefault ==
 cachePopup.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
 content.addSubview(cachePopup)
 y -= rowHeight + 8
+
+if (langOptions.length > 0) {
+  const winLangLabel = $.NSTextField.labelWithString('Choose Windows language:')
+  winLangLabel.font = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightMedium)
+  winLangLabel.frame = $.NSMakeRect(20, y - 2, 170, 20)
+  winLangLabel.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
+  content.addSubview(winLangLabel)
+  winLangPopup = $.NSPopUpButton.alloc.initWithFramePullsDown($.NSMakeRect(196, y - 6, width - 216, 26), false)
+  for (let i = 0; i < langOptions.length; i++) {
+    winLangPopup.addItemWithTitle($(langOptions[i].label))
+  }
+  winLangPopup.selectItemAtIndex(initialLangIdx)
+  winLangPopup.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+  content.addSubview(winLangPopup)
+  y -= rowHeight + 8
+}
 
 function addAdvancedField(label, value, secure) {
   const fieldLabel = $.NSTextField.labelWithString(label)
@@ -862,6 +929,14 @@ out.push(String(cachePopup.indexOfSelectedItem))
 out.push(ObjC.unwrap(accountUsernameField.stringValue))
 out.push(ObjC.unwrap(accountPasswordField.stringValue))
 out.push(ObjC.unwrap(localeField.stringValue))
+let selectedLang = currentLangCode
+if (winLangPopup && langOptions.length > 0) {
+  const selIdx = winLangPopup.indexOfSelectedItem
+  if (selIdx >= 0 && selIdx < langOptions.length) {
+    selectedLang = langOptions[selIdx].code
+  }
+}
+out.push(selectedLang)
 out.push('---CONFIG_TXT---')
 out.push(ObjC.unwrap(textView.string))
 writeResult(out)
@@ -869,7 +944,7 @@ app.terminate(null)
 JXA
 )"
 
-  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" <<<"$advanced_jxa" 2>/dev/null)"
+  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$config_scope" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" "$lang_spec" "$WIN_LANG" <<<"$advanced_jxa" 2>/dev/null)"
   status="$(printf '%s\n' "$result" | sed -n '1p')"
   [ "$status" == OK ] || return 1
 
@@ -895,6 +970,10 @@ JXA
   WINDOWS_ACCOUNT_USERNAME="$(printf '%s\n' "$result" | sed -n '13p')"
   WINDOWS_ACCOUNT_PASSWORD="$(printf '%s\n' "$result" | sed -n '14p')"
   WINDOWS_LOCALE="$(printf '%s\n' "$result" | sed -n '15p')"
+  sel_win_lang="$(printf '%s\n' "$result" | sed -n '16p')"
+  if is_known_win_lang "$sel_win_lang" ;then
+    WIN_LANG="$sel_win_lang"
+  fi
 
   CONFIG_TXT="$(printf '%s\n' "$result" | sed -n '/^---CONFIG_TXT---$/,$p' | tail -n +2)"
 }
@@ -923,23 +1002,18 @@ macos_start_cli() {
         [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
         [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
         set_default_config_txt
-        step=language
+        [ -z "$WIN_LANG" ] && WIN_LANG="$(default_win_lang)"
+        step=device
         ;;
       language)
-        language_choices="$(list_langs_preferred | cut -d: -f1)"
-        default_language="$(default_win_lang)"
-        WIN_LANG="$(macos_choose "$language_choices" "Choose Windows language (default: $default_language)" "$default_language" Back '' '' '' '' '' '' Back)" || exit 0
-        if [ "$WIN_LANG" == Back ];then
-          step=pi
-          continue
-        fi
+        [ -z "$WIN_LANG" ] && WIN_LANG="$(default_win_lang)"
         step=device
         ;;
       device)
         device_choices="$(darwin_list_device_choices)"
         device_choice="$(macos_choose_device "$device_choices")" || exit 0
         if [ "$device_choice" == Back ];then
-          step=language
+          step=pi
           continue
         fi
         [ "$device_choice" == __REFRESH__ ] && continue
@@ -1373,7 +1447,7 @@ JXA
 
   abort_marker="$(mktemp -u)"
 
-  gui_start_installer
+  GUI_PROGRESS_EARLY=1 gui_start_installer
 
   wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$abort_marker" <<<"$progress_jxa" >/dev/null 2>&1
 
@@ -1427,20 +1501,79 @@ Full log: $saved_log"
 }
 
 if is_macos ;then
+  command -v osascript >/dev/null 2>&1 || error "Cannot present graphical interface: osascript is unavailable on this macOS host. Cannot continue."
   setup || exit 1
   announcement_choice="$(macos_show_announcement)" || exit 0
   macos_start_cli
   exit $?
 fi
 
+if is_wsl ;then
+  error "Cannot present graphical interface: WoR-Flasher does not support WSL.
+WSL cannot access USB drives directly, and the drives it does list are WSL's own virtual disks.
+On Windows, use the official Windows on Raspberry Imager instead: https://worproject.com/downloads"
+fi
+
+if [ "$HOST_OS" != Linux ];then
+  if [ "${OS:-}" == "Windows_NT" ] || [[ "$HOST_OS" =~ MINGW|MSYS|CYGWIN|Windows ]];then
+    error "Cannot present graphical interface: WoR-Flasher does not support Windows hosts. On Windows, use the official Windows on Raspberry Imager instead: https://worproject.com/downloads"
+  else
+    error "Cannot present graphical interface: WoR-Flasher supports Linux and macOS hosts only. This host is $HOST_OS."
+  fi
+fi
+
+if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ];then
+  error "Cannot present graphical interface: No active graphical display session (DISPLAY or WAYLAND_DISPLAY is unset). Cannot continue."
+fi
+
 #run safety checks and install packages
 setup || exit 1
 
+if ! command -v yad >/dev/null 2>&1 ;then
+  error "Cannot present graphical interface: 'yad' is missing and could not be installed. Cannot continue."
+fi
+
+ensure_linux_desktop_identity() { #Install a desktop identity so GNOME maps yad windows to the WoR-Flasher icon.
+  is_macos && return 0
+  [ -n "${HOME:-}" ] || return 0
+  [ -f "$WOR_LOGO_PATH" ] || return 0
+  local app_dir desktop_file exec_path icon_path
+  app_dir="$HOME/.local/share/applications"
+  desktop_file="$app_dir/wor-flasher.desktop"
+  mkdir -p "$app_dir" 2>/dev/null || return 0
+  exec_path="$(printf '%s' "$DIRECTORY/install-wor-gui.sh" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  icon_path="$(printf '%s' "$WOR_LOGO_PATH" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  cat > "$desktop_file" <<DESKTOP 2>/dev/null || return 0
+[Desktop Entry]
+Type=Application
+Name=$WOR_APP_TITLE
+Exec="$exec_path"
+Icon=$icon_path
+StartupWMClass=$WOR_ICON_NAME
+Terminal=false
+Categories=Utility;
+DESKTOP
+}
+
+linux_no_device_message() { #Output: explanation when lsblk sees devices but no safe target drive.
+  printf '%s\n\n%s\n%s\n%s' \
+    'No external writable target drive was found.' \
+    'WoR-Flasher hides loop/snap devices, the current boot disk, and anything that is not a writable whole disk.' \
+    'Connect a USB drive or SD card reader, then click Refresh.' \
+    'If you expected a drive to appear, run lsblk and confirm it is not the system disk.'
+}
+
+ensure_linux_desktop_identity
+
 #this array stores flags that are used in all yad windows - saves on the typing and makes it easy to change an attribute on all dialogs from one place.
-yadflags=(--center --width=400 --height=250 --window-icon="$WOR_LOGO_PATH" --title="$WOR_APP_TITLE" --separator='\n')
+#--class sets the window's WM_CLASS so the taskbar/Alt-Tab switcher shows WoR-Flasher instead of
+#the generic "yad" process name
+yadflags=(--center --width=400 --height=250 --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" --separator='\n')
 
 #display partnership announcement
-yad "${yadflags[@]}" --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT" --timeout-indicator=bottom \
+#the shared 400px yadflags width squeezes the text column next to the 800px-wide banner down to
+#one word per line; give this dialog enough room for the image plus a readable text column
+yad "${yadflags[@]}" --width=960 --height=620 --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT" --timeout-indicator=bottom \
   --image="$WOR_ASSETS_DIR/partnership.png" \
   --text=$'<a href="https://blackoutsecure.app/">Blackout Secure</a> is proud to partner with <a href="https://github.com/Botspot">Botspot</a> and the <a href="https://worproject.com/">Windows on R</a> community, carrying WoR-Flasher forward while preserving Botspot\'s original authorship and project direction.\n\nReport issues, share feedback, or contribute at <a href="https://github.com/Botspot/wor-flasher">Botspot/wor-flasher</a>.\n\nSupport continued development by <a href="https://github.com/sponsors/Botspot">sponsoring Botspot</a> or <a href="https://github.com/sponsors/blackoutsecure?frequency=one-time&amp;amount=8">buying Blackout Secure a coffee</a> on GitHub.' \
   --button='<b>Proceed with WoR-Flasher</b>':0
@@ -1449,7 +1582,7 @@ yad "${yadflags[@]}" --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOU
 if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
   output="$(yad "${yadflags[@]}" --height=1 --form --columns=2 \
     --image="$WOR_LOGO_PATH" \
-    --text=$'<big><b>Welcome to WoR-Flasher</b></big>\nThis Blackout Secure fork keeps Botspot\'s upstream project visible while adding macOS support, safer image verification, native GUI polish and a broader maintenance/test pipeline for Raspberry Pi Windows installs.' \
+    --text=$'<big><b>Welcome to WoR-Flasher</b></big>\nThis Blackout Secure fork carries Botspot\'s original WoR-Flasher forward, adding macOS support, safer image verification, a more polished interface, and ongoing maintenance for Raspberry Pi Windows installs.' \
     --field="Install":CB "Windows 11!Windows 10!More options" \
     --field="on a":CB "Pi5!Pi4/Pi400!Pi3/Pi2_v1.2" \
     --button='<b>Next</b>':0)"
@@ -1609,22 +1742,7 @@ RPI_MODEL: $RPI_MODEL"
 
 { #choose language
 if [ -z "$WIN_LANG" ];then
-
-  #en-us is listed first so it is the preselected row
-  LANG_LIST="$(list_langs_preferred)"
-
-  while true; do
-    WIN_LANG="$(echo "$LANG_LIST" | sed 's/^/FALSE:/g' | tr ':' '\n' | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" \
-      --list --radiolist --column=chk:CHK --column=short --column=long --no-headers --print-column=2 --no-selection \
-      --text=$'<big><b>Language</b></big>\nChoose language for Windows:' \
-      --button='<b>Next</b>':0)"
-    button=$?
-    [ $button != 0 ] && exit 1
-
-    if is_known_win_lang "$WIN_LANG" ;then
-      break
-    fi
-  done
+  WIN_LANG="$(default_win_lang)"
 fi
 echo "WIN_LANG: $WIN_LANG"
 }
@@ -1644,7 +1762,13 @@ $(get_device_name "$device")
 $DEV_LIST"
     done
 
-    DEVICE="$(echo -n "$DEV_LIST" | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" --text='Choose device to flash:' --width=420 \
+    if [ -z "$DEV_LIST" ];then
+      device_prompt="$(linux_no_device_message)"
+    else
+      device_prompt='Choose device to flash:'
+    fi
+
+    DEVICE="$(echo -n "$DEV_LIST" | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" --text="$device_prompt" --width=520 \
       --list --radiolist --no-selection --no-headers --column=chk:CHK --column=echoname:HD --column=name --column=size --column=pretty-name \
       --print-column=2 --tooltip-column=3 \
       --button="<b>Refresh</b>!!Reload the list of connected drives to detect new ones":2 --button='<b>Next</b>':0)"
@@ -1922,6 +2046,20 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       fields+=("--field=Windows username":TXT "$WINDOWS_ACCOUNT_USERNAME")
       fields+=("--field=Windows password":H "$WINDOWS_ACCOUNT_PASSWORD")
       fields+=("--field=Windows locale":TXT "$WINDOWS_LOCALE")
+      lang_items=""
+      curr_item=""
+      other_items=""
+      while IFS=: read -r l_code l_name ;do
+        [ -z "$l_code" ] && continue
+        entry="${l_code}: ${l_name}"
+        if [ "$l_code" == "$WIN_LANG" ];then
+          curr_item="$entry"
+        else
+          [ -n "$other_items" ] && other_items+="!${entry}" || other_items="${entry}"
+        fi
+      done < <(list_langs_preferred)
+      [ -n "$curr_item" ] && lang_items="${curr_item}!${other_items}" || lang_items="${other_items}"
+      fields+=("--field=Choose Windows language":CB "$lang_items")
 
       output="$(yad "${yadflags[@]}" --width=500 --height=400 --image-on-top \
         "${refresh_prompt[@]}" \
@@ -1992,6 +2130,11 @@ while true;do #repeat the Installation Overview window until Flash button clicke
           WINDOWS_ACCOUNT_USERNAME="$(echo "$output" | sed -n 20p)"
           WINDOWS_ACCOUNT_PASSWORD="$(echo "$output" | sed -n 21p)"
           WINDOWS_LOCALE="$(echo "$output" | sed -n 22p)"
+          sel_lang="$(echo "$output" | sed -n 23p)"
+          sel_code="${sel_lang%%:*}"
+          if is_known_win_lang "$sel_code" ;then
+            WIN_LANG="$sel_code"
+          fi
           #end of parsing check-box values for advanced options window
 
           break #as the DL_DIR value was not changed, go back to the Installation Overview window
@@ -2055,7 +2198,7 @@ fi
 if [ "$exitcode" == 0 ];then
   rm -f "$output_log" "$error_marker"
   #display "next steps" window
-  yad --center --window-icon="$WOR_LOGO_PATH" --title="$WOR_APP_TITLE" \
+  yad --center --window-icon="$WOR_LOGO_PATH" --class="$WOR_FLASHER_NAME" --title="$WOR_APP_TITLE" \
     --image="$WOR_ASSETS_DIR/next-steps.png" --button=Close:0
 else
   #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on

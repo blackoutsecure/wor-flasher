@@ -155,8 +155,13 @@ install_staged_runtime() { #Input: staged version directory. Validate and promot
   validate_runtime "$staged/runtime" "$staged/runtime-manifest.json" || return 1
   target="$RUNTIMES_DIR/$version"
   if [ -e "$target" ];then
-    validate_runtime "$target/runtime" "$target/runtime-manifest.json" || return 1
-    rm -rf "$staged"
+    if cmp -s "$target/runtime-manifest.json" "$staged/runtime-manifest.json";then
+      validate_runtime "$target/runtime" "$target/runtime-manifest.json" || return 1
+      rm -rf "$staged"
+    else
+      rm -rf "$target" || return 1
+      mv "$staged" "$target" || return 1
+    fi
   else
     mv "$staged" "$target" || return 1
   fi
@@ -167,7 +172,8 @@ bootstrap_embedded_runtime() {
   local version target staged selected
   version="$(manifest_version "$EMBEDDED_MANIFEST")"
   target="$RUNTIMES_DIR/$version"
-  if validate_runtime "$target/runtime" "$target/runtime-manifest.json" 2>/dev/null ;then
+  if cmp -s "$target/runtime-manifest.json" "$EMBEDDED_MANIFEST" 2>/dev/null \
+    && validate_runtime "$target/runtime" "$target/runtime-manifest.json" 2>/dev/null ;then
     selected="$(runtime_from_pointer "$ACTIVE_RUNTIME_FILE" 2>/dev/null)" || selected=''
     [ -n "$selected" ] || activate_runtime "$version"
     return
@@ -554,6 +560,7 @@ launcher_main() {
   export NO_UPDATE=1
   export HOMEBREW_NO_AUTO_UPDATE=1
   export WOR_NATIVE_APP=1
+  export WOR_APP_BUNDLE_PATH="$APP_ROOT"
   export WOR_CACHE_DIR="$APP_SUPPORT_DIR/cache"
   export WOR_ICON_PATH="$RESOURCES_DIR/$WOR_ICON_FILENAME"
   trap - EXIT INT TERM

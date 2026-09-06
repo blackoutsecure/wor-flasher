@@ -13,6 +13,7 @@ hook_checkout_complete() { #Input: checkout directory. Output: success when ever
   for required_path in \
     install-wor.sh \
     src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh \
+    config-templates/config.json config-templates/config.schema.json \
     config-templates/pi3.config.txt config-templates/pi4.config.txt config-templates/pi5.config.txt \
     config-templates/pi4-ram-unlock.ps1 config-templates/pi4-ram-unlock-specialize.xml \
     config-templates/oobe-network-bypass.xml config-templates/prefinalize.cmd ;do
@@ -46,13 +47,33 @@ if ! hook_checkout_complete "$SCRIPT_DIR" ;then
   fi
 fi
 
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config=*)
+      WOR_CONFIG_FILE="${1#*=}"
+      export WOR_CONFIG_FILE
+      shift
+      ;;
+    --config)
+      [ -n "${2:-}" ] || { printf 'Usage: %s [--config FILE] COMMAND\n' "$0" >&2; exit 2; }
+      WOR_CONFIG_FILE="$2"
+      export WOR_CONFIG_FILE
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
 if [ "${1:-}" == run ];then
   shift
-  exec "$ENGINE" "$@"
+  exec "$ENGINE" ${WOR_CONFIG_FILE:+--config="$WOR_CONFIG_FILE"} "$@"
 fi
 
 # shellcheck disable=SC1090
 source "$ENGINE" source
+[ -n "${WOR_CONFIG_FILE:-}" ] && load_config_json "$WOR_CONFIG_FILE" || load_config_json
 
 case "${1:-}" in
   list-devices)
@@ -68,7 +89,7 @@ case "${1:-}" in
     ;;
   *)
     cat >&2 <<USAGE
-Usage: $(basename "$0") COMMAND
+Usage: $(basename "$0") [--config FILE] COMMAND
 
 Commands:
   list-devices              Print safe whole-disk device paths, one per line.
@@ -77,7 +98,7 @@ Commands:
   run [ARGS...]             Run install-wor.sh with environment-provided settings.
 
 Set the same variables documented in README.md before calling run, including
-DEVICE, RPI_MODEL, BID, WIN_LANG and CAN_INSTALL_ON_SAME_DRIVE.
+DEVICE, RPI_MODEL, BID, WIN_LANG and CAN_INSTALL_ON_SAME_DRIVE, or pass --config FILE.
 
 If install-wor.sh is not next to this adapter, the complete WoR-Flasher checkout
 is obtained automatically. Override WOR_HOOK_REPOSITORY, WOR_HOOK_REF or
