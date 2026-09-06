@@ -564,6 +564,8 @@ This maintained source uses its own version line. The product name, window title
   - Detached runtime updates reject downgrades and verify the archive digest, extracted file digests, file modes, and archive entry safety before atomic promotion.
   - A standalone `install-wor-hook.sh` now obtains a complete trusted checkout automatically when no adjacent engine is available.
   - The native macOS partnership announcement now has compatible attributed-text construction, dark-mode contrast and non-overlapping layout on current JXA runtimes.
+  - The partnership banner is now 800x533, so the Linux announcement window fits on screen. `yad` draws `--image` at its native size and cannot scale it down.
+  - Linux dialogs that size themselves to their content no longer log a `gtk_window_resize` assertion warning.
   - A double-clickable macOS app now checks for clean fast-forward updates, installs missing Homebrew formulae with consent and offers non-destructive repair of missing tracked runtime files.
   - Repeated GUI launches now activate the existing macOS window instead of opening concurrent workflows, including launches from another checkout or version.
   - Partnership messaging and default update checks now use the directly maintained Blackout Secure source while preserving Botspot's original authorship.

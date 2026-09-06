@@ -632,6 +632,21 @@ static_checks() {
     && pass "the partnership announcement renders with its attribution links" \
     || fail "the partnership announcement, its copy, or an attribution link is missing"
 
+  #yad draws --image at its native size, so an oversized banner grows the dialog past the screen
+  png_dimension() { #Input: png path and 0 for width or 4 for height. Output: pixel count from the IHDR chunk.
+    od -An -tu1 -j "$((16 + $2))" -N4 "$1" | awk 'NF{print $1 * 16777216 + $2 * 65536 + $3 * 256 + $4; exit}'
+  }
+  banner_width="$(png_dimension "$REPO_DIR/assets/partnership.png" 0)"
+  banner_height="$(png_dimension "$REPO_DIR/assets/partnership.png" 4)"
+  [ -n "$banner_width" ] && [ -n "$banner_height" ] && [ "$banner_width" -le 1000 ] && [ "$banner_height" -le 700 ] \
+    && pass "the partnership banner fits a yad dialog at its native size" \
+    || fail "assets/partnership.png is ${banner_width}x${banner_height}; yad cannot scale it down"
+
+  #gtk_window_resize asserts height > 0, so a zero height logs a Gtk-CRITICAL on every dialog
+  ! grep -qF -- '--height=0' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "no yad dialog asks GTK for a zero height" \
+    || fail "a yad dialog uses --height=0, which trips a gtk_window_resize assertion"
+
   grep -qF 'WOR_WINDOW_TITLE' "$REPO_DIR/src/lib/metadata.sh" \
     && grep -qF '"$WOR_WINDOW_TITLE"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const isMessageMode = choices.length === 0' "$REPO_DIR/install-wor-gui.sh" \
@@ -686,9 +701,11 @@ static_checks() {
     fail "the macOS device chooser function could not be loaded for behavioral testing"
   elif CHOOSER_CALLED="$chooser_called" bash -c '
     eval "$1"
+    #a real Next/Refresh click in message mode returns the default (3rd arg); a real Next click
+    #in list mode returns the selected row, simulated here as the last row in the list
     macos_choose() {
       printf "%s\n" "$*" > "$CHOOSER_CALLED"
-      [ -z "$1" ] || printf "%s\n" "$1" | tail -n1
+      if [ -z "$1" ];then printf "%s\n" "$3"; else printf "%s\n" "$1" | tail -n1; fi
     }
     [ "$(macos_choose_device "")" == __REFRESH__ ] || exit 1
     grep -qF "No external, physical, writable drive was found." "$CHOOSER_CALLED" || exit 1
@@ -699,6 +716,37 @@ disk5 Second drive"
     pass "the macOS device chooser refreshes an empty list and returns a selected drive"
   else
     fail "the macOS device chooser mishandles an empty list or selected drive"
+  fi
+
+  #a genuine Quit/close-box still must propagate as a failure from macos_choose_device, not be
+  #swallowed and reported as if Refresh was clicked
+  if [ -z "$chooser_function" ];then
+    fail "the macOS device chooser cancel path could not be loaded for behavioral testing"
+  elif bash -c '
+    eval "$1"
+    macos_choose() { return 1; }
+    ! macos_choose_device ""
+  ' _ "$chooser_function" 2>/dev/null;then
+    pass "Quit on the no-drive screen is treated as a cancel, not a Refresh"
+  else
+    fail "Quit on the no-drive screen is swallowed and reported as Refresh"
+  fi
+
+  #clicking Back must succeed with the literal cancelValue instead of failing like Quit does,
+  #so the wizard step machine can go back a step instead of exiting the whole program
+  if [ -z "$chooser_function" ];then
+    fail "the macOS device chooser Back path could not be loaded for behavioral testing"
+  elif bash -c '
+    eval "$1"
+    macos_choose() { shift 10; printf "%s\n" "$1"; } #echo the 11th arg: cancelValue
+    [ "$(macos_choose_device "")" == Back ] || exit 1
+    choices="disk4 First drive
+disk5 Second drive"
+    [ "$(macos_choose_device "$choices")" == Back ]
+  ' _ "$chooser_function" 2>/dev/null;then
+    pass "Back on the device chooser screens succeeds with a literal value, unlike Quit"
+  else
+    fail "Back on a device chooser screen does not carry a distinct cancelValue"
   fi
 
   rm -f "$chooser_called"
@@ -857,10 +905,13 @@ disk5 Second drive"
     "$REPO_DIR/install-wor-gui.sh" > "$macos_fn_probe"
   #macos_start_cli itself is not defined yet at the probe point.
   #DIRECTORY is supplied because the probe is a copy: the GUI resolves install-wor.sh relative to its own path.
-  [ "$(cd "$REPO_DIR" && DIRECTORY="$REPO_DIR" WOR_NATIVE_APP=1 bash "$macos_fn_probe" 2>/dev/null | tail -n1)" == "$((macos_fn_expected - 1))" ] \
+  #TMPDIR is isolated so the single-instance lock is free: a GUI already open would otherwise
+  #make the probe hand off to it and exit before reaching the marker.
+  macos_fn_tmpdir="$(mktemp -d)"
+  [ "$(cd "$REPO_DIR" && DIRECTORY="$REPO_DIR" WOR_NATIVE_APP=1 TMPDIR="$macos_fn_tmpdir" bash "$macos_fn_probe" 2>/dev/null | tail -n1)" == "$((macos_fn_expected - 1))" ] \
     && pass "all macOS helper functions parse as separate top-level definitions" \
     || fail "a macOS function definition is being swallowed by a preceding heredoc"
-  rm -f "$macos_fn_probe"
+  rm -rf "$macos_fn_probe" "$macos_fn_tmpdir"
 
   #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4, so the GUIs must not offer it as a live choice
   grep -qF 'checked: parts[1]' "$REPO_DIR/install-wor-gui.sh" \

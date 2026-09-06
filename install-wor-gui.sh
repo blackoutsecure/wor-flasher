@@ -35,6 +35,11 @@ fi
 #shellcheck disable=SC1090
 source "$cli_script" source #by sourcing, this script checks for and applies updates.
 
+#outside the packaged .app (which sets this from its own bundled .icns), fall back to the same
+#logo PNG the rest of the app already uses, so the Dock and minimized-window tile are branded
+#instead of showing the generic osascript icon
+[ -z "$WOR_ICON_PATH" ] && WOR_ICON_PATH="$WOR_LOGO_PATH"
+
 find_macos_gui_process() { #Input: parent pid. Output: first descendant WoR-Flasher script-host pid.
   local child found process_name
   for child in $(pgrep -P "$1" 2>/dev/null) ;do
@@ -161,7 +166,8 @@ gui_log_tail() { #Input: log path. Output: the last lines, with terminal escapes
 
 loading_dialog() { #display a dialog to say something is loading
   local dialog_pid
-  (echo '# ' ; sleep infinity) | yad "${yadflags[@]}" --height=0 \
+  #1, not 0: gtk_window_resize asserts height > 0, and GTK still grows the window to its natural size
+  (echo '# ' ; sleep infinity) | yad "${yadflags[@]}" --height=1 \
     --progress --pulsate --title="$1" --text="$1" --no-buttons &
   dialog_pid=$!
   trap 'kill "$dialog_pid" 2>/dev/null' EXIT
@@ -349,14 +355,18 @@ const Controller = ObjC.registerSubclass({
 const controller = $.WorChooserController.alloc.init
 app.setDelegate(controller)
 const screenFrame = $.NSScreen.mainScreen.visibleFrame
-const width = isPartnershipAnnouncement ? Math.min(760, screenFrame.size.width - 40) : 760
-const height = isPartnershipAnnouncement ? Math.min(600, screenFrame.size.height - 60) : 500
-const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable | (isPartnershipAnnouncement ? 0 : $.NSWindowStyleMaskResizable)
+//clamp the desired size to whatever screen real estate is actually available, rather than assuming a full-size display
+const width = Math.min(760, screenFrame.size.width - 40)
+const height = Math.min(isPartnershipAnnouncement ? 600 : 500, screenFrame.size.height - 60)
+//fixed layout: no drag-resize and no zoom/maximize button, only minimize (and restore) via the titlebar
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable
 window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
 window.title = appTitle
-if (!isPartnershipAnnouncement) window.minSize = $.NSMakeSize(640, 260)
 window.setDelegate(controller)
 window.center
+//without NSWindowStyleMaskResizable the zoom button is drawn disabled rather than omitted; hide it outright
+const zoomButton = window.standardWindowButton($.NSWindowZoomButton)
+if (zoomButton) zoomButton.hidden = true
 
 const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
 content.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
@@ -470,6 +480,12 @@ if (!isMessageMode) {
   content.addSubview(scrollView)
 }
 
+//a message screen only hides Cancel for the image-based welcome screen; an explicitly empty cancelLabel hides it everywhere else
+const showCancelButton = cancelLabel.length > 0 && !(isMessageMode && imagePath.length > 0)
+//a lone button in a message dialog reads better centered; once a Back/Advanced companion button is
+//present, centering the primary button made the two overlap, so both use the standard bottom-right row instead
+const centerNextButton = isMessageMode && !showCancelButton && actionLabel.length === 0
+
 //buttons are sized to their own text so any label (e.g. "Proceed with WoR-Flasher") fits without truncation
 nextButton = $.NSButton.buttonWithTitleTargetAction(nextLabel, controller, 'nextClicked:')
 nextButton.setTarget(controller)
@@ -478,8 +494,8 @@ nextButton.bezelStyle = $.NSBezelStyleRounded
 nextButton.keyEquivalent = '\r'
 if (announcementTimeout > 0 && isMessageMode) nextButton.title = nextLabel + ' (' + announcementTimeout + ')'
 nextButton.sizeToFit
-let nextWidth = Math.max(180, nextButton.frame.size.width)
-const nextX = isMessageMode ? (width - nextWidth) / 2 : width - 20 - nextWidth
+const nextWidth = Math.max(180, nextButton.frame.size.width)
+const nextX = centerNextButton ? (width - nextWidth) / 2 : width - 20 - nextWidth
 nextButton.frame = $.NSMakeRect(nextX, 22, nextWidth, 32)
 nextButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxXMargin | $.NSViewMaxYMargin
 content.addSubview(nextButton)
@@ -489,15 +505,15 @@ if (announcementTimeout > 0 && isMessageMode) {
   $.NSRunLoop.currentRunLoop.addTimerForMode(countdownTimer, $.NSModalPanelRunLoopMode)
 }
 
-//a message screen only hides Cancel for the image-based welcome screen; an explicitly empty cancelLabel hides it everywhere else
-const showCancelButton = cancelLabel.length > 0 && !(isMessageMode && imagePath.length > 0)
 if (showCancelButton) {
   const cancelButton = $.NSButton.buttonWithTitleTargetAction(cancelLabel, controller, 'cancelClicked:')
   cancelButton.bezelStyle = $.NSBezelStyleRounded
   cancelButton.keyEquivalent = '\u001b'
   cancelButton.sizeToFit
-  const cancelWidth = Math.max(96, cancelButton.frame.size.width)
-  cancelButton.frame = $.NSMakeRect(width - 20 - nextWidth - 8 - cancelWidth, 22, cancelWidth, 32)
+  //match the next button width so the pair reads as one row instead of two different sizes
+  const cancelWidth = Math.max(nextWidth, cancelButton.frame.size.width)
+  //anchor to the next button real x position instead of re-deriving one, so the two never overlap
+  cancelButton.frame = $.NSMakeRect(nextButton.frame.origin.x - 8 - cancelWidth, 22, cancelWidth, 32)
   cancelButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxYMargin
   content.addSubview(cancelButton)
 }
@@ -558,12 +574,14 @@ macos_show_announcement() { #Output: proceed or project partner.
   esac
 }
 
-macos_choose_device() { #Input: newline-separated detected volume rows. Output: selected row or __REFRESH__.
+macos_choose_device() { #Input: newline-separated detected volume rows. Output: selected row, __REFRESH__, or Back. Fails only on a genuine Quit/close, never on Back.
   if [ -z "$1" ];then
-    macos_choose '' 'No external, physical, writable drive was found. Connect a removable drive, then click Refresh.' __REFRESH__ Back '' '' '' Refresh >/dev/null 2>&1
-    echo "__REFRESH__"
+    #cancelValue Back makes clicking Back succeed with a literal value instead of failing like Quit does,
+    #so the wizard can tell "go back a step" apart from "the user is quitting the whole thing"
+    result="$(macos_choose '' 'No external, physical, writable drive was found. Connect a removable drive, then click Refresh.' __REFRESH__ Back '' '' '' Refresh "$WOR_ICON_PATH" "$WOR_APP_TITLE" Back)" || return 1
+    echo "$result"
   else
-    device_choice="$(macos_choose "$1" 'Choose the external drive and volumes to erase' "$(printf '%s\n' "$1" | head -n1)" Back Refresh __REFRESH__)" || return 1
+    device_choice="$(macos_choose "$1" 'Choose the external drive and volumes to erase' "$(printf '%s\n' "$1" | head -n1)" Back Refresh __REFRESH__ '' '' '' '' Back)" || return 1
     echo "$device_choice"
   fi
 }
@@ -706,15 +724,22 @@ const Controller = ObjC.registerSubclass({
 const controller = $.WorAdvancedController.alloc.init
 app.setDelegate(controller)
 
-const width = 640
+const screenFrame = $.NSScreen.mainScreen.visibleFrame
 const rowHeight = 26
-const height = (rows.length + 1) * rowHeight + 20 + 220 + 140 + rowHeight + 8
-const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskResizable
+const desiredWidth = 640
+//height grows with the number of advanced-option rows, so clamp both dimensions to the visible screen instead of assuming they fit
+const desiredHeight = (rows.length + 1) * rowHeight + 20 + 220 + 140 + rowHeight + 8
+const width = Math.min(desiredWidth, screenFrame.size.width - 40)
+const height = Math.min(desiredHeight, screenFrame.size.height - 60)
+//fixed layout: no drag-resize and no zoom/maximize button, only minimize (and restore) via the titlebar
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable
 window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
 window.title = 'Advanced Options'
-window.minSize = $.NSMakeSize(520, 420)
 window.setDelegate(controller)
 window.center
+//without NSWindowStyleMaskResizable the zoom button is drawn disabled rather than omitted; hide it outright
+const zoomButton = window.standardWindowButton($.NSWindowZoomButton)
+if (zoomButton) zoomButton.hidden = true
 
 const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
 content.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
@@ -887,7 +912,13 @@ macos_start_cli() {
         step=pi
         ;;
       pi)
-        RPI_MODEL="$(macos_choose "$pi_choices" 'Choose Raspberry Pi model' '5' Back)" || { step=windows; continue; }
+        #cancelValue Back makes clicking Back succeed with a literal value instead of failing like
+        #Quit does, so a real Quit exits the wizard instead of just stepping back to the previous screen
+        RPI_MODEL="$(macos_choose "$pi_choices" 'Choose Raspberry Pi model' '5' Back '' '' '' '' '' '' Back)" || exit 0
+        if [ "$RPI_MODEL" == Back ];then
+          step=windows
+          continue
+        fi
         list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
         [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
         [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
@@ -897,12 +928,20 @@ macos_start_cli() {
       language)
         language_choices="$(list_langs_preferred | cut -d: -f1)"
         default_language="$(default_win_lang)"
-        WIN_LANG="$(macos_choose "$language_choices" "Choose Windows language (default: $default_language)" "$default_language" Back)" || { step=pi; continue; }
+        WIN_LANG="$(macos_choose "$language_choices" "Choose Windows language (default: $default_language)" "$default_language" Back '' '' '' '' '' '' Back)" || exit 0
+        if [ "$WIN_LANG" == Back ];then
+          step=pi
+          continue
+        fi
         step=device
         ;;
       device)
         device_choices="$(darwin_list_device_choices)"
-        device_choice="$(macos_choose_device "$device_choices")" || { step=language; continue; }
+        device_choice="$(macos_choose_device "$device_choices")" || exit 0
+        if [ "$device_choice" == Back ];then
+          step=language
+          continue
+        fi
         [ "$device_choice" == __REFRESH__ ] && continue
         DEVICE="${device_choice%%$'\t'*}"
         is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk."
@@ -915,7 +954,11 @@ macos_start_cli() {
           CAN_INSTALL_ON_SAME_DRIVE=0
         else
           mode_choices=$'Install Windows onto this drive\nCreate a recovery drive'
-          install_mode="$(macos_choose "$mode_choices" 'Choose installation mode' 'Install Windows onto this drive' Back)" || { step=device; continue; }
+          install_mode="$(macos_choose "$mode_choices" 'Choose installation mode' 'Install Windows onto this drive' Back '' '' '' '' '' '' Back)" || exit 0
+          if [ "$install_mode" == Back ];then
+            step=device
+            continue
+          fi
           [ "$install_mode" == 'Install Windows onto this drive' ] && CAN_INSTALL_ON_SAME_DRIVE=1 || CAN_INSTALL_ON_SAME_DRIVE=0
         fi
         step=confirm
@@ -1026,11 +1069,15 @@ app.setDelegate(controller)
 
 const width = 600
 const height = imagePath.length > 0 ? 360 : 240
-const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable
+//fixed layout: no drag-resize and no zoom/maximize button, only minimize (and restore) via the titlebar
+const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable
 window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
 window.title = appTitle
 window.setDelegate(controller)
 window.center
+//without NSWindowStyleMaskResizable the zoom button is drawn disabled rather than omitted; hide it outright
+const zoomButton = window.standardWindowButton($.NSWindowZoomButton)
+if (zoomButton) zoomButton.hidden = true
 
 const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
 window.contentView = content
@@ -1269,6 +1316,9 @@ window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(
 window.title = appTitle
 window.setDelegate(controller)
 window.center
+//without NSWindowStyleMaskResizable the zoom button is drawn disabled rather than omitted; hide it outright
+const zoomButton = window.standardWindowButton($.NSWindowZoomButton)
+if (zoomButton) zoomButton.hidden = true
 
 const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
 window.contentView = content
@@ -1397,7 +1447,7 @@ yad "${yadflags[@]}" --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOU
 
 { #choose destination RPi model and windows build ID
 if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
-  output="$(yad "${yadflags[@]}" --height=0 --form --columns=2 \
+  output="$(yad "${yadflags[@]}" --height=1 --form --columns=2 \
     --image="$WOR_LOGO_PATH" \
     --text=$'<big><b>Welcome to WoR-Flasher</b></big>\nThis Blackout Secure fork keeps Botspot\'s upstream project visible while adding macOS support, safer image verification, native GUI polish and a broader maintenance/test pipeline for Raspberry Pi Windows installs.' \
     --field="Install":CB "Windows 11!Windows 10!More options" \

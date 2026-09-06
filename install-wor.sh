@@ -47,6 +47,9 @@
 #        A standalone install-wor-hook.sh now obtains a complete trusted checkout automatically.
 #        Fixed the native macOS partnership announcement construction, dark-mode text contrast
 #          and layout on current JXA runtimes.
+#        Scaled the partnership banner to 800x533 so the Linux announcement window fits on
+#          screen; yad draws --image at its native size and cannot shrink it.
+#        Linux dialogs that auto-size their height no longer log a Gtk-CRITICAL warning.
 #        Direct maintenance messaging and default update checks now use Blackout Secure's source.
 #1.0.1 - Pi 4 UEFI pinned to v1.50, the only release where both the Ethernet MAC and microSD
 #          boot work. v1.51 (the previous pin) and v1.52 report a MAC of 00:00:00:00:00:00,
