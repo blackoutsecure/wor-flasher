@@ -614,13 +614,24 @@ install_size_mb="$4"
 part1="$5"
 part2="$6"
 raw_device="/dev/r${device#/dev/}"
-/usr/sbin/diskutil unmountDisk force "$device"
+
+darwin_unmount_disk_retry() {
+  local dev="$1"
+  local i
+  for i in 1 2 3 4 5; do
+    /usr/sbin/diskutil unmountDisk force "$dev" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  /usr/sbin/diskutil unmountDisk force "$dev"
+}
+
+darwin_unmount_disk_retry "$device"
 "$sgdisk_bin" --zap-all "$raw_device"
 "$sgdisk_bin" -og \
   -n "1:0:+${boot_size_mb}M" -t 1:ef00 -c 1:WOR_BOOT \
   -n "2:0:+${install_size_mb}M" -t 2:0700 -c 2:WOR_INSTALL \
   -A 1:set:63 -A 2:set:63 "$raw_device"
-/usr/sbin/diskutil unmountDisk force "$device"
+darwin_unmount_disk_retry "$device"
 for attempt in $(seq 1 15);do
   [ -e "$part1" ] && [ -e "$part2" ] && break
   sleep 1
@@ -628,7 +639,7 @@ done
 [ -e "$part1" ] && [ -e "$part2" ]
 /usr/sbin/diskutil eraseVolume MS-DOS WOR_BOOT "$part1"
 /usr/sbin/diskutil eraseVolume ExFAT WOR_INSTALL "$part2"
-/usr/sbin/diskutil unmountDisk force "$device"
+darwin_unmount_disk_retry "$device"
 "$sgdisk_bin" -A 1:clear:63 -A 2:clear:63 "$raw_device"
 ROOT_SCRIPT
   )";then
