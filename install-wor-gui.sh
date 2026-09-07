@@ -1310,11 +1310,14 @@ const Controller = ObjC.registerSubclass({
               bar.minValue = 0
               bar.maxValue = stepTotal * 100
               bar.doubleValue = (stepNum - 1) * 100 + within
+
+              let stepStr = 'Step ' + stepNum + ' of ' + stepTotal
+              if (within > 0) {
+                stepStr += ' (' + within + '%)'
+              }
+              stepLabel.stringValue = stepStr
             }
             phaseLabel.stringValue = parts.slice(3).join('\t')
-            if (!isNaN(stepNum) && !isNaN(stepTotal) && stepTotal > 0) {
-              stepLabel.stringValue = 'Step ' + stepNum + ' of ' + stepTotal
-            }
           } else if (subLine.length > 0) {
             //work before the first numbered step, such as clearing the cache, still has its own percentage
             const parsed = parseInt(subLine.split('\t')[1], 10)
@@ -1323,6 +1326,7 @@ const Controller = ObjC.registerSubclass({
               bar.minValue = 0
               bar.maxValue = 100
               bar.doubleValue = Math.max(0, Math.min(100, parsed))
+              stepLabel.stringValue = parsed + '%'
             }
           }
           if (statusLine.length > 0) {
@@ -2173,10 +2177,22 @@ tail_pid=$!
 awk -F'\t' '
   #pct, not sub: sub() is a built-in awk function and cannot be used as a variable
   #before the first STEP (e.g. while clearing the cache) the percentage stands on its own
-  function overall() { if (total+0 > 0) printf("%d\n", ((step-1)*100 + pct) / (total*100) * 100); else printf("%d\n", pct+0) }
-  /^STEP/    { step=$2+0; total=$3+0; pct=0; overall(); printf("# [Step %s/%s] %s\n", $2, $3, $4); fflush() }
+  function overall() {
+    if (total+0 > 0) {
+      printf("%d\n", ((step-1)*100 + pct) / (total*100) * 100);
+      if (pct > 0) {
+        printf("# [Step %d/%d] %s (%d%%)\n", step, total, title, pct);
+      } else {
+        printf("# [Step %d/%d] %s\n", step, total, title);
+      }
+    } else {
+      printf("%d\n", pct+0);
+      printf("# %s (%d%%)\n", status_msg, pct);
+    }
+  }
+  /^STEP/    { step=$2+0; total=$3+0; title=$4; pct=0; overall(); fflush() }
   /^SUBSTEP/ { pct=$2+0; if (pct<0) pct=0; if (pct>100) pct=100; overall(); fflush() }
-  /^STATUS/  { printf("# %s\n", $2); fflush() }
+  /^STATUS/  { status_msg=$2; if (step+0 == 0) overall(); else printf("# %s\n", status_msg); fflush() }
 ' < "$progress_fifo" | yad "${yadflags[@]}" --progress --no-buttons --text="Starting..." &
 yad_pid=$!
 

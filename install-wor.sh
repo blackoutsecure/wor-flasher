@@ -992,9 +992,9 @@ mounted_wimdir() { #Input: wimdir arguments for mounted target files.
 
 mounted_wimverify() { #Input: wimverify arguments for mounted target files.
   if is_macos;then
-    wimverify "$@"
+    with_progress_capture wimverify "$@"
   else
-    sudo wimverify "$@"
+    with_progress_capture sudo wimverify "$@"
   fi
 }
 
@@ -1202,8 +1202,11 @@ wget() { #Intercept all wget commands. When possible, uses aria2c.
   #now, perform the download using the chosen method
   if [ "$use" == wget ];then
     #run the true wget binary with all this function's args
-
-    command wget --progress=bar:force:noscroll "$@"
+    if [ "$RUN_MODE" == gui ];then
+      command wget --progress=bar:force:noscroll "$@" 2> >(gui_percent_stream)
+    else
+      command wget --progress=bar:force:noscroll "$@"
+    fi
     local exitcode=$?
   elif [ "$use" == aria2c ];then
 
@@ -1251,6 +1254,7 @@ wget() { #Intercept all wget commands. When possible, uses aria2c.
 
             #get progress percentage from aria2c output
             percent="$(grep -o '(.*)' <<<"$line" | tr -d '()%')"
+            [ -n "$percent" ] && emit_gui_substep "$percent"
 
             #echo "percent: $percent"
             #echo "available_width: $available_width"
@@ -2782,13 +2786,13 @@ if [[ "$SOURCE_FILE" == *'.ESD' ]] || [[ "$SOURCE_FILE" == *'.esd' ]];then
 
   status "Extracting $(basename "$SOURCE_FILE") to $PWD"
   #Extract first volume containing boot files
-  wimextract "$SOURCE_FILE" 1 boot efi --dest-dir="$PWD/bootpart" || error "Failed to extract first partition of $SOURCE_FILE"
+  with_progress_capture wimextract "$SOURCE_FILE" 1 boot efi --dest-dir="$PWD/bootpart" || error "Failed to extract first partition of $SOURCE_FILE"
 
   #Create boot.wim file
   mkdir "$PWD/bootpart/sources"
   #Export WinPE & Setup editions to non-solid boot.wim
-  wimexport "$SOURCE_FILE" 2 "$PWD/bootpart/sources/boot.wim" --compress=LZX || error "Failed to export WinPE edition to $PWD/bootpart/sources/boot.wim"
-  wimexport "$SOURCE_FILE" 3 "$PWD/bootpart/sources/boot.wim" --compress=LZX --boot || error "Failed to export Setup edition to $PWD/bootpart/sources/boot.wim"
+  with_progress_capture wimexport "$SOURCE_FILE" 2 "$PWD/bootpart/sources/boot.wim" --compress=LZX || error "Failed to export WinPE edition to $PWD/bootpart/sources/boot.wim"
+  with_progress_capture wimexport "$SOURCE_FILE" 3 "$PWD/bootpart/sources/boot.wim" --compress=LZX --boot || error "Failed to export Setup edition to $PWD/bootpart/sources/boot.wim"
 
   #If using an external ESD file, make a copy before modifying it
   if [ "$SOURCE_FILE" != "$PWD/image.esd" ];then
@@ -2796,9 +2800,9 @@ if [[ "$SOURCE_FILE" == *'.ESD' ]] || [[ "$SOURCE_FILE" == *'.esd' ]];then
     SOURCE_FILE="$PWD/image.esd"
   fi
   #Remove first 3 partitions from ESD file
-  wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE"
-  wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE"
-  wimdelete "$SOURCE_FILE" 1 || error "Failed to remove a partition from $SOURCE_FILE" #remove --soft for this last one to minimize filesize
+  with_progress_capture wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE"
+  with_progress_capture wimdelete "$SOURCE_FILE" 1 --soft || error "Failed to remove a partition from $SOURCE_FILE"
+  with_progress_capture wimdelete "$SOURCE_FILE" 1 || error "Failed to remove a partition from $SOURCE_FILE" #remove --soft for this last one to minimize filesize
   mv -f "$SOURCE_FILE" "$PWD/install.wim" || error "Failed to rename $SOURCE_FILE to install.wim"
 
   touch "$PWD/alldone" #mark this folder of microsoft stuff as complete
