@@ -870,9 +870,13 @@ darwin_report_copy_failure() { #Input: mounted target, operation description, an
     fi
     error "Failed to $description: macOS denied normal access to the removable volume.$copy_context${user_output:+ ($user_output)}"
   fi
+  #rm -f succeeds on a path that was never created, so the touch output is the only proof it worked
   sudo_output="$(sudo -n touch "$probe" 2>&1)"
-  if sudo -n rm -f "$probe" >/dev/null 2>&1;then
+  if [ -z "$sudo_output" ] && sudo -n rm -f "$probe" >/dev/null 2>&1;then
     error "Failed to $description: administrator access works, but the normal file copy failed.$copy_context${user_output:+ ($user_output)}"
+  fi
+  if printf '%s' "$user_output$sudo_output" | grep -qi 'no such file or directory';then
+    error "Failed to $description: the target volume is no longer mounted. macOS unmounted it during the copy. Reinsert the drive and run $WOR_APP_TITLE again.$copy_context"
   fi
   if printf '%s' "$sudo_output" | grep -Eqi 'operation not permitted|not permitted';then
     error "Failed to $description: macOS denied access to the removable volume. Choose Allow when macOS asks whether bash may access the removable volume, then quit and reopen WoR-Flasher."
@@ -924,7 +928,7 @@ darwin_mount_point_or_die() { #Input: partition. Output: its mount point now, re
 
 darwin_flash_device() {
   is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
-  local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device
+  local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device copy_attempt
   sgdisk_bin="$(command -v sgdisk)" || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."
   #GUI mode authenticated at startup, while a dialog could still reach the front; prompting from here
   #would put it behind the progress window, where it can never be answered
@@ -962,9 +966,16 @@ darwin_flash_device() {
   copy_startup_environment_with_progress "$PWD/$winfiles/bootpart" "$boot_mount" device \
     || darwin_report_copy_failure "$boot_mount" "copy startup files to $boot_mount" user
   report_copy_task 15 "Installation files"
-  win_mount="$(darwin_mount_point_or_die "$PART2")"
-  copy_local_file_with_progress install.wim "$PWD/$winfiles/install.wim" "$win_mount/install.wim" \
-    || darwin_report_copy_failure "$win_mount" "copy installation files to $win_mount" user
+  #fskitd unmounts an idle exFAT volume on its own ("Unmounting /Volumes/WOR_INSTALL how 02"), so
+  #WOR_INSTALL can disappear while boot.wim is still being written to WOR_BOOT. Remount and retry.
+  for copy_attempt in 1 2 3 ;do
+    win_mount="$(darwin_mount_point_or_die "$PART2")"
+    copy_local_file_with_progress install.wim "$PWD/$winfiles/install.wim" "$win_mount/install.wim" && break
+    #the volume is still mounted, so this is a real copy failure rather than a vanished mount point
+    { [ -d "$win_mount" ] || [ "$copy_attempt" == 3 ]; } \
+      && darwin_report_copy_failure "$win_mount" "copy installation files to $win_mount" user
+    status "  $PART2 was unmounted mid-copy; remounting and retrying"
+  done
   report_copy_task 30 "EFI files"
   boot_mount="$(darwin_mount_point_or_die "$PART1")"
   mkdir -p "$boot_mount/efi" \
