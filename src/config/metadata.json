@@ -1,0 +1,57 @@
+{
+  "$schema": "./metadata.schema.json",
+  "product": {
+    "name": "WoR-Flasher",
+    "version": "1.0.2",
+    "description": "Release tooling for WoR-Flasher packaging; disk flashing remains in the shell engine.",
+    "license": "GPL-3.0-or-later",
+    "keywords": [
+      "raspberry-pi",
+      "windows-on-raspberry",
+      "wor",
+      "flasher",
+      "arm64",
+      "macos",
+      "linux"
+    ],
+    "fundingUrls": [
+      "https://github.com/sponsors/Botspot",
+      "https://github.com/sponsors/blackoutsecure"
+    ],
+    "bundleIdentifier": "com.botspot.wor-flasher",
+    "minimumMacosVersion": "12.0",
+    "iconName": "WoR-Flasher",
+    "iconFilename": "WoR-Flasher.icns",
+    "assetsDirname": "assets",
+    "logoFilename": "logo-full.png"
+  },
+  "systemDefaults": {
+    "peInstallerUrl": "https://github.com/worproject/dldserv-mirror/releases/download/13%2F02%2F2024/WoR-PE_Package_1.1.0.zip",
+    "peInstallerSha256": "A039E28FE7E39147899B0634C15E336C3B26A6F76201092EBB9732474CD43D0A",
+    "uefiVerPi3": "v1.39",
+    "uefiVerPi4": "v1.50",
+    "uefiVerPi5": "v0.3",
+    "uefiRepoPi3": "pftf/RPi3",
+    "uefiRepoPi4": "pftf/RPi4",
+    "uefiRepoPi5": "worproject/rpi5-uefi",
+    "driverVer": "v0.17",
+    "driversRepo": "worproject/RPi-Windows-Drivers",
+    "armv80MaxBuild": 25163,
+    "win11MinBuild": 22000,
+    "win10OldestBuild": "17134.112",
+    "exampleBid": "22621.525",
+    "armv80SafeBid": "22631.2861",
+    "repoSlug": "Botspot/wor-flasher",
+    "logDirname": "logs"
+  },
+  "runtimePaths": [
+    "install-wor.sh",
+    "install-wor-gui.sh",
+    "install-wor-hook.sh",
+    "src/lib",
+    "src/config",
+    "src/updater.mjs",
+    "config-templates",
+    "assets"
+  ]
+}

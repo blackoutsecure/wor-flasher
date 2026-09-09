@@ -3,18 +3,19 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
+import { writePackageMetadata } from "./sync-package-metadata.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const repoDir = join(scriptDir, "..", "..");
+const repoDir = join(scriptDir, "..");
 const versionArg = process.argv[2];
 
 if (!versionArg || !/^\d+\.\d+\.\d+$/.test(versionArg.replace(/^v/i, ""))) {
-  console.error("Usage: node src/node/set-version.mjs <X.Y.Z>");
+  console.error("Usage: node src/set-version.mjs <X.Y.Z>");
   process.exit(2);
 }
 
 const cleanVersion = versionArg.replace(/^v/i, "");
-const metadataFile = join(repoDir, "src", "lib", "metadata.sh");
+const metadataFile = join(repoDir, "src", "config", "metadata.json");
 const plistFile = join(repoDir, "src", "macos-app", "Contents", "Info.plist");
 const readmeFile = join(repoDir, "README.md");
 const engineFile = join(repoDir, "install-wor.sh");
@@ -27,23 +28,45 @@ for (const file of [metadataFile, plistFile, readmeFile, engineFile]) {
   }
 }
 
-// 1. metadata.sh
+//String.replace is a silent no-op when the pattern stops matching, which would bump some files and
+//quietly skip others, shipping a release whose parts disagree about their own version
+function replaceOrFail(content, pattern, replacement, label) {
+  //test the pattern rather than diffing the result: re-setting the current version changes nothing
+  //and is legal, but a pattern that no longer matches must not pass silently
+  if (
+    !new RegExp(pattern.source, pattern.flags.replace("g", "")).test(content)
+  ) {
+    console.error(
+      `Could not update the version in ${label}; its format has changed.`,
+    );
+    process.exit(1);
+  }
+  return content.replace(pattern, replacement);
+}
+
+// 1. project metadata
 let metadataContent = readFileSync(metadataFile, "utf8");
-metadataContent = metadataContent.replace(
-  /^WOR_FLASHER_VERSION=['"][^'"]+['"]/m,
-  `WOR_FLASHER_VERSION='${cleanVersion}'`,
+metadataContent = replaceOrFail(
+  metadataContent,
+  /("version"\s*:\s*")[^"]+("\s*,)/,
+  `$1${cleanVersion}$2`,
+  metadataFile,
 );
 writeFileSync(metadataFile, metadataContent);
 
 // 2. Info.plist
 let plistContent = readFileSync(plistFile, "utf8");
-plistContent = plistContent.replace(
+plistContent = replaceOrFail(
+  plistContent,
   /(<key>CFBundleShortVersionString<\/key>\s*<string>)[^<]*(<\/string>)/g,
   `$1${cleanVersion}$2`,
+  `${plistFile} (CFBundleShortVersionString)`,
 );
-plistContent = plistContent.replace(
+plistContent = replaceOrFail(
+  plistContent,
   /(<key>CFBundleVersion<\/key>\s*<string>)[^<]*(<\/string>)/g,
   `$1${cleanVersion}$2`,
+  `${plistFile} (CFBundleVersion)`,
 );
 writeFileSync(plistFile, plistContent);
 
@@ -71,14 +94,10 @@ if (!engineContent.includes(`#${cleanVersion} - `)) {
 }
 writeFileSync(engineFile, engineContent);
 
-// 5. package.json
+// 5. package.json - description, license, homepage, repository, bugs, funding, and keywords
+//    are all derived from src/config/metadata.json (already bumped in step 1), not hand-patched here
 if (existsSync(packageFile)) {
-  let pkgContent = readFileSync(packageFile, "utf8");
-  pkgContent = pkgContent.replace(
-    /"version"\s*:\s*"[^"]+"/,
-    `"version": "${cleanVersion}"`,
-  );
-  writeFileSync(packageFile, pkgContent);
+  writePackageMetadata(packageFile);
 }
 
 // Rebuild macOS release artifacts

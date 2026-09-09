@@ -20,9 +20,9 @@ source "$TEST_SCRIPT_DIR/test-lib.sh"
 
 REPO_DIR="$(script_dir "$TEST_SCRIPT_DIR/..")"
 
-#Source-checkout updates are opt-in. Export this explicitly for every invocation below,
-#including sourced library functions. The self-updater test further down deliberately opts in
-#against a disposable clone, never against this working tree.
+#Source-checkout updates are enabled by default. Disable them explicitly for every test
+#invocation, including sourced library functions. The self-updater test further down
+#deliberately re-enables updates against a disposable clone, never against this working tree.
 export NO_UPDATE=1
 
 #Everything this script creates lives here. It is listed in .gitignore.
@@ -83,14 +83,21 @@ static_checks() {
     git -C "$REPO_DIR" diff --check >/dev/null 2>&1 \
       && pass "working tree has no whitespace errors" || fail "working tree has whitespace errors"
   fi
-  for f in src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh 'src/macos-app/Contents/MacOS/WoR-Flasher' ;do
+  for f in src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh 'src/macos-app/Contents/MacOS/WoR-Flasher' ;do
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
-  grep -qF 'runtime-paths.json' "$REPO_DIR/src/node/build-release.mjs" \
+  jq empty "$REPO_DIR/src/config/metadata.json" >/dev/null 2>&1 \
+    && jq empty "$REPO_DIR/src/config/metadata.schema.json" >/dev/null 2>&1 \
+    && pass "project metadata JSON and schema parse" \
+    || fail "project metadata JSON or schema is invalid"
+  grep -qF 'readRuntimePaths' "$REPO_DIR/src/build-release.mjs" \
+    && grep -qF '"runtimePaths"' "$REPO_DIR/src/config/metadata.json" \
+    && grep -qF '"pe:check": "node src/check-pe-installer.mjs --check"' "$REPO_DIR/package.json" \
+    && grep -qF '"pe:update": "node src/check-pe-installer.mjs --write-latest"' "$REPO_DIR/package.json" \
     && grep -qF 'npm run package:all' "$REPO_DIR/.github/workflows/release.yml" \
     && grep -qF 'release/linux/wor-flasher' "$REPO_DIR/.github/workflows/release.yml" \
     && grep -qF 'release/macos/WoR-Flasher.app' "$REPO_DIR/.github/workflows/release.yml" \
-    && pass "release tooling shares one runtime path manifest" \
+    && pass "release tooling shares the project metadata runtime path manifest" \
     || fail "release tooling duplicates the runtime path list"
   release_package_line="$(grep -nF '      - name: Package release artifacts' "$REPO_DIR/.github/workflows/release.yml" | cut -d: -f1)"
   release_tag_line="$(grep -nF '      - name: Create immutable release tag' "$REPO_DIR/.github/workflows/release.yml" | cut -d: -f1)"
@@ -102,18 +109,21 @@ static_checks() {
     fail "release workflow mutates the repository before packaging succeeds"
   fi
   if command -v node >/dev/null ;then
-    node --check "$REPO_DIR/src/node/build-release.mjs" >/dev/null 2>&1 \
-      && node --check "$REPO_DIR/src/node/updater.mjs" >/dev/null 2>&1 \
-      && node --check "$REPO_DIR/src/node/package-macos-app.mjs" >/dev/null 2>&1 \
-      && node --check "$REPO_DIR/src/node/set-version.mjs" >/dev/null 2>&1 \
-      && pass "src/node/*.mjs scripts parse cleanly" || fail "Node tooling scripts have syntax errors"
+    node --check "$REPO_DIR/src/build-release.mjs" >/dev/null 2>&1 \
+    && node --check "$REPO_DIR/src/check-pe-installer.mjs" >/dev/null 2>&1 \
+    && node --check "$REPO_DIR/src/sync-package-metadata.mjs" >/dev/null 2>&1 \
+    && node --check "$REPO_DIR/src/updater.mjs" >/dev/null 2>&1 \
+    && node --check "$REPO_DIR/src/package-macos-app.mjs" >/dev/null 2>&1 \
+    && node --check "$REPO_DIR/src/set-version.mjs" >/dev/null 2>&1 \
+    && node --check "$REPO_DIR/src/lib/node-runtime.mjs" >/dev/null 2>&1 \
+    && pass "src/*.mjs and shared Node library scripts parse cleanly" || fail "Node tooling scripts have syntax errors"
     if node --test "$REPO_DIR/tests/node-tools.test.mjs" >/dev/null 2>&1 ;then
       pass "Node.js unit test suite passed (tests/node-tools.test.mjs)"
     else
       fail "Node.js unit test suite failed"
     fi
     release_check_tmp="$(mktemp -d "${TMPDIR:-/tmp}/wor-release-check-test.XXXXXX")"
-    if TMPDIR="$release_check_tmp" node "$REPO_DIR/src/node/build-release.mjs" --check --platform=invalid >/dev/null 2>&1 ;then
+    if TMPDIR="$release_check_tmp" node "$REPO_DIR/src/build-release.mjs" --check --platform=invalid >/dev/null 2>&1 ;then
       fail "release tooling accepted an unsupported platform"
     elif find "$release_check_tmp" -mindepth 1 -print -quit | grep -q . ;then
       fail "failed release check left temporary staging files behind"
@@ -126,7 +136,7 @@ static_checks() {
   fi
 
   if command -v shellcheck >/dev/null ;then
-    shellcheck --severity=error "$REPO_DIR"/src/lib/metadata.sh "$REPO_DIR"/src/lib/dependencies.sh "$REPO_DIR"/src/lib/paths.sh "$REPO_DIR"/src/lib/cleanup.sh "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/install-wor-hook.sh "$REPO_DIR"/src/macos-app/Contents/MacOS/WoR-Flasher >/dev/null 2>&1 \
+    shellcheck --severity=error "$REPO_DIR"/src/lib/metadata.sh "$REPO_DIR"/src/lib/dependencies.sh "$REPO_DIR"/src/lib/paths.sh "$REPO_DIR"/src/lib/cleanup.sh "$REPO_DIR"/src/lib/gui.sh "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/install-wor-hook.sh "$REPO_DIR"/src/macos-app/Contents/MacOS/WoR-Flasher >/dev/null 2>&1 \
       && pass "shellcheck reports no errors" || fail "shellcheck reports errors"
   else
     skip "shellcheck is not installed"
@@ -239,13 +249,16 @@ static_checks() {
 
   grep -qF 'MACOS_ASKPASS="$(mktemp)"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'register_file_cleanup "$MACOS_ASKPASS"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'Formatting " & targetDevice & return & return & "There is no turning back now.' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_METADATA_FILE="$WOR_METADATA_FILE" WOR_APP_TITLE="$WOR_APP_TITLE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'To continue, WoR-Flasher needs administrator access for disk preparation, formatting, and flashing.' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Target: " & targetDevice' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Only continue if this is the drive you intend to erase.' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_METADATA_FILE="$WOR_METADATA_FILE" WOR_APP_TITLE="$WOR_APP_TITLE" WOR_WINDOW_TITLE="$WOR_WINDOW_TITLE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'wor_osascript - "$WOR_APP_TITLE" "$WOR_FLASH_TARGET"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'with title appTitle' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'wor_osascript - "$WOR_WINDOW_TITLE" "$WOR_FLASH_TARGET"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'with title windowTitle' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'export RUN_MODE=gui' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'exec /usr/bin/open -W "$DIRECTORY/release/macos/WoR-Flasher.app"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '[ "${WOR_USE_PACKAGED_APP:-0}" == 1 ]' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '[ "${WOR_NATIVE_APP:-0}" != 1 ]' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'export WOR_NATIVE_APP=1' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
     && grep -qF "name: 'WorErrorController'" "$REPO_DIR/install-wor.sh" \
@@ -262,399 +275,24 @@ static_checks() {
     && pass "CLI ASCII banner names WoR-Flasher" \
     || fail "CLI ASCII banner does not name WoR-Flasher"
 
-  if [ "$HOST_OS" == Darwin ];then
-    if command -v node >/dev/null ;then
-      node "$REPO_DIR/src/node/build-release.mjs" --platform=macos >/dev/null 2>&1 \
-        || fail "generated macOS app could not be staged for launcher tests"
-    else
-      fail "node is required to stage the generated macOS app for launcher tests"
-    fi
-    launcher="$REPO_DIR/release/macos/WoR-Flasher.app/Contents/MacOS/WoR-Flasher"
-  node "$REPO_DIR/src/node/package-macos-app.mjs" --check >/dev/null 2>&1 \
-    && grep -qF 'validate_runtime "$EMBEDDED_RUNTIME" "$EMBEDDED_MANIFEST"' "$launcher" \
-    && grep -qF 'actual_digest="$(shasum -a 256 "$archive"' "$launcher" \
-    && grep -qF 'archive_entries_are_safe "$archive"' "$launcher" \
-    && grep -qF 'mv -f "$temporary" "$pointer"' "$launcher" \
-    && grep -qF 'ln -sfn /usr/bin/osascript "$script_host"' "$REPO_DIR/src/lib/metadata.sh" \
-    && grep -qF 'wor_osascript -l JavaScript' "$REPO_DIR/install-wor-gui.sh" \
-    && ! grep -qE '^[[:space:]]*osascript -l JavaScript' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'status --porcelain --untracked-files=no' "$launcher" \
-    && grep -qF 'merge --ff-only FETCH_HEAD' "$launcher" \
-    && grep -qF 'git -C "$REPO_DIR" restore --source=HEAD -- "${missing[@]}"' "$launcher" \
-    && grep -qF 'brew install "${missing[@]}"' "$launcher" \
-    && grep -qF "open 'https://brew.sh'" "$launcher" \
-    && grep -qF "start_startup_window" "$launcher" \
-    && grep -qF 'local icon_path="$RESOURCES_DIR/$BUNDLE_ICON_FILENAME"' "$launcher" \
-    && grep -qF 'const controller = $.WorStartupController.alloc.init' "$launcher" \
-    && grep -qF "startup_phase 'Checking for a safe source update...'" "$launcher" \
-    && grep -qF 'for attempt in {1..80};do' "$launcher" \
-    && grep -qF 'installed_formulae="$(brew list --formula 2>/dev/null)"' "$launcher" \
-    && grep -qF '[ "$logo_source" -nt "$icon_resource" ]' "$launcher" \
-    && grep -qF 'trap cleanup_startup EXIT INT TERM' "$launcher" \
-    && grep -qF 'export NO_UPDATE=1' "$launcher" \
-    && ! grep -qE 'git (reset|clean)|brew upgrade|curl.+\|.+(ba)?sh' "$launcher" \
-    && [ -x "$launcher" ] \
-    && pass "macOS app packaging and update paths preserve bounded trusted execution" \
-    || fail "macOS app packaging or update path is stale, incomplete, or destructive"
+  erase_line="$(grep -anF '/usr/sbin/diskutil eraseVolume MS-DOS WOR_BOOT "$part1"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  type_line="$(grep -anF '"$sgdisk_bin" -t 1:ef00 -c 1:WOR_BOOT -t 2:0700 -c 2:WOR_INSTALL "$raw_device"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  verify_line="$(grep -anF 'verify_written_image "$DEVICE" "$PART1" "$PART2" "$boot_mount" "$win_mount"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  finalize_call_line="$(grep -anF 'darwin_finalize_partition_types_or_die "$DEVICE" "$sgdisk_bin"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  final_verify_line="$(grep -anF 'darwin_verify_final_partition_types_or_die "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  [ -n "$erase_line" ] && [ -n "$type_line" ] && [ -n "$verify_line" ] && [ -n "$finalize_call_line" ] && [ -n "$final_verify_line" ] \
+    && [ "$erase_line" -lt "$type_line" ] && [ "$verify_line" -lt "$finalize_call_line" ] && [ "$finalize_call_line" -lt "$final_verify_line" ] \
+    && pass "macOS restores the EFI GPT type after copying and verifying the mounted files" \
+    || fail "macOS retags WOR_BOOT too early, or leaves it as Microsoft Basic Data"
 
-  if bash -c '
-    set -e
-    DIRECTORY="$1/Contents/Resources/runtime" source "$1/Contents/Resources/runtime/install-wor.sh" source >/dev/null 2>&1
-    source "$1/Contents/Resources/runtime/src/lib/metadata.sh"
-    [ "$WOR_FLASHER_VERSION" == "$(sed -n "s/^[[:space:]]*\"version\": \"\([^\"]*\)\".*/\1/p" "$1/Contents/Resources/runtime-manifest.json")" ]
-    [ ! -e "$1/Contents/Resources/runtime/cache" ]
-  ' _ "$REPO_DIR/release/macos/WoR-Flasher.app" ;then
-    pass "packaged macOS engine loads without modifying its immutable runtime"
-  else
-    fail "packaged macOS engine load failed or modified its immutable runtime"
-  fi
-
-  launcher_test_dir="$(mktemp -d "${TMPDIR:-/tmp}/wor launcher state.XXXXXX")"
-  if WOR_LAUNCHER_SOURCE_ONLY=1 WOR_APP_SUPPORT_DIR="$launcher_test_dir/Application Support" bash -c '
-    set -e
-    source "$1"
-    CHECKOUT_DIR="$2/missing checkout"
-    select_runtime
-    [ "$REPO_DIR" == "$EMBEDDED_RUNTIME" ]
-    bootstrap_embedded_runtime
-    select_runtime
-    case "$REPO_DIR" in "$WOR_APP_SUPPORT_DIR"/runtimes/*/runtime) ;; *) exit 1 ;; esac
-    validate_runtime "$REPO_DIR" "$RUNTIME_MANIFEST"
-    cp "$EMBEDDED_MANIFEST" "$RUNTIME_MANIFEST"
-    printf 'stale\n' >> "$REPO_DIR/install-wor.sh"
-    bootstrap_embedded_runtime
-    select_runtime
-    cmp -s "$RUNTIME_MANIFEST" "$EMBEDDED_MANIFEST"
-    printf "tampered\n" >> "$REPO_DIR/install-wor.sh"
-    select_runtime
-    [ "$REPO_DIR" == "$EMBEDDED_RUNTIME" ]
-  ' _ "$launcher" "$launcher_test_dir" ;then
-    pass "macOS runtime bootstrap handles spaces and rejects a tampered active runtime"
-  else
-    fail "macOS runtime bootstrap or tampered-runtime fallback failed"
-  fi
-  rm -rf "$launcher_test_dir"
-
-  launcher_test_dir="$(mktemp -d)"
-  if WOR_LAUNCHER_SOURCE_ONLY=1 WOR_APP_SUPPORT_DIR="$launcher_test_dir/support" WOR_CURL_BIN="$(command -v curl)" bash -c '
-    set -e
-    source "$1"
-    metadata_value() { sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" "$1"; }
-    CHECKOUT_DIR="$2/no-checkout"
-    bootstrap_embedded_runtime
-    select_runtime
-    update_root="$2/update"
-    mkdir -p "$update_root/runtime"
-    cp -R "$EMBEDDED_RUNTIME/." "$update_root/runtime/"
-    sed "s/\"version\": \"[^\"]*\"/\"version\": \"9.9.9\"/" "$EMBEDDED_MANIFEST" > "$update_root/runtime-manifest.json"
-    tar -czf "$2/runtime.tar.gz" -C "$update_root" runtime runtime-manifest.json
-    update_digest="$(shasum -a 256 "$2/runtime.tar.gz" | awk "{print \$1}")"
-    printf "{\"version\":\"9.9.9\",\"url\":\"file://%s/runtime.tar.gz\",\"sha256\":\"%s\"}\n" "$2" "$update_digest" > "$2/metadata.json"
-    ask_to_continue() { return 0; }
-    WOR_CURL_BIN="$(command -v curl)" WOR_UPDATE_METADATA_URL="file://$2/metadata.json" WOR_ALLOW_INSECURE_UPDATE=1 check_for_runtime_update
-    [ "$(cat "$ACTIVE_RUNTIME_FILE")" == 9.9.9 ]
-    [ "$(cat "$PREVIOUS_RUNTIME_FILE")" == "$(manifest_version "$EMBEDDED_MANIFEST")" ]
-    select_runtime
-    [ "$(manifest_version "$RUNTIME_MANIFEST")" == 9.9.9 ]
-    printf "broken\n" >> "$REPO_DIR/install-wor.sh"
-    select_runtime
-    [ "$(manifest_version "$RUNTIME_MANIFEST")" == "$(manifest_version "$EMBEDDED_MANIFEST")" ]
-  ' _ "$launcher" "$launcher_test_dir" ;then
-    pass "verified macOS runtime update promotes atomically and rolls back to the previous runtime"
-  else
-    fail "verified macOS runtime promotion or rollback failed"
-  fi
-  rm -rf "$launcher_test_dir"
-
-  launcher_test_dir="$(mktemp -d)"
-  if WOR_LAUNCHER_SOURCE_ONLY=1 WOR_APP_SUPPORT_DIR="$launcher_test_dir/support" WOR_CURL_BIN="$(command -v curl)" bash -c '
-    set -e
-    source "$1"
-    metadata_value() { sed -n "s/.*\"$2\":\"\([^\"]*\)\".*/\1/p" "$1"; }
-    CHECKOUT_DIR="$2/no-checkout"
-    bootstrap_embedded_runtime
-    select_runtime
-    active_before="$(cat "$ACTIVE_RUNTIME_FILE")"
-    prompts=0
-    ask_to_continue() { prompts=$((prompts + 1)); return 0; }
-    for candidate in "$active_before" 0.9.9 ;do
-      printf "{\"version\":\"%s\",\"url\":\"file://%s/missing.tar.gz\",\"sha256\":\"%064d\"}\n" "$candidate" "$2" 0 > "$2/metadata.json"
-      WOR_CURL_BIN="$(command -v curl)" WOR_UPDATE_METADATA_URL="file://$2/metadata.json" WOR_ALLOW_INSECURE_UPDATE=1 check_for_runtime_update
-    done
-    [ "$prompts" -eq 0 ]
-    [ "$(cat "$ACTIVE_RUNTIME_FILE")" == "$active_before" ]
-    [ ! -e "$PREVIOUS_RUNTIME_FILE" ]
-
-    mkdir -p "$2/incomplete/runtime"
-    printf "incomplete\n" > "$2/incomplete/runtime/README"
-    cp "$EMBEDDED_MANIFEST" "$2/incomplete/runtime-manifest.json"
-    tar -czf "$2/incomplete.tar.gz" -C "$2/incomplete" runtime runtime-manifest.json
-    incomplete_digest="$(shasum -a 256 "$2/incomplete.tar.gz" | awk "{print \$1}")"
-
-    printf "{\"version\":\"9.9.8\",\"url\":\"file://%s/incomplete.tar.gz\",\"sha256\":\"%064d\"}\n" "$2" 0 > "$2/metadata.json"
-    WOR_CURL_BIN="$(command -v curl)" WOR_UPDATE_METADATA_URL="file://$2/metadata.json" WOR_ALLOW_INSECURE_UPDATE=1 check_for_runtime_update
-    printf "{\"version\":\"9.9.9\",\"url\":\"file://%s/incomplete.tar.gz\",\"sha256\":\"%s\"}\n" "$2" "$incomplete_digest" > "$2/metadata.json"
-    WOR_CURL_BIN="$(command -v curl)" WOR_UPDATE_METADATA_URL="file://$2/metadata.json" WOR_ALLOW_INSECURE_UPDATE=1 check_for_runtime_update
-
-    [ "$prompts" -eq 2 ]
-    [ "$(cat "$ACTIVE_RUNTIME_FILE")" == "$active_before" ]
-    [ ! -e "$PREVIOUS_RUNTIME_FILE" ]
-    select_runtime
-    validate_runtime "$REPO_DIR" "$RUNTIME_MANIFEST"
-  ' _ "$launcher" "$launcher_test_dir" ;then
-    pass "macOS runtime updater preserves pointers across downgrade, digest, and incomplete-archive failures"
-  else
-    fail "macOS runtime updater changes state after a rejected update"
-  fi
-  rm -rf "$launcher_test_dir"
-
-  if WOR_LAUNCHER_SOURCE_ONLY=1 bash -c '
-    source "$1"
-    version_is_newer 1.0.3 1.0.2
-    version_is_newer 1.1 1.0.99
-    version_is_newer 2 1.99.99
-    ! version_is_newer 1.0.2 1.0.2
-    ! version_is_newer 1.0.1 1.0.2
-    ! version_is_newer 1.0.2-beta 1.0.1
-  ' _ "$launcher" ;then
-    pass "macOS runtime updates accept only newer numeric release versions"
-  else
-    fail "macOS runtime version ordering permits a downgrade or invalid release"
-  fi
-
-  launcher_test_dir="$(mktemp -d)"
-  if WOR_LAUNCHER_SOURCE_ONLY=1 bash -c '
-    set -e
-    source "$1"
-    cp -R "$EMBEDDED_RUNTIME" "$2/runtime"
-    cp "$EMBEDDED_MANIFEST" "$2/runtime-manifest.json"
-    validate_runtime "$2/runtime" "$2/runtime-manifest.json"
-    printf "tampered\n" >> "$2/runtime/install-wor.sh"
-    ! validate_runtime "$2/runtime" "$2/runtime-manifest.json"
-    cp "$EMBEDDED_RUNTIME/install-wor.sh" "$2/runtime/install-wor.sh"
-    chmod 644 "$2/runtime/install-wor.sh"
-    ! validate_runtime "$2/runtime" "$2/runtime-manifest.json"
-    rm "$2/runtime/install-wor.sh"
-    ln -s "$EMBEDDED_RUNTIME/install-wor.sh" "$2/runtime/install-wor.sh"
-    ! validate_runtime "$2/runtime" "$2/runtime-manifest.json"
-  ' _ "$launcher" "$launcher_test_dir" ;then
-    pass "macOS runtime validation rejects digest, mode, and symlink substitutions"
-  else
-    fail "macOS runtime validation accepts a tampered manifest entry"
-  fi
-  rm -rf "$launcher_test_dir"
-
-  launcher_test_dir="$(mktemp -d)"
-  mkdir -p "$launcher_test_dir/link-archive"
-  ln -s /tmp "$launcher_test_dir/link-archive/escape"
-  tar -czf "$launcher_test_dir/link.tar.gz" -C "$launcher_test_dir/link-archive" escape
-  if WOR_LAUNCHER_SOURCE_ONLY=1 bash -c '
-    source "$1"
-    ! archive_entries_are_safe "$2/link.tar.gz"
-  ' _ "$launcher" "$launcher_test_dir" ;then
-    pass "macOS runtime archive validation rejects symbolic links"
-  else
-    fail "macOS runtime archive validation accepts symbolic links"
-  fi
-  rm -rf "$launcher_test_dir"
-
-  launcher_test_dir="$(mktemp -d)"
-  resources_dir="$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Resources"
-  info_plist="$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Info.plist"
-
-  cp "$launcher" "$launcher_test_dir/version-mutant"
-  perl -0pi -e 's/done\n  return 1\n}\n\nvalidate_runtime/done\n  return 0\n}\n\nvalidate_runtime/' "$launcher_test_dir/version-mutant"
-  if WOR_LAUNCHER_SOURCE_ONLY=1 WOR_APP_RESOURCES_DIR="$resources_dir" WOR_APP_INFO_PLIST="$info_plist" bash -c '
-    source "$1"
-    version_is_newer 1.0.2 1.0.2
-  ' _ "$launcher_test_dir/version-mutant" ;then
-    pass "version-order test detects an equal-version acceptance mutation"
-  else
-    fail "version-order mutation did not alter the focused test behavior"
-  fi
-
-  cp "$launcher" "$launcher_test_dir/integrity-mutant"
-  sed 's/\[ "$actual_digest" == "$expected_digest" \] && \[ "$actual_mode" == "$expected_mode" \]/[ "$actual_mode" == "$expected_mode" ]/' "$launcher_test_dir/integrity-mutant" > "$launcher_test_dir/integrity-mutant.tmp"
-  mv "$launcher_test_dir/integrity-mutant.tmp" "$launcher_test_dir/integrity-mutant"
-  if WOR_LAUNCHER_SOURCE_ONLY=1 WOR_APP_RESOURCES_DIR="$resources_dir" WOR_APP_INFO_PLIST="$info_plist" bash -c '
-    set -e
-    source "$1"
-    cp -R "$EMBEDDED_RUNTIME" "$2/runtime"
-    cp "$EMBEDDED_MANIFEST" "$2/runtime-manifest.json"
-    printf "tampered\n" >> "$2/runtime/install-wor.sh"
-    validate_runtime "$2/runtime" "$2/runtime-manifest.json"
-  ' _ "$launcher_test_dir/integrity-mutant" "$launcher_test_dir" ;then
-    pass "runtime-integrity test detects a removed digest guard"
-  else
-    fail "digest mutation did not alter the focused test behavior"
-  fi
-
-  cp "$launcher" "$launcher_test_dir/symlink-mutant"
-  sed 's/\[ -f "$runtime_root\/$path" \] && \[ ! -L "$runtime_root\/$path" \]/[ -f "$runtime_root\/$path" ]/' "$launcher_test_dir/symlink-mutant" > "$launcher_test_dir/symlink-mutant.tmp"
-  mv "$launcher_test_dir/symlink-mutant.tmp" "$launcher_test_dir/symlink-mutant"
-  if WOR_LAUNCHER_SOURCE_ONLY=1 WOR_APP_RESOURCES_DIR="$resources_dir" WOR_APP_INFO_PLIST="$info_plist" bash -c '
-    set -e
-    source "$1"
-    cp -R "$EMBEDDED_RUNTIME" "$2/symlink-runtime"
-    cp "$EMBEDDED_MANIFEST" "$2/symlink-manifest.json"
-    rm "$2/symlink-runtime/install-wor.sh"
-    ln -s "$EMBEDDED_RUNTIME/install-wor.sh" "$2/symlink-runtime/install-wor.sh"
-    validate_runtime "$2/symlink-runtime" "$2/symlink-manifest.json"
-  ' _ "$launcher_test_dir/symlink-mutant" "$launcher_test_dir" ;then
-    pass "runtime-integrity test detects a removed symlink guard"
-  else
-    fail "symlink mutation did not alter the focused test behavior"
-  fi
-
-  cp "$launcher" "$launcher_test_dir/archive-mutant"
-  sed 's/substr($1, 1, 1) != "-" && substr($1, 1, 1) != "d"/0/' "$launcher_test_dir/archive-mutant" > "$launcher_test_dir/archive-mutant.tmp"
-  mv "$launcher_test_dir/archive-mutant.tmp" "$launcher_test_dir/archive-mutant"
-  mkdir -p "$launcher_test_dir/mutation-link-archive"
-  ln -s /tmp "$launcher_test_dir/mutation-link-archive/escape"
-  tar -czf "$launcher_test_dir/mutation-link.tar.gz" -C "$launcher_test_dir/mutation-link-archive" escape
-  if WOR_LAUNCHER_SOURCE_ONLY=1 WOR_APP_RESOURCES_DIR="$resources_dir" WOR_APP_INFO_PLIST="$info_plist" bash -c '
-    source "$1"
-    archive_entries_are_safe "$2/mutation-link.tar.gz"
-  ' _ "$launcher_test_dir/archive-mutant" "$launcher_test_dir" ;then
-    pass "archive-safety test detects a removed entry-type guard"
-  else
-    fail "archive entry-type mutation did not alter the focused test behavior"
-  fi
-
-  awk '
-    /selected=.*ACTIVE_RUNTIME_FILE/ { sub("ACTIVE_RUNTIME_FILE", "PREVIOUS_RUNTIME_FILE") }
-    /\|\| selected=.*PREVIOUS_RUNTIME_FILE/ { sub("PREVIOUS_RUNTIME_FILE", "ACTIVE_RUNTIME_FILE") }
-    { print }
-  ' "$launcher" > "$launcher_test_dir/fallback-mutant"
-  if WOR_LAUNCHER_SOURCE_ONLY=1 WOR_APP_SUPPORT_DIR="$launcher_test_dir/support" WOR_APP_RESOURCES_DIR="$resources_dir" WOR_APP_INFO_PLIST="$info_plist" bash -c '
-    set -e
-    source "$1"
-    CHECKOUT_DIR="$2/no-checkout"
-    bootstrap_embedded_runtime
-    mkdir -p "$RUNTIMES_DIR/9.9.9"
-    cp -R "$EMBEDDED_RUNTIME" "$RUNTIMES_DIR/9.9.9/runtime"
-    sed "s/\"version\": \"[^\"]*\"/\"version\": \"9.9.9\"/" "$EMBEDDED_MANIFEST" > "$RUNTIMES_DIR/9.9.9/runtime-manifest.json"
-    write_runtime_pointer "$PREVIOUS_RUNTIME_FILE" 9.9.9
-    select_runtime
-    [ "$(manifest_version "$RUNTIME_MANIFEST")" == 9.9.9 ]
-  ' _ "$launcher_test_dir/fallback-mutant" "$launcher_test_dir" ;then
-    pass "runtime-selection test detects an active/previous priority mutation"
-  else
-    fail "fallback-order mutation did not alter the focused test behavior"
-  fi
-  rm -rf "$launcher_test_dir"
-
-  launcher_test_dir="$(mktemp -d)"
-  if TMPDIR="$launcher_test_dir" WOR_LAUNCHER_SOURCE_ONLY=1 bash -c '
-    source "$1"
-    [ -z "$(find "$2" -mindepth 1 -print -quit)" ] || exit 1
-    STARTUP_STATUS="$2/status"
-    STARTUP_DONE="$2/status.done"
-    startup_phase "Checking dependencies..."
-    [ "$(cat "$STARTUP_STATUS")" == "Checking dependencies..." ] || exit 1
-    cleanup_startup
-    [ ! -e "$STARTUP_STATUS" ] && [ ! -e "$STARTUP_DONE" ]
-  ' _ "$launcher" "$launcher_test_dir" ;then
-    pass "macOS launcher startup status is source-testable and cleans up its state"
-  else
-    fail "macOS launcher startup status leaks state or runs during source-only tests"
-  fi
-  rm -rf "$launcher_test_dir"
-
-  launcher_test_dir="$(mktemp -d)"
-  if TMPDIR="$launcher_test_dir" WOR_LAUNCHER_SOURCE_ONLY=1 BREW_CALLS="$launcher_test_dir/brew-calls" bash -c '
-    source "$1"
-    WOR_MACOS_BREW_FORMULAE=(git jq wimlib)
-    brew() {
-      printf "%s\n" "$*" >> "$BREW_CALLS"
-      if [ "$1 $2" == "list --formula" ];then
-        printf "git\n"
-      fi
-    }
-    ask_to_continue() { [ "$2" == Install ]; }
-    prepare_dependencies || exit 1
-    [ "$(grep -c "^list --formula$" "$BREW_CALLS")" -eq 1 ] || exit 1
-    [ "$(grep -c "^install jq wimlib$" "$BREW_CALLS")" -eq 1 ] || exit 1
-    [ "$(wc -l < "$BREW_CALLS" | tr -d " ")" -eq 2 ] || exit 1
-    [ "$HOMEBREW_NO_AUTO_UPDATE" == 1 ]
-  ' _ "$launcher" ;then
-    pass "macOS launcher inventories Homebrew once and installs only missing dependencies"
-  else
-    fail "macOS launcher repeats Homebrew inventory or installs the wrong dependencies"
-  fi
-  rm -rf "$launcher_test_dir"
-
-  launcher_test_dir="$(mktemp -d)"
-  if TMPDIR="$launcher_test_dir" WOR_LAUNCHER_SOURCE_ONLY=1 UPDATE_REPO_URL=https://example.com/wor-flasher.git UPDATE_REF=refs/heads/main UPDATE_PROBE_KILLED="$launcher_test_dir/probe-killed" bash -c '
-    source "$1"
-    git() {
-      if [ "$1" == -C ];then
-        shift 2
-      fi
-      case "$1 $2" in
-        "rev-parse --git-dir") printf ".git\n" ;;
-        "status --porcelain") ;;
-        "rev-parse HEAD") printf "1111111111111111111111111111111111111111\n" ;;
-        "ls-remote https://example.com/wor-flasher.git")
-          trap "touch \"$UPDATE_PROBE_KILLED\"; exit 0" TERM
-          while :;do /bin/sleep 1;done
-          ;;
-        *) exit 1 ;;
-      esac
-    }
-    sleep() { :; }
-    ask_to_continue() { exit 1; }
-    check_for_update || exit 1
-    [ -e "$UPDATE_PROBE_KILLED" ] || exit 1
-    [ -z "$(find "$TMPDIR" -name "wor-flasher-update.*" -print -quit)" ]
-  ' _ "$launcher" ;then
-    pass "macOS launcher bounds a stalled update probe and removes its temporary response"
-  else
-    fail "macOS launcher leaves a stalled update probe or its temporary response behind"
-  fi
-  rm -rf "$launcher_test_dir"
-
+  #shellcheck disable=SC1091
+  source "$TEST_SCRIPT_DIR/run-tests-macos.sh"
   if [ "$(uname -s)" == Darwin ];then
-    metadata_name="$(run_in_engine 'printf %s "$WOR_FLASHER_NAME"')"
-    metadata_version="$(run_in_engine 'printf %s "$WOR_FLASHER_VERSION"')"
-    metadata_logo="$(run_in_engine 'printf %s "$WOR_LOGO_FILENAME"')"
-    metadata_assets="$(run_in_engine 'printf %s "$WOR_ASSETS_DIRNAME"')"
-    metadata_icon="$(run_in_engine 'printf %s "$WOR_ICON_FILENAME"')"
-    info_plist="$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Info.plist"
-    plutil -lint "$info_plist" >/dev/null 2>&1 \
-      && [ "$(plutil -extract CFBundleDisplayName raw -o - "$info_plist")" == "$metadata_name" ] \
-      && [ "$(plutil -extract CFBundleExecutable raw -o - "$info_plist")" == "$metadata_name" ] \
-      && [ "$(plutil -extract CFBundleIconFile raw -o - "$info_plist")" == "$metadata_icon" ] \
-      && [ "$(plutil -extract CFBundleIconName raw -o - "$info_plist")" == "$metadata_name" ] \
-      && [ -s "$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Resources/$metadata_icon" ] \
-      && [ -f "$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Resources/$metadata_logo" ] \
-      && cmp -s "$REPO_DIR/$metadata_assets/$metadata_logo" "$REPO_DIR/release/macos/WoR-Flasher.app/Contents/Resources/$metadata_logo" \
-      && [ "$(plutil -extract CFBundleName raw -o - "$info_plist")" == "$metadata_name" ] \
-      && [ "$(plutil -extract CFBundleShortVersionString raw -o - "$info_plist")" == "$metadata_version" ] \
-      && [ "$(plutil -extract CFBundleVersion raw -o - "$info_plist")" == "$metadata_version" ] \
-      && pass "macOS app bundle metadata matches the shared name, version, and logo" \
-      || fail "macOS app bundle metadata differs from the shared name, version, or logo"
+    macos_app_and_launcher_checks
   else
-    skip "macOS app property-list validation requires macOS"
-  fi
-  else
-    skip "macOS app packaging and update paths require macOS"
-    skip "packaged macOS engine loading requires macOS"
-    skip "macOS runtime bootstrap and tamper fallback require macOS"
-    skip "verified macOS runtime promotion and rollback require macOS"
-    skip "macOS runtime rejected-update handling requires macOS"
-    skip "macOS runtime version ordering requires macOS"
-    skip "macOS runtime manifest validation requires macOS"
-    skip "macOS runtime archive validation requires macOS"
-    skip "macOS runtime version-order mutation check requires macOS"
-    skip "macOS runtime digest mutation check requires macOS"
-    skip "macOS runtime symlink mutation check requires macOS"
-    skip "macOS runtime archive-safety mutation check requires macOS"
-    skip "macOS runtime fallback-order mutation check requires macOS"
-    skip "macOS launcher startup state check requires macOS"
-    skip "macOS launcher Homebrew dependency check requires macOS"
-    skip "macOS launcher update-probe timeout check requires macOS"
-    skip "macOS app property-list validation requires macOS"
+    for macos_only_name in "${MACOS_ONLY_TEST_NAMES[@]}" ;do
+      skip "$macos_only_name (requires macOS; detected host is $(uname -s))"
+    done
   fi
 
   grep -qF 'macos_start_cli()' "$REPO_DIR/install-wor-gui.sh" \
@@ -700,8 +338,11 @@ static_checks() {
 
   grep -qF 'WOR_WINDOW_TITLE' "$REPO_DIR/src/lib/metadata.sh" \
     && grep -qF '"$WOR_WINDOW_TITLE"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"${10:-$WOR_WINDOW_TITLE}"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"${13:-$WOR_APP_TITLE}"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"$WOR_WINDOW_TITLE" Back 0 "$WOR_APP_TITLE"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--title="$WOR_WINDOW_TITLE"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- '--class="$WOR_ICON_NAME"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--class="$WOR_ICON_NAME"' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'ensure_linux_desktop_identity()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'StartupWMClass=$WOR_ICON_NAME' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Icon=$icon_path' "$REPO_DIR/install-wor-gui.sh" \
@@ -712,8 +353,8 @@ static_checks() {
     && grep -qF 'attributedPrompt.mutableString.appendString($(promptText))' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'NSMutableAttributedString.alloc.initWithString' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '"$WOR_LOGO_PATH"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "WOR_LOGO_FILENAME='logo-full.png'" "$REPO_DIR/src/lib/metadata.sh" \
-    && grep -qF "WOR_ASSETS_DIRNAME='assets'" "$REPO_DIR/src/lib/metadata.sh" \
+    && [ "$(run_in_engine 'printf %s "$WOR_LOGO_FILENAME"')" == 'logo-full.png' ] \
+    && [ "$(run_in_engine 'printf %s "$WOR_ASSETS_DIRNAME"')" == 'assets' ] \
     && grep -qF 'WOR_LOGO_PATH="$WOR_ASSETS_DIR/$WOR_LOGO_FILENAME"' "$REPO_DIR/install-wor.sh" \
     && grep -qF ': "${WOR_ANNOUNCEMENT_TIMEOUT:=30}"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "'countdownTick:'" "$REPO_DIR/install-wor-gui.sh" \
@@ -742,7 +383,11 @@ static_checks() {
     && ! grep -qF 'Refresh detected devices' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'tkinter' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose installation mode' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "macos_choose '' \"\$confirm_summary\" Flash Back 'Advanced...' Advanced '' Flash" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'macos_confirm_flash() {' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const heading = $.NSTextField.labelWithString' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "const warning = $.NSTextField.labelWithString('All data on the target drive will be erased.')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "const flashButton = $.NSButton.buttonWithTitleTargetAction('Flash'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'confirmation="$(macos_confirm_flash)"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '[ "$confirmation" == Cancel ] && exit 0' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'macos_advanced_options' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'display alert' "$REPO_DIR/install-wor-gui.sh" \
@@ -825,15 +470,35 @@ disk5 Second drive"
 
   grep -qF 'device_tree_address=0x3e0000' "$REPO_DIR/config-templates/pi4.config.txt" \
     && grep -qF 'device_tree_end=0x400000' "$REPO_DIR/config-templates/pi4.config.txt" \
-    && grep -qF 'read_config_template "pi${RPI_MODEL}.config.txt"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'read_config_template "pi$1.config.txt"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'set_default_config_txt' "$REPO_DIR/install-wor-gui.sh" \
     && pass "Pi 4 GUI config matches the current UEFI memory range" \
     || fail "Pi 4 GUI config uses stale device-tree addresses"
+
+  #stepping back to change the model must not carry the previous model's boot config onto the drive,
+  #while a config.txt the user has edited stays theirs
+  run_in_engine '
+    RPI_MODEL=5; CONFIG_TXT=""; CONFIG_TXT_MODEL=""
+    set_default_config_txt
+    pi5="$CONFIG_TXT"
+    RPI_MODEL=4
+    set_default_config_txt
+    [ "$CONFIG_TXT" == "$(default_config_txt 4)" ] || exit 1
+    [ "$CONFIG_TXT" != "$pi5" ] || exit 1
+    CONFIG_TXT="$CONFIG_TXT
+#edited by the user"
+    edited="$CONFIG_TXT"
+    RPI_MODEL=3
+    set_default_config_txt
+    [ "$CONFIG_TXT" == "$edited" ] || exit 1
+  ' \
+    && pass "changing the Pi model reloads that model config.txt without discarding user edits" \
+    || fail "changing the Pi model keeps the previous model config.txt, or overwrites a user edit"
   #v1.51/v1.52 report a zero MAC (pftf/RPi4#283); v1.52/v1.53 do not boot from microSD (pftf/RPi4#285)
-  grep -qF "UEFI_VER_PI4='v1.50'" "$REPO_DIR/install-wor.sh" \
-    && ! grep -qF "UEFI_VER_PI4='v1.51'" "$REPO_DIR/install-wor.sh" \
-    && ! grep -qF "UEFI_VER_PI4='v1.52'" "$REPO_DIR/install-wor.sh" \
-    && ! grep -qF "UEFI_VER_PI4='v1.53'" "$REPO_DIR/install-wor.sh" \
+  [ "$(run_in_engine 'printf %s "$WOR_DEFAULT_UEFI_VER_PI4"')" == 'v1.50' ] \
+    && ! grep -qF '"uefiVerPi4": "v1.51"' "$REPO_DIR/src/config/metadata.json" \
+    && ! grep -qF '"uefiVerPi4": "v1.52"' "$REPO_DIR/src/config/metadata.json" \
+    && ! grep -qF '"uefiVerPi4": "v1.53"' "$REPO_DIR/src/config/metadata.json" \
     && pass "Pi 4 pins the only UEFI release with a working MAC address and microSD boot" \
     || fail "Pi 4 pins a UEFI release with a zero Ethernet MAC or a microSD boot regression"
 
@@ -900,6 +565,15 @@ disk5 Second drive"
     && pass "config-templates/ files exist as static, locally-editable files with no redundant per-file repo sync" \
     || fail "config-templates/ files are missing, or the removed per-file sync mechanism is still present"
 
+  [ "$(jq -r 'has("system")' "$REPO_DIR/config-templates/config.json" 2>/dev/null)" == false ] \
+    && grep -qF '"peInstallerUrl"' "$REPO_DIR/src/config/metadata.json" \
+    && grep -qF '"peInstallerSha256"' "$REPO_DIR/src/config/metadata.json" \
+    && grep -qF '"uefiVerPi4"' "$REPO_DIR/src/config/metadata.json" \
+    && grep -qF '"driverVer"' "$REPO_DIR/src/config/metadata.json" \
+    && grep -qF '"repoSlug"' "$REPO_DIR/src/config/metadata.json" \
+    && pass "default config omits project pins; runtime metadata supplies PE, firmware, driver and update defaults" \
+    || fail "default config still carries project pins, or metadata defaults are missing"
+
   #these must be committed: a fresh clone without them silently writes a blank config.txt and the Pi will not boot
   if command -v git >/dev/null && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
     [ "$(git -C "$REPO_DIR" ls-files config-templates/ | wc -l | tr -d ' ')" == 9 ] \
@@ -913,12 +587,31 @@ disk5 Second drive"
   grep -qF 'macos_advanced_options() {' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "name: 'WorAdvancedController'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'NSButton.checkboxWithTitleTargetAction' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'Automatically disable the Pi 4 3 GB RAM limit after install' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'Skip flashing the device (dry run)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Automatically disable the Pi 4 3 GB RAM limit after install' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'Skip flashing the device (dry run)' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'function addSectionHeader(title)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "addSectionHeader('Windows setup')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "addSectionHeader('Firmware and drivers')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "addSectionHeader('Validation')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "addSectionHeader('Downloads')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "addSectionHeader('Windows account')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "addSectionHeader('Regional settings')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "addSectionHeader('Raspberry Pi boot config')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "accountCheckbox = $.NSButton.checkboxWithTitleTargetAction('Create a local Windows administrator account'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'accountUsernameField.enabled = enabled' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'accountPasswordField.enabled = enabled' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'updateAccountEditableState()' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "localeCheckbox = $.NSButton.checkboxWithTitleTargetAction('Configure Windows keyboard and regional settings'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'localePopup.enabled = enabled' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'localePopup.addItemWithTitle' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const localeSpec = ObjC.unwrap(args.objectAtIndex(18))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const windowTitle = ObjC.unwrap(args.objectAtIndex(19))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "title: windowTitle + ' | Advanced Options'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"$WIN_LANG" "$WINDOWS_ACCOUNT_SETUP" "$WINDOWS_LOCALE_SETUP" "$locale_spec" "$WOR_WINDOW_TITLE"' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(grep -cF 'export_installer_settings' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
     && grep -qF 'export "${WOR_INSTALLER_SETTINGS[@]}"' "$REPO_DIR/install-wor.sh" \
     && grep -qF "editMenu.addItemWithTitleActionKeyEquivalent('Copy', 'copy:', 'c')" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'app.mainMenu = mainMenu' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'app.mainMenu = mainMenu' "$REPO_DIR/src/lib/gui.sh" \
     && pass "macOS and Linux GUIs expose an Advanced Options window for site-documented customizations" \
     || fail "Advanced Options window is missing or incomplete"
 
@@ -940,11 +633,12 @@ disk5 Second drive"
 
   #a modal session never services default-mode run loop sources, so the Dock's quit Apple Event
   #is only delivered because each window registers a handler and pumps default mode from a timer
-  [ "$(grep -cF "'handleQuitEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
-    && [ "$(grep -cF "'pumpEvents:': {" "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
-    && [ "$(grep -cF '0x61657674, 0x71756974' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
-    && [ "$(grep -cF 'addTimerForMode(pumpTimer' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
-    && [ "$(grep -cF 'app.runModalForWindow(window)' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+  [ "$(grep -cF "'handleQuitEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 5 ] \
+    && [ "$(grep -cF "'pumpEvents:': {" "$REPO_DIR/install-wor-gui.sh")" == 5 ] \
+    && [ "$(grep -cF 'worInstallWindowHandlers(controller)' "$REPO_DIR/install-wor-gui.sh")" == 5 ] \
+    && grep -qF '0x61657674, 0x71756974' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'addTimerForMode(pumpTimer' "$REPO_DIR/src/lib/gui.sh" \
+    && [ "$(grep -cF 'app.runModalForWindow(window)' "$REPO_DIR/install-wor-gui.sh")" == 5 ] \
     && pass "every macOS window responds to the Dock's Quit menu item" \
     || fail "a macOS window cannot receive the Dock's quit Apple Event"
 
@@ -956,9 +650,9 @@ disk5 Second drive"
 
   #guards against the same class of breakage from any cause: run the real script far enough to
   #register its function definitions, then confirm every macos_* helper actually became a function
-  macos_fn_expected="$(grep -c '^macos_[a-z_]*() {' "$REPO_DIR/install-wor-gui.sh")"
+  macos_fn_expected="$(grep -ac '^macos_[a-z_]*() {' "$REPO_DIR/install-wor-gui.sh")"
   macos_fn_probe="$(mktemp)"
-  awk -v line="$(grep -n '^macos_start_cli() {' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" \
+  awk -v line="$(grep -an '^macos_start_cli() {' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" \
     'NR==line{print "declare -F | grep -c \"^declare -f macos_\"; exit 0"} {print}' \
     "$REPO_DIR/install-wor-gui.sh" > "$macos_fn_probe"
   #macos_start_cli itself is not defined yet at the probe point.
@@ -976,25 +670,25 @@ disk5 Second drive"
     && grep -qF "enabled: parts[2] !== '0'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'checkbox.enabled = rows[i].enabled' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(grep -cF 'pi4_applicable=1 || pi4_applicable=0' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
-    && grep -qF 'not applicable to the Pi $RPI_MODEL' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'not applicable to the Pi %s' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF '2) [ "$pi4_applicable" == 1 ] && PI4_AUTO_DISABLE_3GB="$line" ;;' "$REPO_DIR/install-wor-gui.sh" \
     && pass "the Pi 4 RAM-unlock toggle is greyed out and ignored on other Pi models" \
     || fail "the Pi 4 RAM-unlock toggle is not gated on the selected Pi model"
 
   #in recovery mode the custom config.txt only boots the installer media
-  grep -qF "config_scope='applied to the boot partition'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'not the installed Windows drive' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "labelWithString('config.txt (' + configScope + '):')" "$REPO_DIR/install-wor-gui.sh" \
+  grep -qF "printf 'boot partition'" "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'not the Windows drive' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF "printf 'Apply the customized config.txt to the %s'" "$REPO_DIR/src/lib/gui.sh" \
     && pass "the config.txt editor states its scope for the selected installation mode" \
     || fail "the config.txt editor does not state its scope per installation mode"
 
   grep -qF '[ -z "$SKIP_IMAGE_VERIFICATION" ] && SKIP_IMAGE_VERIFICATION=0' "$REPO_DIR/install-wor.sh" \
     && [ "$(grep -cF 'if [ "$SKIP_IMAGE_VERIFICATION" == 1 ];then' "$REPO_DIR/install-wor.sh")" == 2 ] \
     && [ "$(grep -cF 'verify_written_image "$DEVICE" "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh")" == 2 ] \
-    && grep -qF 'Use the latest UEFI firmware instead of the tested pinned version ($uefi_pinned)' "$REPO_DIR/install-wor-gui.sh" \
-    && [ "$(grep -cF 'Use the latest Windows ARM64 drivers instead of the pinned version ($DRIVER_VER)' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
-    && grep -qF 'Skip verifying the written image after flashing (not recommended)' "$REPO_DIR/install-wor-gui.sh" \
-    && [ "$(grep -cF 'To continue, click Flash. To review or change these settings, click Advanced.' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && grep -qF 'Use the latest UEFI firmware instead of the tested pinned version (%s)' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'Use the latest Windows ARM64 drivers instead of the pinned version (%s)' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'Skip verifying the written image after flashing' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'Flash begins immediately after administrator approval. Use Advanced to change these settings.' "$REPO_DIR/install-wor-gui.sh" \
     && pass "Skip-verification option defaults off, wraps both verify_written_image calls, and confirm screens show pinned versions and guidance" \
     || fail "Skip-verification option or confirm-screen guidance is missing or incomplete"
 
@@ -1012,13 +706,21 @@ disk5 Second drive"
     && grep -qF 'mounted_wimverify()' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'mounted_wimdir "$boot_mount/sources/boot.wim"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'if [ ! -z "$CONFIG_TXT" ] && [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ];then' "$REPO_DIR/install-wor.sh" \
-    && grep -qF "applyConfigCheckbox = \$.NSButton.checkboxWithTitleTargetAction('Apply the customized config.txt below" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "applyConfigCheckbox = \$.NSButton.checkboxWithTitleTargetAction(applyConfigLabel, controller, 'applyConfigToggled:')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'function updateConfigEditableState() {' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'textView.editable = enabled' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'scrollView.alphaValue = enabled ? 1.0 : 0.5' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "Apply the customized config.txt below (unchecked uses the firmware's default config.txt)" "$REPO_DIR/install-wor-gui.sh" \
-    && pass "Applying the customized config.txt is a togglable checkbox that greys out the editor on macOS" \
+    && grep -qF "editConfigButton = \$.NSButton.buttonWithTitleTargetAction('View / Edit…', controller, 'editConfigClicked:')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'editConfigButton.enabled = enabled' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "dialog.messageText = \$('View / Edit config.txt')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'configTxtValue = ObjC.unwrap(editor.string)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'out.push(configTxtValue)' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "Applying the customized config.txt is a togglable checkbox that enables its separate editor on macOS" \
     || fail "Apply-customized-config.txt toggle is missing or incomplete"
+  apply_config_line="$(grep -anF "applyConfigCheckbox = $.NSButton.checkboxWithTitleTargetAction(applyConfigLabel," "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
+  config_editor_line="$(grep -anF "editConfigButton = $.NSButton.buttonWithTitleTargetAction('View / Edit…'" "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
+  [ -n "$apply_config_line" ] && [ -n "$config_editor_line" ] && [ "$apply_config_line" -lt "$config_editor_line" ] \
+    && [ "$((config_editor_line - apply_config_line))" -lt 10 ] \
+    && pass "Use customized config.txt and its editor button share one settings row" \
+    || fail "Use customized config.txt is not grouped with its editor button"
 
   grep -qF '[ -z "$HIDE_EMPTY_DRIVES" ] && HIDE_EMPTY_DRIVES=1' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'configure_pe_settings_ini() {' "$REPO_DIR/install-wor.sh" \
@@ -1027,7 +729,7 @@ disk5 Second drive"
     && pass "HideEmptyDrives is written into the cached PE settings.ini before boot.wim assembly" \
     || fail "HideEmptyDrives support is missing or incomplete"
 
-  grep -qF 'Allow Windows setup to continue without a network connection' "$REPO_DIR/install-wor-gui.sh" \
+  grep -qF 'Allow Windows setup to continue without a network connection' "$REPO_DIR/src/lib/gui.sh" \
     && ! grep -qF "step=oobe" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'OOBE_NETWORK_BYPASS' "$REPO_DIR/install-wor.sh" \
     && pass "macOS and Linux GUIs expose the OOBE network choice only in Advanced Options" \
@@ -1052,29 +754,78 @@ disk5 Second drive"
     && pass "both GUIs record the installer exit status from the job itself, not a sibling wait" \
     || fail "a GUI still waits on a sibling process, so it reports completion immediately"
 
-  #macOS GUI launches have no reusable terminal timestamp, so a password-only preauth just creates
-  #one extra prompt. Linux still preauthenticates because its sudo timestamp is reusable there.
-  gui_auth_wait_line="$(grep -n 'while \[ ! -e "\$auth_marker" \] && \[ ! -f "\$done_marker" \] ;do' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
-  macos_progress_line="$(grep -n '<<<"\$progress_jxa"' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
+  #After Flash, the GUI opens progress immediately and defers the single sudo prompt until the
+  #destructive disk step, so long setup/download/prep work cannot expire it before use.
+  gui_auth_wait_line="$(grep -an 'while \[ ! -e "\$auth_marker" \] && \[ ! -f "\$done_marker" \] ;do' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
+  macos_progress_line="$(grep -an '<<<"\$progress_jxa"' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
+  preauth_line="$(grep -anF '[ "$RUN_MODE" == gui ] && gui_preauthenticate' "$REPO_DIR/install-wor.sh" | cut -d: -f1)"
+  setup_line="$(grep -anF 'setup || exit 1' "$REPO_DIR/install-wor.sh" | cut -d: -f1)"
   [ -n "$gui_auth_wait_line" ] && [ -n "$macos_progress_line" ] \
-    && grep -qF 'export WOR_GUI_AUTH_MARKER="$auth_marker"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'GUI_PROGRESS_EARLY=1 gui_start_installer' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'gui_preauthenticate() {' "$REPO_DIR/install-wor.sh" \
-    && grep -qF '[ "$RUN_MODE" == gui ] && gui_preauthenticate' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'Administrator access: the first privileged disk operation will request the macOS password.' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'command sudo -n -v >/dev/null 2>&1; sleep 30' "$REPO_DIR/install-wor.sh" \
-    && pass "macOS GUI avoids password-only preauth while Linux keeps its reusable timestamp alive" \
-    || fail "macOS GUI still does password-only preauth or Linux lost timestamp keepalive"
+    && [ -n "$preauth_line" ] && [ -n "$setup_line" ] && [ "$preauth_line" -lt "$setup_line" ] \
+    && grep -aqF 'export WOR_GUI_AUTH_MARKER="$auth_marker"' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -aqF 'GUI_PROGRESS_EARLY=1 gui_start_installer' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -aqF 'gui_preauthenticate() {' "$REPO_DIR/install-wor.sh" \
+    && grep -aqF 'deferred until Step 5' "$REPO_DIR/install-wor.sh" \
+    && ! grep -aqF 'WOR_GUI_SUDO_PREAUTH_DONE=1' "$REPO_DIR/install-wor.sh" \
+    && grep -aqF 'command sudo -n -v >/dev/null 2>&1 || true; sleep 30' "$REPO_DIR/install-wor.sh" \
+    && pass "GUI defers the single sudo prompt until the destructive disk step" \
+    || fail "GUI still authenticates too early or can hide a sudo prompt behind progress"
 
-  #exactly one place may prompt: the GUI collecting a credential of its own was the second dialog users saw
+  #under `set -e` an unguarded refresh ends the keepalive on its first failure, and the session then
+  #lapses mid-flash into the refusal to prompt again
+  keepalive_iterations="$(
+    set -e
+    ( iterations=0
+      while [ "$iterations" -lt 3 ] ;do
+        iterations=$((iterations + 1))
+        false >/dev/null 2>&1 || true
+        printf '%s\n' "$iterations"
+      done ) | tail -n1
+  )"
+  [ "$keepalive_iterations" == 3 ] \
+    && grep -aqF '[ "${BASH_SUBSHELL:-0}" -eq 0 ] || return 0' "$REPO_DIR/install-wor.sh" \
+    && grep -aqF 'sleep 30; done ) >/dev/null 2>&1 </dev/null &' "$REPO_DIR/install-wor.sh" \
+    && grep -aqF ') >/dev/null 2>&1 </dev/null &' "$REPO_DIR/install-wor.sh" \
+    && ! grep -aqE 'command sudo -n -v >/dev/null 2>&1; sleep 30' "$REPO_DIR/install-wor.sh" \
+    && pass "the sudo keepalive survives a failed refresh instead of ending the session" \
+    || fail "a failed sudo refresh can still end the keepalive and strand the flash"
+
+  keepalive_hang_dir="$(mktemp -d)"
+  cat > "$keepalive_hang_dir/sudo" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$KEEPALIVE_HANG_LOG"
+case "$*" in
+  '-n -v') exit 1 ;;
+  '-A echo ok') exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$keepalive_hang_dir/sudo"
+  keepalive_hang_log="$keepalive_hang_dir/log"
+  keepalive_hang_status=0
+  PATH="$keepalive_hang_dir:$PATH" KEEPALIVE_HANG_LOG="$keepalive_hang_log" run_in_engine 'RUN_MODE=gui; MACOS_ASKPASS=/tmp/wor-test-askpass; captured="$(sudo echo ok 2>&1)"; printf "%s\n" "$captured"' >/dev/null 2>&1 || keepalive_hang_status=$?
+  [ "$keepalive_hang_status" == 0 ] \
+    && grep -qF -- '-A echo ok' "$keepalive_hang_log" \
+    && pass "GUI sudo does not start a keepalive inside command substitution" \
+    || fail "GUI sudo can hang when first used inside command substitution"
+  rm -rf "$keepalive_hang_dir"
+
+  #exactly one place may prompt: the first destructive sudo call in the installer subprocess
   [ "$(grep -cE '(^|[^n]) *sudo -v' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
-    && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 1 ] \
+    && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 0 ] \
     && grep -qF 'Administrator access: requesting macOS password with the native WoR-Flasher dialog.' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'if command sudo -n -v >/dev/null 2>&1;then' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'export WOR_GUI_SUDO_PROMPTED=1' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'command sudo -n "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'refusing to prompt in the console.' "$REPO_DIR/install-wor.sh" \
     && pass "the flash asks for the password once, in the process that uses it" \
     || fail "a credential is collected in more than one place, so the user is asked twice"
+
+  #a frozen "Creating WOR_BOOT..." line while the password dialog is up reads as a hang; say what it's waiting on
+  grep -qF "emit_gui_task_progress 0 'Waiting for administrator access...'" "$REPO_DIR/install-wor.sh" \
+    && [ "$(grep -cF "emit_gui_task_progress 0 'Waiting for administrator access...'" "$REPO_DIR/install-wor.sh")" == 2 ] \
+    && pass "the GUI progress window explains the administrator password dialog instead of appearing frozen" \
+    || fail "the GUI progress window gives no indication it is waiting on the password dialog"
 
   sudo_retry_dir="$(mktemp -d)"
   cat > "$sudo_retry_dir/sudo" <<'SH'
@@ -1099,6 +850,30 @@ SH
     || fail "GUI sudo retries with askpass after a real command failure"
   rm -rf "$sudo_retry_dir"
 
+  #after the first GUI sudo prompt, never ask again behind/near the progress window: either sudo -n works or the run fails
+  reauth_dir="$(mktemp -d)"
+  cat > "$reauth_dir/sudo" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "$REAUTH_LOG"
+case "$*" in
+  '-n -v') exit 1 ;;
+  '-A -v') exit 99 ;;
+  '-n failing-command') exit 42 ;;
+esac
+exit 1
+SH
+  chmod +x "$reauth_dir/sudo"
+  reauth_log="$reauth_dir/log"
+  reauth_status=0
+  PATH="$reauth_dir:$PATH" REAUTH_LOG="$reauth_log" run_in_engine 'RUN_MODE=gui WOR_GUI_SUDO_PROMPTED=1 MACOS_ASKPASS=/tmp/wor-test-askpass sudo failing-command' >/dev/null 2>&1 || reauth_status=$?
+  [ "$reauth_status" == 1 ] \
+    && ! grep -qF -- '-A -v' "$reauth_log" \
+    && ! grep -qF -- '-A failing-command' "$reauth_log" \
+    && grep -qF 'refusing to show a second password dialog during the flash' "$REPO_DIR/install-wor.sh" \
+    && pass "GUI sudo refuses a second password prompt after first use" \
+    || fail "GUI sudo can still ask for a second password after preauth"
+  rm -rf "$reauth_dir"
+
   #a failed flash must leave the log behind; the GUI has no terminal to fall back on
   grep -qF 'saved_log="$(wor_log_file)"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Installer log saved to $saved_log' "$REPO_DIR/install-wor-gui.sh" \
@@ -1106,24 +881,215 @@ SH
     && pass "a failed run keeps its installer log for diagnosis" \
     || fail "a failed run deletes the only record of what went wrong"
 
+  #canceling the password dialog fails before anything destructive runs; the completion screen must say so
+  #plainly instead of the generic "stopped unexpectedly" wording, which reads like a real crash
+  grep -qF "grep -qF 'Administrator authentication was canceled or unavailable' \"\$saved_log\"" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'No changes have been made to $DEVICE yet.' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "canceling the administrator password dialog is not reported as a script crash" \
+    || fail "canceling the administrator password dialog is reported as if the script crashed"
+
+  #mistyping the password 3 times gets the same friendly treatment, and both cases offer a retry
+  #instead of forcing a full app restart when nothing has been written to disk yet
+  grep -qF "grep -qF 'incorrect password attempts' \"\$saved_log\"" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "macos_choose '' \"\$password_retry_reason" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "retry Abort '' '' '' 'Try Again'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if [ "$password_retry_choice" == retry ];then' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "a failed password attempt offers to try again instead of only an OK button" \
+    || fail "a failed password attempt does not offer to try again"
+
+  #the downloads and extraction all finish before the first sudo call, so a retry must resume at the
+  #password step instead of repeating an entire run's worth of work for one mistyped password
+  grep -qF 'resume_at_flash=1' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'export WOR_RESUME_AT_FLASH="${resume_at_flash:-0}"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if [ "${WOR_RESUME_AT_FLASH:-0}" == 1 ] && flash_files_already_prepared ;then' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'if [ "$RESUME_AT_FLASH" != 1 ];then' "$REPO_DIR/install-wor.sh" \
+    && pass "retrying a password does not repeat the downloads and extraction" \
+    || fail "retrying a password starts the whole run over"
+
+  #the GUI sources install-wor.sh, which runs the update check; the installer subprocess must not
+  #repeat it, or every run (and every password retry) pays for a second network round-trip
+  grep -qF 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'export NO_UPDATE=1' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the GUI checks for updates once, not again in the installer subprocess" \
+    || fail "the GUI checks for updates twice per run"
+
+  #the success screen stacks banner, message and button down the middle at the image's own size.
+  #Number() and the literal 1 are load-bearing: JXA returns these as strings, so '650' + 40 built a
+  #bogus window frame, and the bridged NSTextAlignmentCenter constant (2) draws right-aligned here.
+  grep -qF "const primaryLabel = imagePath.length > 0 ? 'Complete' : 'OK'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'bannerWidth = rep ? Number(rep.pixelsWide) : Number(bannerImage.size.width)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'width = Math.max(600, bannerWidth + contentMargin * 2)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if (imagePath.length > 0) label.setAlignment(1)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Math.round((width - bannerWidth) / 2), textY + textHeight + 24' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const okX = imagePath.length > 0 ? Math.round((width - okWidth) / 2) : width - 20 - okWidth' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the completion screen centres the banner, message and button in one column" \
+    || fail "the completion screen no longer centres its banner, message and button"
+
+  #macOS can drop a freshly formatted FAT/exFAT volume part-way through the copy, so a mount point
+  #resolved once at the start goes stale and the next write dies with "No such file or directory"
+  grep -qF 'darwin_mount_point_or_die() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_mount_partition_or_die "$partition"' "$REPO_DIR/install-wor.sh" \
+    && [ "$(grep -cF 'darwin_mount_point_or_die "$PART1"' "$REPO_DIR/install-wor.sh")" -ge 4 ] \
+    && [ "$(grep -cF 'darwin_mount_point_or_die "$PART2"' "$REPO_DIR/install-wor.sh")" -ge 3 ] \
+    && pass "each copy step re-checks its mount instead of trusting a stale path" \
+    || fail "a dropped volume mid-copy still fails the whole flash"
+
+  #a flash runs long enough to walk away from, so both front-ends announce the result. soundNamed
+  #hands back a truthy wrapper for a missing name, so isNil is the only guard that actually works.
+  grep -qF 'const completionSound = $.NSSound.soundNamed(soundName)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if (!completionSound.isNil()) completionSound.play' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'wor_play_result_sound() {' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'wor_play_result_sound success' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'wor_play_result_sound failure' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(bash -c "source '$REPO_DIR/src/lib/gui.sh'; PATH=/nonexistent wor_play_result_sound success >/dev/null 2>&1; echo \$?")" == 0 ] \
+    && [ "$(bash -c "source '$REPO_DIR/src/lib/gui.sh'; PLAY_SOUND=0 wor_play_result_sound success >/dev/null 2>&1; echo \$?")" == 0 ] \
+    && pass "finishing a flash plays a result sound without being able to fail the run" \
+    || fail "the completion screen is silent, or its sound can fail the run"
+
+  #the completion sound is configurable per platform, so one config file suits a Mac and a Linux box
+  sound_cfg_ok=0
+  if command -v jq >/dev/null ;then
+    [ "$(jq -r '.notifications.playSound' "$REPO_DIR/config-templates/config.json")" == true ] \
+      && [ "$(jq -r '.notifications.sounds.macos' "$REPO_DIR/config-templates/config.json")" == Glass ] \
+      && [ "$(jq -r '.notifications.sounds.linux' "$REPO_DIR/config-templates/config.json")" == complete ] \
+      && [ "$(jq -r '.notifications.sounds | has("windows")' "$REPO_DIR/config-templates/config.json")" == true ] \
+      && [ "$(jq -r '.properties.notifications.properties.sounds.properties | keys | join(",")' "$REPO_DIR/config-templates/config.schema.json")" == 'linux,macos,windows' ] \
+      && sound_cfg_ok=1
+  else
+    sound_cfg_ok=1 #jq is what reads the config at runtime; without it there is nothing to assert
+  fi
+  #an unplayable name must never be handed to the player, and the catalogue must match the platform
+  sound_fallback="$(bash -c "source '$REPO_DIR/src/lib/gui.sh'; COMPLETION_SOUND=NotARealSound wor_completion_sound")"
+  sound_explicit="$(bash -c "source '$REPO_DIR/src/lib/gui.sh'; COMPLETION_SOUND=\"\$(wor_sound_options | sed -n 2p | cut -f1)\" wor_completion_sound")"
+  sound_platform_default="$(bash -c "source '$REPO_DIR/src/lib/gui.sh'; wor_sound_default")"
+  [ "$sound_cfg_ok" == 1 ] \
+    && [ -n "$sound_platform_default" ] \
+    && [ "$sound_fallback" == "$sound_platform_default" ] \
+    && [ "$sound_explicit" != "$sound_platform_default" ] \
+    && grep -qF "set_bool_if_unset \"PLAY_SOUND\"" "$REPO_DIR/install-wor.sh" \
+    && grep -qF ".notifications.sounds.macos" "$REPO_DIR/install-wor.sh" \
+    && grep -qF ".notifications.sounds.linux" "$REPO_DIR/install-wor.sh" \
+    && pass "the completion sound is configurable per platform and rejects an unplayable name" \
+    || fail "the completion sound is not configurable, or an unplayable name reaches the player"
+
+  #both front-ends must offer the same on/off switch and the same platform-appropriate menu
+  grep -qF "playSoundCheckbox = \$.NSButton.checkboxWithTitleTargetAction('Play a sound when the flash finishes'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'soundPopup = $.NSPopUpButton.alloc.initWithFramePullsDown' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "fields+=(\"--field=Play a sound when the flash finishes\":CHK" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'fields+=("--field=Completion sound":CB "$sound_items")' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const soundName = imagePath.length > 0 ? successSound : ' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if (soundName.length > 0) {' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "both front-ends can turn the completion sound off and choose which one plays" \
+    || fail "the completion sound cannot be turned off or chosen in both front-ends"
+
+  #a flash is long enough to walk away from, so the desktop reports the result even when the app is
+  #buried. A denied permission or a missing notifier must never turn a finished flash into a failure.
+  notify_ok=0
+  if command -v jq >/dev/null ;then
+    [ "$(jq -r '.notifications.showNotification' "$REPO_DIR/config-templates/config.json")" == true ] \
+      && [ "$(jq -r '.properties.notifications.properties | has("showNotification")' "$REPO_DIR/config-templates/config.schema.json")" == true ] \
+      && notify_ok=1
+  else
+    notify_ok=1
+  fi
+  [ "$notify_ok" == 1 ] \
+    && grep -qF 'wor_show_result_notification() {' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF "set_bool_if_unset \"SHOW_NOTIFICATION\"" "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'wor_show_result_notification success' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'wor_show_result_notification failure' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "notificationCheckbox = \$.NSButton.checkboxWithTitleTargetAction('Show a notification when the flash finishes'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "fields+=(\"--field=Show a notification when the flash finishes\":CHK" "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(bash -c "source '$REPO_DIR/src/lib/metadata.sh'; source '$REPO_DIR/src/lib/gui.sh'; SHOW_NOTIFICATION=0 wor_show_result_notification success >/dev/null 2>&1; echo \$?")" == 0 ] \
+    && [ "$(bash -c "source '$REPO_DIR/src/lib/metadata.sh'; source '$REPO_DIR/src/lib/gui.sh'; PATH=/nonexistent wor_show_result_notification failure >/dev/null 2>&1; echo \$?")" == 0 ] \
+    && pass "finishing a flash posts a desktop notification without being able to fail the run" \
+    || fail "the flash result is not announced, or its notification can fail the run"
+
+  #a device path reaching AppleScript as source rather than argv would let it close the string and run
+  grep -qF 'display notification (item 2 of argv) with title (item 1 of argv)' "$REPO_DIR/src/lib/gui.sh" \
+    && ! grep -qE 'display notification "\$' "$REPO_DIR/src/lib/gui.sh" \
+    && pass "the notification passes its text as argv, never as AppleScript source" \
+    || fail "the notification interpolates text into AppleScript source"
+
+  #a resume must never be taken on trust: the files the disk step reads have to be there, and the
+  #step counter has to continue rather than restarting the progress bar at step 1
+  resume_dir="$(mktemp -d)"
+  mkdir -p "$resume_dir/winfiles_22631.2861_en-us/bootpart" "$resume_dir/peinstaller/efi" \
+    "$resume_dir/peinstaller/winpe/2" "$resume_dir/pi4-uefipackage" "$resume_dir/driverpackage"
+  touch "$resume_dir/winfiles_22631.2861_en-us/alldone"
+  echo data > "$resume_dir/winfiles_22631.2861_en-us/install.wim"
+  resume_with_files="$(run_in_engine 'cd "'"$resume_dir"'"; flash_files_already_prepared && printf %s "ready:$winfiles" || printf missing')"
+  rm -rf "$resume_dir/driverpackage"
+  resume_without_drivers="$(run_in_engine 'cd "'"$resume_dir"'"; flash_files_already_prepared && printf ready || printf missing')"
+  resume_pi5_no_drivers="$(run_in_engine 'cd "'"$resume_dir"'"; RPI_MODEL=5; mkdir -p pi5-uefipackage; flash_files_already_prepared && printf ready || printf missing')"
+  [ "$resume_with_files" == 'ready:winfiles_22631.2861_en-us' ] \
+    && [ "$resume_without_drivers" == missing ] \
+    && [ "$resume_pi5_no_drivers" == ready ] \
+    && grep -qF '[ "$RPI_MODEL" == 5 ] && STEP_NUM=3 || STEP_NUM=4' "$REPO_DIR/install-wor.sh" \
+    && pass "a resume is refused unless every prepared file is still present" \
+    || fail "a resume can skip preparation when files are missing"
+  rm -rf "$resume_dir"
+
+  #Tool output can include raw bytes; macOS sed must not reject the failure log before its dialog appears.
+  grep -qF "LC_ALL=C sed 's/\\x1b\\[[0-9;]*[A-Za-z]//g; s/\\r//g' \"\$1\"" "$REPO_DIR/install-wor-gui.sh" \
+    && pass "GUI failure-log sanitization tolerates non-UTF-8 tool output" \
+    || fail "GUI failure-log sanitization can fail on non-UTF-8 tool output"
+
+  #Advanced Options returns user-editable config and account fields; parse those bytes after AppKit
+  #returns so malformed input cannot make BSD sed abort and close the settings flow.
+  advanced_result_line="$(grep -anF 'result="$(wor_osascript -l JavaScript - "$checkbox_spec"' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
+  advanced_byte_mode_line="$(grep -anF '  LC_ALL=C' "$REPO_DIR/install-wor-gui.sh" | awk -F: -v start="$advanced_result_line" '$1 > start {print $1; exit}')"
+  advanced_status_line="$(grep -anF 'status="$(printf' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
+  [ -n "$advanced_result_line" ] && [ -n "$advanced_byte_mode_line" ] && [ -n "$advanced_status_line" ] \
+    && [ "$advanced_result_line" -lt "$advanced_byte_mode_line" ] && [ "$advanced_byte_mode_line" -lt "$advanced_status_line" ] \
+    && pass "Advanced Options parses user-editable result bytes without locale-dependent sed failures" \
+    || fail "Advanced Options can exit when BSD sed rejects a user-editable byte"
+
   #the bar should advance inside a step, not jump once per step
   grep -qF 'emit_gui_substep() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'emit_gui_task_progress() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'emit_gui_progress "TASK' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'with_progress_capture pv -f -N' "$REPO_DIR/install-wor.sh" \
-    && [ "$(grep -cF 'with_progress_capture pv -f -N' "$REPO_DIR/install-wor.sh")" == 2 ] \
+    && [ "$(grep -cF 'with_progress_capture pv -f -N' "$REPO_DIR/install-wor.sh")" == 3 ] \
     && grep -qF 'bar.maxValue = stepTotal * 100' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'bar.doubleValue = (stepNum - 1) * 100 + within' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'taskBar = $.NSProgressIndicator.alloc.initWithFrame' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'taskBar.maxValue = 100' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'taskBar.doubleValue = Math.max(0, Math.min(100, currentPercent))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'taskPercentLabel.stringValue = taskPercentText' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "const taskLine = lastMatch(lines, 'TASK\\t')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'taskText = taskLabel' "$REPO_DIR/install-wor-gui.sh" \
     && pass "progress is captured within each step and carried into both progress bars" \
     || fail "progress still jumps a whole step at a time"
 
+  copy_error_message="$(run_in_engine 'copy_local_file_with_progress test /tmp/does-not-exist /tmp/wor-flasher-copy-test; darwin_report_copy_failure /tmp "copy test" user' 2>&1)"
+  printf '%s' "$copy_error_message" | grep -qF 'Last copy error: source file does not exist: /tmp/does-not-exist' \
+    && pass "copy failure diagnostics keep the real copy error in the GUI message" \
+    || fail "copy failure diagnostics hide the real copy error: $copy_error_message"
+  rm -f /tmp/wor-flasher-copy-test /tmp/.wor-flasher-write-probe
+
+  copy_io_message="$(run_in_engine 'COPY_WITH_PROGRESS_ERROR="target reported Input/output error while copying a to b"; darwin_report_copy_failure /tmp "copy test" user' 2>&1)"
+  printf '%s' "$copy_io_message" | grep -qF 'target volume reported an Input/output error while writing' \
+    && pass "copy failure diagnostics identify target media I/O errors" \
+    || fail "copy failure diagnostics misclassify target media I/O errors: $copy_io_message"
+
   #sub() is a built-in awk function, so using it as a variable is a syntax error
   linux_awk="$(sed -n "/^awk -F'\\\\t' '$/,/^' < \"\$progress_fifo\"/p" "$REPO_DIR/install-wor-gui.sh" | sed '1d;$d')"
-  if [ -n "$linux_awk" ] && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\n' | awk -F'\t' "$linux_awk" >/dev/null 2>&1 ;then
-    [ "$(printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\n' | awk -F'\t' "$linux_awk" | grep -vE '^#' | tail -n1)" == 31 ] \
+  if [ -n "$linux_awk" ] && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" >/dev/null 2>&1 ;then
+    [ "$(printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -vE '^#' | tail -n1)" == 31 ] \
+      && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -qF '# [Step 3/8] install.wim (50%)' \
       && pass "the Linux progress program runs and maps a mid-step percentage correctly" \
       || fail "the Linux progress program computes the wrong overall percentage"
   else
     fail "the Linux progress awk program has a syntax error"
   fi
+
+  #wimverify does not consistently report byte progress, so verification needs deterministic milestones.
+  grep -qF 'report_verification_task() {' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'report_verification_task 45 "Verifying boot.wim integrity"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'report_verification_task 60 "Verifying install.wim integrity"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'report_verification_task 100 "Written image verified"' "$REPO_DIR/install-wor.sh" \
+    && pass "verification reports milestones when wimverify is silent" \
+    || fail "verification can stall the GUI progress bar while wimverify is silent"
 
   #USE_CACHE has three values, so both GUIs need a menu, and it has to reach the installer
   grep -qF 'cachePopup.addItemWithTitle' "$REPO_DIR/install-wor-gui.sh" \
@@ -1132,6 +1098,8 @@ SH
     && grep -qF '"--field=Downloaded files":CB "$cache_items"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '"--field=Create an optional local Windows administrator account":CHK' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '"--field=Windows password":H' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"--field=Windows locale":CB "$locale_items"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "awk -F': ' '{print \$1}'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE' "$REPO_DIR/install-wor.sh" \
     && pass "both GUIs can choose the download cache mode and pass it to the installer" \
     || fail "the download cache mode is not adjustable from the GUI"
@@ -1162,8 +1130,9 @@ SH
   #the progress window needs a way out, a step counter, and the usual window buttons
   grep -qF "abortClicked:" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "'windowShouldClose:'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable | $.NSWindowStyleMaskMiniaturizable' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "stepLabel.stringValue = 'Step ' + stepNum + ' of ' + stepTotal" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'let style = $.NSWindowStyleMaskTitled' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'if (options.miniaturizable !== false) style = style | $.NSWindowStyleMaskMiniaturizable' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'stepLabel.stringValue = stepStr' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'abort_marker="$(mktemp -u)"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'kill_process_tree "$installer_pid"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Stop flashing this drive?' "$REPO_DIR/install-wor-gui.sh" \
@@ -1171,14 +1140,83 @@ SH
     || fail "the progress window cannot be aborted or lacks its window controls"
 
   #clicking the Dock icon sends aevt/rapp; without a handler a minimised window can never be restored
-  [ "$(grep -cF "'handleReopenEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
-    && [ "$(grep -cF '0x61657674, 0x72617070' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+  gui_windows="$(grep -cF 'window = worMakeWindow({' "$REPO_DIR/install-wor-gui.sh")"
+  [ "$(grep -cF "'handleReopenEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == "$gui_windows" ] \
+    && [ "$(grep -cF 'worInstallWindowHandlers(controller)' "$REPO_DIR/install-wor-gui.sh")" == "$gui_windows" ] \
+    && grep -qF '0x61657674, 0x72617070' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'if (window.isMiniaturized) window.deminiaturize(null)' "$REPO_DIR/install-wor-gui.sh" \
     && pass "clicking the Dock icon restores a minimised window" \
     || fail "a minimised window cannot be restored from the Dock"
 
+  #every screen must build its window through the one shared helper, or their title bars drift apart again
+  [ "$gui_windows" == 5 ] \
+    && grep -qF 'window = worMakeWindow({' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'NSWindow.alloc.initWithContentRectStyleMaskBackingDefer' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'NSWindow.alloc.initWithContentRectStyleMaskBackingDefer' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'wor_jxa_window_lib() {' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'function worMakeWindow(options) {' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'function worInstallAppMenu(app, appTitle, windowTitle, iconPath) {' "$REPO_DIR/src/lib/gui.sh" \
+    && [ "$(grep -cF 'worInstallAppMenu(app, appTitle, windowTitle, iconPath)' "$REPO_DIR/install-wor-gui.sh")" == "$gui_windows" ] \
+    && [ "$(grep -cF 'wor_jxa_window_lib' "$REPO_DIR/install-wor-gui.sh")" == "$gui_windows" ] \
+    && pass "every window is built by the shared window helper" \
+    || fail "a window is built by hand instead of the shared helper"
+
+  #macOS does not deliver app-menu action dispatch to ANY item - custom or native, including Quit -
+  #while a screen's own app.runModalForWindow session is active, and every screen sharing this menu
+  #is modal; a clickable-looking item that silently does nothing is worse than an informational one
+  ! grep -qF "'showAbout:'" "$REPO_DIR/src/lib/gui.sh" \
+    && ! grep -qF "addItemWithTitleActionKeyEquivalent('Hide " "$REPO_DIR/src/lib/gui.sh" \
+    && ! grep -qF "'unhideAllApplications:'" "$REPO_DIR/src/lib/gui.sh" \
+    && ! grep -qF "addItemWithTitleActionKeyEquivalent('Quit " "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'infoItem.enabled = false' "$REPO_DIR/src/lib/gui.sh" \
+    && pass "the shared app menu shows product info instead of non-functional items during a modal screen" \
+    || fail "the shared app menu still offers items that cannot respond while a modal screen is showing"
+
+  #the launcher's own startup window uses a plain app.run() loop, not app.runModalForWindow, so its
+  #app-menu items are not subject to the same modal-session dispatch restriction and can stay wired
+  #to nil-target native actions the normal way
+  launcher_file="$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher"
+  grep -qF 'hideItem.enabled = true' "$launcher_file" \
+    && grep -qF 'hideOthersItem.enabled = true' "$launcher_file" \
+    && grep -qF 'showAllItem.enabled = true' "$launcher_file" \
+    && grep -qF 'quitItem.enabled = true' "$launcher_file" \
+    && ! grep -qF 'hideItem.target' "$launcher_file" \
+    && pass "the launcher's own app menu explicitly enables its native app-menu actions" \
+    || fail "the launcher's app menu has an action left disabled, so it silently does nothing"
+
+  #the launcher runs before any runtime is verified, so it cannot load the helper; keep it in step by hand
+  grep -qF 'window.title = windowTitle' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF 'NSWindowStyleMaskTitled | $.NSWindowStyleMaskMiniaturizable' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF 'if (zoomButton) zoomButton.hidden = true' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF "appMenu.addItemWithTitleActionKeyEquivalent('About ' + appTitle, 'showAbout:', '')" "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF 'WorLauncherAboutController' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF 'appMenu.autoenablesItems = false' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF 'aboutItem.enabled = true' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && ! grep -qF 'orderFrontStandardAboutPanel:' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF "appMenu.addItemWithTitleActionKeyEquivalent('Quit ' + appTitle, 'terminate:', 'q')" "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && pass "the launcher startup window matches the rest of the app" \
+    || fail "the launcher startup window has drifted from the other windows"
+
+  #the close box quits the launcher outright instead of hiding it while verification keeps running unattended
+  grep -qF '$.NSWindowStyleMaskMiniaturizable | $.NSWindowStyleMaskClosable' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF "'windowShouldClose:': {" "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && grep -qF 'window.setDelegate(controller)' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" \
+    && pass "the launcher's close box quits instead of only hiding the window" \
+    || fail "the launcher's close box is disabled or silently hides the window"
+
+  #an option that departs from, or matches, the tested defaults must say so rather than look like every other checkbox
+  grep -qF "caution: parts[3] === '1'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'function worAnnotateCheckbox(checkbox, label, note, color)' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF "worAnnotateCheckbox(checkbox, rows[i].label, 'Not recommended', \$.NSColor.systemRedColor)" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "'Recommended', \$.NSColor.systemGreenColor)" "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(bash -c "source '$REPO_DIR/src/lib/gui.sh'; wor_advanced_caution uefi")" == 1 ] \
+    && [ "$(bash -c "source '$REPO_DIR/src/lib/gui.sh'; wor_advanced_caution verify")" == 1 ] \
+    && [ "$(bash -c "source '$REPO_DIR/src/lib/gui.sh'; wor_advanced_caution drivers")" == 0 ] \
+    && pass "advanced options are marked recommended or not recommended" \
+    || fail "an option that departs from the tested defaults is not flagged"
+
   #Quit during a flash used to exit on the spot: a bogus failure dialog, with the flash left running
-  progress_block="$(sed -n "/^  progress_jxa=\"\$(cat <<'JXA'\$/,/^JXA\$/p" "$REPO_DIR/install-wor-gui.sh")"
+  progress_block="$(sed -n "/^  progress_jxa=\"\$(wor_jxa_window_lib; cat <<'JXA'\$/,/^JXA\$/p" "$REPO_DIR/install-wor-gui.sh")"
   ! printf '%s' "$progress_block" | grep -qF '$.exit(0)' \
     && printf '%s' "$progress_block" | grep -qF 'if (confirmAbort()) app.stopModalWithCode($.NSCancelButton)' \
     && [ "$(grep -c '        \$.exit(0)' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
@@ -1188,7 +1226,7 @@ SH
     || fail "quitting mid-flash reports a bogus failure or leaves the installer running"
 
   #the completion dialog has an "Open Log" button that extracts the log path and opens it in the default editor
-  completion_block="$(sed -n "/^  completion_jxa=\"\$(cat <<'JXA'\$/,/^JXA\$/p" "$REPO_DIR/install-wor-gui.sh")"
+  completion_block="$(sed -n "/^  completion_jxa=\"\$(wor_jxa_window_lib; cat <<'JXA'\$/,/^JXA\$/p" "$REPO_DIR/install-wor-gui.sh")"
   printf '%s' "$completion_block" | grep -qF "'openLogClicked:': {" \
     && printf '%s' "$completion_block" | grep -qF "openButton = $.NSButton.buttonWithTitleTargetAction('Open Log'" \
     && printf '%s' "$completion_block" | grep -qF "$.NSWorkspace.sharedWorkspace.openFileWithApplication" \
@@ -1203,6 +1241,13 @@ SH
     && printf '%s' "$completion_block" | grep -qF 'pb.setStringForType($(logPath)' \
     && pass "completion dialog can copy the log path to the clipboard" \
     || fail "completion dialog cannot copy the log path"
+
+  #The banner carries alpha; do not put a full white panel behind it, and never bridge Core Animation CGColor through JXA.
+  printf '%s' "$completion_block" | grep -qF 'const imageView = $.NSImageView.alloc.initWithFrame' \
+    && ! printf '%s' "$completion_block" | grep -qF 'imageBacking' \
+    && ! printf '%s' "$completion_block" | grep -qF '.CGColor' \
+    && pass "completion banner preserves its alpha without a crash-prone backing layer" \
+    || fail "completion banner has an opaque or crash-prone backing layer"
 
   #when an error occurs in the installer, gui_error_dialog writes to WOR_GUI_ERROR_MARKER with touch+sync before showing its dialog
   gui_error_block="$(sed -n "/^gui_error_dialog() {/,/^}/p" "$REPO_DIR/install-wor.sh" | head -n 20)"
@@ -1219,6 +1264,13 @@ SH
     && [ "$(grep -cF 'if installer_showed_own_error ;then' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
     && pass "both GUIs trust the native error marker before skipping the completion dialog" \
     || fail "GUI ignores the native error marker and can show a duplicate failure dialog"
+
+  error_fn="$(sed -n '/^error() {/,/^}/p' "$REPO_DIR/install-wor.sh")"
+  duplicate_dialog_count="$(run_in_engine 'RUN_MODE=gui; WOR_GUI_PROGRESS_FILE=/tmp/progress; gui_error_dialog() { echo duplicate-dialog; }; error broken' 2>&1 | grep -c duplicate-dialog || true)"
+  printf '%s' "$error_fn" | grep -qF '[ -z "${WOR_GUI_PROGRESS_FILE:-}" ]' \
+    && [ "$duplicate_dialog_count" == 0 ] \
+    && pass "progress-owned GUI failures do not stack an engine modal over the progress window" \
+    || fail "an installer failure can still leave a duplicate modal over the progress window"
 
   #aborting must take down the sudo-owned children too, not just the top-level job
   kill_tree_dir="$(mktemp -d)"
@@ -1242,6 +1294,18 @@ SH
     || fail "aborting leaves the flash running in the background"
   pkill -f "$kill_tree_dir/child.sh" 2>/dev/null
   rm -rf "$kill_tree_dir"
+
+  abort_marker_dir="$(mktemp -d)"
+  abort_marker_path="$abort_marker_dir/abort"
+  : > "$abort_marker_path"
+  abort_signal_out="$(run_in_engine 'RUN_MODE=gui WOR_GUI_ABORT_MARKER="'"$abort_marker_path"'"; gui_error_dialog() { echo unexpected-error-dialog; }; handle_interrupt' 2>&1; echo "rc=$?")"
+  grep -qF 'export WOR_GUI_ABORT_MARKER="${abort_marker:-}"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Interrupted at GUI request.' <<< "$abort_signal_out" \
+    && ! grep -qF 'unexpected-error-dialog' <<< "$abort_signal_out" \
+    && [ "$(tail -n1 <<< "$abort_signal_out")" == 'rc=130' ] \
+    && pass "GUI abort does not stack a generic Interrupted error dialog" \
+    || fail "GUI abort still shows the generic Interrupted error dialog"
+  rm -rf "$abort_marker_dir"
 
   shared_function_checks
 }
@@ -1269,8 +1333,8 @@ shared_function_checks() {
     || fail "settings_summary is missing settings or emits malformed lines: $summary_labels"
 
   #every toggle the Advanced Options windows offer has to be visible on the confirmation screen
-  [ "$(run_in_engine 'DRY_RUN=1 SKIP_IMAGE_VERIFICATION=1 USE_CACHE=2 APPLY_CUSTOM_CONFIG_TXT=0 UEFI_USE_LATEST=1 DRIVERS_USE_LATEST=0 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 HIDE_EMPTY_DRIVES=0 settings_summary | tail -n +2 | cut -f2 | tr "\n" "|"')" \
-      == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-us) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Windows setup will ask|Windows setup defaults|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|/tmp/wor-test-dl/last-run.log|" ] \
+    [ "$(run_in_engine 'WOR_RUN_ID=summary-test DRY_RUN=1 SKIP_IMAGE_VERIFICATION=1 USE_CACHE=2 APPLY_CUSTOM_CONFIG_TXT=0 UEFI_USE_LATEST=1 DRIVERS_USE_LATEST=0 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 HIDE_EMPTY_DRIVES=0 settings_summary | tail -n +2 | cut -f2 | tr "\n" "|"')" \
+      == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-us) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Windows setup will ask|Windows setup defaults|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|/tmp/wor-test-dl/logs/wor-flasher-summary-test.log|" ] \
     && pass "every Advanced Options toggle changes what the confirmation screens show" \
     || fail "a setting is not reflected in settings_summary"
 
@@ -1287,10 +1351,12 @@ shared_function_checks() {
     && pass "the Linux overview escapes pango markup in every value it shows" \
     || fail "a value containing markup characters would corrupt the Linux overview window"
 
-  #the macOS confirmation screen and the CLI banner list the same settings, from the same renderer
+  #the macOS confirmation screen and the CLI banner list the same settings from shared renderers
   [ "$(run_in_engine 'settings_summary_plain | sed -n 2p')" == 'Target drive: /dev/does-not-exist' ] \
+    && [ "$(run_in_engine 'settings_summary | sed -n 2p')" == $'Target drive\t/dev/does-not-exist' ] \
     && [ "$(run_in_engine 'settings_summary_plain "  %-24s %s\n" | sed -n 2p')" == '  Target drive:            /dev/does-not-exist' ] \
-    && grep -qF 'confirm_summary="$(settings_summary_plain)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'rows="$(settings_summary)"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const rows = rawRows.split' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "settings_summary_plain '  %-24s %s" "$REPO_DIR/install-wor.sh" \
     && pass "the CLI banner and the macOS confirmation screen render one shared summary" \
     || fail "the CLI banner and the macOS confirmation screen do not share a renderer"
@@ -1313,8 +1379,8 @@ shared_function_checks() {
   }
 }
 JSON
-  cfg_test_out="$(run_in_engine "WOR_CONFIG_FILE='$cfg_test_dir/config.json' load_config_json; printf '%s|%s|%s|%s|%s\n' \"\$RPI_MODEL\" \"\$WIN_LANG\" \"\$BID\" \"\$DEVICE\" \"\$DRY_RUN\"")"
-  cfg_override_out="$(run_in_engine "RPI_MODEL=4 WIN_LANG=en-us WOR_CONFIG_FILE='$cfg_test_dir/config.json' load_config_json; printf '%s|%s|%s|%s|%s\n' \"\$RPI_MODEL\" \"\$WIN_LANG\" \"\$BID\" \"\$DEVICE\" \"\$DRY_RUN\"")"
+  cfg_test_out="$(run_in_engine "unset RPI_MODEL WIN_LANG BID DEVICE DRY_RUN; WOR_CONFIG_FILE='$cfg_test_dir/config.json' load_config_json; printf '%s|%s|%s|%s|%s\n' \"\$RPI_MODEL\" \"\$WIN_LANG\" \"\$BID\" \"\$DEVICE\" \"\$DRY_RUN\"")"
+  cfg_override_out="$(run_in_engine "unset BID DEVICE DRY_RUN; RPI_MODEL=4 WIN_LANG=en-us WOR_CONFIG_FILE='$cfg_test_dir/config.json' load_config_json; printf '%s|%s|%s|%s|%s\n' \"\$RPI_MODEL\" \"\$WIN_LANG\" \"\$BID\" \"\$DEVICE\" \"\$DRY_RUN\"")"
   cfg_hook_out="$(cd "$REPO_DIR" && ./install-wor-hook.sh --config "$cfg_test_dir/config.json" summary | grep -E '^Target hardware|Operating system' | tr '\n' '|')"
   rm -rf "$cfg_test_dir"
   [ "$cfg_test_out" == "5|de-de|22631.2861|/dev/sdz|1" ] \
@@ -1329,7 +1395,7 @@ JSON
     && pass "the Pi 4 RAM unlock line appears only for a Pi 4" \
     || fail "the Pi 4 RAM unlock line is shown for the wrong models"
 
-  [ "$(run_in_engine 'for RPI_MODEL in 3 4 5 ;do uefi_pinned_version ;done | tr "\n" " "')" == "$(grep -aoE "UEFI_VER_PI[345]='[^']*'" "$REPO_DIR/install-wor.sh" | cut -d"'" -f2 | tr '\n' ' ')" ] \
+  [ "$(run_in_engine 'for RPI_MODEL in 3 4 5 ;do uefi_pinned_version ;done | tr "\n" " "')" == "$(jq -r '.systemDefaults | [.uefiVerPi3, .uefiVerPi4, .uefiVerPi5] | join(" ") + " "' "$REPO_DIR/src/config/metadata.json")" ] \
     && pass "uefi_pinned_version returns the pinned firmware for every supported model" \
     || fail "uefi_pinned_version does not match the pinned UEFI versions"
 
@@ -1361,18 +1427,18 @@ JSON
 
   #shared behaviour belongs to install-wor.sh; a second copy in the GUI silently shadows it on sourcing
   duplicate_functions="$(comm -12 \
-    <(grep -oE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor.sh" | sort -u) \
-    <(grep -oE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | sort -u))"
+    <(grep -aoE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor.sh" | sort -u) \
+    <(grep -aoE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | sort -u))"
   [ -z "$duplicate_functions" ] \
     && pass "no function is defined in both install-wor.sh and install-wor-gui.sh" \
     || fail "these functions are defined twice and will drift apart: $duplicate_functions"
 
   #the GUI's own helpers call shared ones, so the source has to happen before any of them are defined
-  gui_source_line="$(grep -n 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
-  gui_first_function_line="$(grep -nE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
+  gui_source_line="$(grep -an 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
+  gui_first_function_line="$(grep -anE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
   [ -n "$gui_source_line" ] && [ -n "$gui_first_function_line" ] \
     && [ "$gui_source_line" -lt "$gui_first_function_line" ] \
-    && [ "$(grep -c 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
+    && [ "$(grep -ac 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
     && pass "the GUI sources install-wor.sh once, before it defines anything of its own" \
     || fail "the GUI defines functions before sourcing install-wor.sh, so shared ones are unavailable"
 
@@ -1380,17 +1446,22 @@ JSON
   missing_shared="$(run_in_engine 'for fn in error warning status echo_red gui_error_dialog settings_summary \
     cache_mode_label install_mode_label uefi_pinned_version set_default_config_txt describe_device human_size \
     export_installer_settings read_config_template drive_capability validate_install_mode is_safe_target_device \
-    list_bids list_bids_supported get_bid get_os_name list_langs default_win_lang get_device_name get_size_raw \
+    list_bids list_bids_supported get_bid get_os_name list_langs default_win_lang list_windows_locale_options get_device_name get_size_raw \
     get_file_size setup ;do declare -F "$fn" >/dev/null || echo "$fn" ;done')"
   [ -z "$missing_shared" ] \
     && pass "install-wor.sh exports every shared function the GUI depends on" \
     || fail "the GUI calls these functions, but install-wor.sh does not define them: $missing_shared"
 
-  #`warning` was called by the self-updater without ever being defined, so a failed update printed nothing
+  #the CHECK_FOR_UPDATES/NO_UPDATE pair still gates the check, and `warning` stays defined
   [ "$(run_in_engine 'warning "update failed" 2>&1 | sed "s/\x1b\[[0-9;]*m//g"')" == 'update failed' ] \
-    && grep -qF 'warning "Automatic update failed. Continuing..."' "$REPO_DIR/install-wor.sh" \
-    && pass "a failed automatic update reports itself instead of dying on an undefined command" \
-    || fail "the self-updater still calls an undefined warning command"
+    && [ "$(run_in_engine 'unset NO_UPDATE; CHECK_FOR_UPDATES=0 load_config_json; printf %s "$NO_UPDATE"')" == 1 ] \
+    && [ "$(run_in_engine 'unset NO_UPDATE CHECK_FOR_UPDATES; load_config_json; printf %s "$NO_UPDATE"')" == 0 ] \
+    && grep -qF '"checkForUpdates": true' "$REPO_DIR/config-templates/config.json" \
+    && grep -qF 'set_check_updates_if_unset' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Checking for WoR-Flasher updates...' "$REPO_DIR/install-wor.sh" \
+    && grep -qF -- '--check-release' "$REPO_DIR/install-wor.sh" \
+    && pass "the release check is gated by CHECK_FOR_UPDATES and NO_UPDATE" \
+    || fail "the release check is no longer gated by CHECK_FOR_UPDATES and NO_UPDATE"
 
   #ISO acceptance used to be written out three times, so the CLI and the GUI could disagree on what is usable
   iso_dir="$(mktemp -d)"
@@ -1457,6 +1528,14 @@ JSON
     && pass "both GUIs offer the same language order and accept the same codes" \
     || fail "the language list differs between front-ends, or an invalid code is accepted"
 
+  [ "$(run_in_engine 'windows_locale_from_language_code sr-latn-rs')" == 'sr-Latn-RS' ] \
+    && [ "$(run_in_engine 'list_windows_locale_options | head -n1')" == $'en-US\tEnglish (United States) (en-US)' ] \
+    && run_in_engine 'WINDOWS_LOCALE_SETUP=1 WINDOWS_LOCALE=sr-Latn-RS true' \
+    && grep -qF 'localeCheckbox = $.NSButton.checkboxWithTitleTargetAction' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'localePopup.enabled = enabled' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "Windows regional settings use dropdown locale options and accept multi-part locales" \
+    || fail "Windows regional settings still depend on a freeform or incomplete locale field"
+
   rm -rf "$iso_dir" "$winfiles_dir"
 
   #one entry point, but never a guess: DISPLAY is also set over SSH and in CI, and this tool erases disks
@@ -1465,17 +1544,18 @@ JSON
     && grep -qF 'gui|--gui|-g)' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'exec "$DIRECTORY/install-wor-gui.sh" "$@"' "$REPO_DIR/install-wor.sh" \
     && ! grep -qE 'if .*-n .\$DISPLAY|command -v yad .*&&.*exec' "$REPO_DIR/install-wor.sh" \
-    && [ "$(cd "$REPO_DIR" && ./install-wor.sh --bogus 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; echo "rc=${PIPESTATUS[0]}")" == "Unknown argument '--bogus'. Run 'install-wor.sh --help' for usage.
+    && [ "$(cd "$REPO_DIR" && NO_UPDATE=1 ./install-wor.sh --bogus 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; echo "rc=${PIPESTATUS[0]}")" == "Unknown argument '--bogus'. Run 'install-wor.sh --help' for usage.
 rc=1" ] \
     && pass "install-wor.sh gui/--gui hands over explicitly and never auto-detects a display" \
     || fail "the CLI entry point is missing, or it guesses whether to open a GUI"
 
   #a bug report is unactionable without knowing which version produced it
   version="$(run_in_engine 'printf %s "$WOR_FLASHER_VERSION"')"
-  metadata_assignments="$(grep -hEc '^WOR_FLASHER_(NAME|VERSION)=' "$REPO_DIR"/src/lib/metadata.sh | awk '{ total += $1 } END { print total }')"
+  metadata_version="$(jq -r '.product.version' "$REPO_DIR/src/config/metadata.json")"
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
     && [ "$name" == 'WoR-Flasher' ] \
-    && [ "$metadata_assignments" == 2 ] \
+    && [ "$version" == "$metadata_version" ] \
+    && grep -qF 'wor_metadata_required product version WOR_FLASHER_VERSION' "$REPO_DIR/src/lib/metadata.sh" \
     && grep -qF 'source "$WOR_METADATA_FILE"' "$REPO_DIR/install-wor.sh" \
     && [ "$(cd "$REPO_DIR" && ./install-wor.sh --version)" == "$name $version" ] \
     && [ "$(cd "$REPO_DIR" && ./install-wor.sh -V)" == "$name $version" ] \
@@ -1510,10 +1590,18 @@ rc=1" ] \
     || fail "the RAM-download option does not install More RAM through every supported Pi-Apps location"
 
   wsl_hook_out="$(cd "$REPO_DIR" && WSL_DISTRO_NAME=wor-test ./install-wor-hook.sh list-devices 2>&1; echo "rc=$?")"
+  hook_progress_file="$(mktemp "${TMPDIR:-/tmp}/wor-hook-progress.XXXXXX")"
+  rm -f "$hook_progress_file"
+  hook_progress_out="$(cd "$REPO_DIR" && ./install-wor-hook.sh --progress-file "$hook_progress_file" run --version 2>&1)"
+  hook_bad_progress_out="$(cd "$REPO_DIR" && ./install-wor-hook.sh --progress-file 2>&1; echo "rc=$?")"
+  hook_set_summary="$(cd "$REPO_DIR" && ./install-wor-hook.sh --set RPI_MODEL=5 --set BID=26200.6899 --set WIN_LANG=de-de --set DEVICE=/dev/does-not-exist --set CAN_INSTALL_ON_SAME_DRIVE=1 summary | grep -E '^Target hardware|Operating system' | tr '\n' '|')"
+  hook_set_expected=$'Target hardware	Raspberry Pi 5|Operating system	Windows 11 (de-de) arm64 build 26200.6899|'
+  hook_bad_set_out="$(cd "$REPO_DIR" && ./install-wor-hook.sh --set NOT-VALID=1 summary 2>&1; echo "rc=$?")"
   hook_bootstrap_dir="$(mktemp -d)"
-  mkdir -p "$hook_bootstrap_dir/source/config-templates" "$hook_bootstrap_dir/source/src/lib"
+  mkdir -p "$hook_bootstrap_dir/source/config-templates" "$hook_bootstrap_dir/source/src/lib" "$hook_bootstrap_dir/source/src/config"
   cp "$REPO_DIR/install-wor.sh" "$hook_bootstrap_dir/source/"
-  cp "$REPO_DIR/src/lib/metadata.sh" "$REPO_DIR/src/lib/dependencies.sh" "$REPO_DIR/src/lib/paths.sh" "$REPO_DIR/src/lib/cleanup.sh" "$hook_bootstrap_dir/source/src/lib/"
+  cp "$REPO_DIR/src/lib/metadata.sh" "$REPO_DIR/src/lib/dependencies.sh" "$REPO_DIR/src/lib/paths.sh" "$REPO_DIR/src/lib/cleanup.sh" "$REPO_DIR/src/lib/gui.sh" "$hook_bootstrap_dir/source/src/lib/"
+  cp "$REPO_DIR/src/config/metadata.json" "$REPO_DIR/src/config/metadata.schema.json" "$hook_bootstrap_dir/source/src/config/"
   cp -R "$REPO_DIR/config-templates/." "$hook_bootstrap_dir/source/config-templates/"
   git -C "$hook_bootstrap_dir/source" init -q
   git -C "$hook_bootstrap_dir/source" add .
@@ -1531,10 +1619,21 @@ rc=1" ] \
     && grep -qF 'summary)' "$REPO_DIR/install-wor-hook.sh" \
     && grep -qF 'exec "$ENGINE"' "$REPO_DIR/install-wor-hook.sh" \
     && grep -qF ': "${WOR_HOOK_REF:=main}"' "$REPO_DIR/install-wor-hook.sh" \
+    && grep -qF 'WOR_GUI_PROGRESS_FILE="${1#*=}"' "$REPO_DIR/install-wor-hook.sh" \
+    && grep -qF 'export WOR_GUI_PROGRESS_FILE' "$REPO_DIR/install-wor-hook.sh" \
+    && grep -qF 'Use --progress-file FILE with run' "$REPO_DIR/install-wor-hook.sh" \
     && grep -A2 -F 'list-devices)' "$REPO_DIR/install-wor-hook.sh" | grep -qF 'require_linux_host' \
     && ! grep -qF 'install-wor-hook.sh' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(cd "$REPO_DIR" && ./install-wor-hook.sh run --version)" == "WoR-Flasher $version" ] \
-    && [ "$(cd "$REPO_DIR" && DL_DIR=/tmp/wor-test-dl RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us DEVICE=/dev/does-not-exist CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh summary)" == "$(run_in_engine 'settings_summary')" ] \
+    && [ "$hook_progress_out" == "WoR-Flasher $version" ] \
+    && [ ! -e "$hook_progress_file" ] \
+    && grep -qF 'Usage:' <<< "$hook_bad_progress_out" \
+    && [ "$(tail -n1 <<< "$hook_bad_progress_out")" == 'rc=2' ] \
+    && [ "$hook_set_summary" == "$hook_set_expected" ] \
+    && grep -qF 'Invalid --set name:' <<< "$hook_bad_set_out" \
+    && [ "$(tail -n1 <<< "$hook_bad_set_out")" == 'rc=2' ] \
+    && grep -qF 'TASK<TAB>percent<TAB>label' "$REPO_DIR/README.md" \
+    && [ "$(cd "$REPO_DIR" && WOR_RUN_ID=hook-test DL_DIR=/tmp/wor-test-dl RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us DEVICE=/dev/does-not-exist CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh summary)" == "$(run_in_engine 'WOR_RUN_ID=hook-test settings_summary')" ] \
     && [ "$(cd "$REPO_DIR" && ./install-wor-hook.sh describe-device 2>/dev/null; echo $?)" == 2 ] \
     && grep -qF 'WoR-Flasher does not support WSL.' <<< "$wsl_hook_out" \
     && [ "$(tail -n1 <<< "$wsl_hook_out")" == 'rc=1' ] \
@@ -1547,6 +1646,7 @@ rc=1" ] \
     && [ ! -e "$hook_bootstrap_dir/incomplete" ] \
     && pass "integration adapter exposes the shared installer engine" \
     || fail "integration adapter is missing or does not use the shared engine"
+  rm -f "$hook_progress_file"
   rm -rf "$hook_bootstrap_dir"
 
   #upstream ships no license, so the fork must say so rather than implying a grant it cannot make
@@ -1612,12 +1712,16 @@ rc=1" ] \
 
   #one variable decides where the log goes, and it is resolved on use: the Linux GUI can still
   #change DL_DIR after this script has been sourced
-  [ "$(run_in_engine 'wor_log_file')" == '/tmp/wor-test-dl/last-run.log' ] \
+  [[ "$(run_in_engine 'wor_log_file')" == /tmp/wor-test-dl/logs/wor-flasher-*.log ]] \
+    && [ "$(run_in_engine 'wor_last_log_file')" == '/tmp/wor-test-dl/last-run.log' ] \
     && [ "$(run_in_engine 'WOR_LOG_FILE=/tmp/elsewhere.log; wor_log_file')" == '/tmp/elsewhere.log' ] \
-    && [ "$(run_in_engine 'DL_DIR=/tmp/moved-later; wor_log_file')" == '/tmp/moved-later/last-run.log' ] \
+    && [[ "$(run_in_engine 'DL_DIR=/tmp/moved-later; wor_log_file')" == /tmp/moved-later/logs/wor-flasher-*.log ]] \
+    && grep -qF 'WOR_RUN_ID' "$REPO_DIR/install-wor.sh" \
+    && [ "$(run_in_engine 'WOR_RUN_ID=shared-log-id; settings_summary | sed -n "s/^Log file\t//p"')" == '/tmp/wor-test-dl/logs/wor-flasher-shared-log-id.log' ] \
+    && grep -qF 'cp "$saved_log" "$last_log"' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(grep -cF 'last-run.log' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
-    && pass "one variable decides where the run log goes, resolved when it is needed" \
-    || fail "the log path is hardcoded, or does not follow DL_DIR and WOR_LOG_FILE"
+    && pass "one variable decides where the timestamped run log goes, with last-run kept for support" \
+    || fail "the log path is hardcoded, does not follow DL_DIR/WOR_LOG_FILE, or loses last-run"
 
   #logs and caches are generated beside the scripts; none of it may ever be committed
   if command -v git >/dev/null && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
@@ -2047,6 +2151,14 @@ if command -v jq >/dev/null ;then
     && grep -qF 'boot_size_mb=$((boot_payload_kb / 1024 + 512))' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'diskutil partitionDisk' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'darwin_prepare_disk_or_die "$DEVICE" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_prepare_disk_or_die "$DEVICE" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$PART1" "$PART2"'$'\n''  gui_start_sudo_keepalive' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_mount_partition_or_die "$PART1"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_mount_partition_or_die "$PART2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_finalize_partition_types_or_die "$DEVICE" "$sgdisk_bin"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'darwin_verify_final_partition_types_or_die "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '[ "$boot_content" == EFI ] || [ "$boot_content" == "Microsoft Basic Data" ]' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'Final media verification failed: partition 1 is' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'for attempt in 1 2 3 4 5 6 7 8 9 10 ;do' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'sudo bash -s -- "$device" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$part1" "$part2"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'darwin_report_copy_failure "$boot_mount"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'sudo -n touch "$probe"' "$REPO_DIR/install-wor.sh" \
@@ -2310,57 +2422,72 @@ else
   pass "CONFIG_TXT is not executed as code"
 fi
 
-info "== Self-updater =="
-if ! command -v git >/dev/null || ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
-  skip "self-updater tests need a git checkout"
+info "== Update check =="
+#The tool must never rewrite its own installation. A half-updated disk flasher is far more
+#dangerous than an out-of-date one, so the release check is read-only by construction.
+if grep -qE 'git (fetch|merge|pull|reset|clean|restore)' "$REPO_DIR/install-wor.sh" ;then
+  fail "install-wor.sh still runs a mutating git command; the engine must not update itself"
 else
-  branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
-  if [ "$branch" == HEAD ];then
-    skip "self-updater tests need a checked-out branch, not a detached HEAD"
+  pass "install-wor.sh runs no mutating git command"
+fi
+
+#repair_missing_files legitimately restores missing tracked files from the LOCAL revision,
+#so the launcher may still call git restore. What it must not do is fetch or merge a remote.
+if grep -qE 'git (-C "\$REPO_DIR" )?(fetch|merge|pull|ls-remote)' "$REPO_DIR/src/macos-app/Contents/MacOS/WoR-Flasher" ;then
+  fail "the macOS launcher still fetches or merges from a git remote"
+else
+  pass "the macOS launcher never fetches or merges from a git remote"
+fi
+
+grep -qF -- '--check-git' "$REPO_DIR/src/updater.mjs" "$REPO_DIR/package.json" \
+  && fail "the retired --check-git updater mode is still referenced" \
+  || pass "the retired --check-git updater mode is gone"
+
+grep -qF 'execSync' "$REPO_DIR/src/lib/node-runtime.mjs" \
+  && fail "the Node runtime library still shells out" \
+  || pass "the Node runtime library shells out to nothing"
+
+if ! command -v node >/dev/null ;then
+  skip "the release-check CLI needs node"
+  skip "the release check needs node to prove it leaves a checkout untouched"
+else
+  #an unroutable slug makes the request fail without touching the network fixture
+  update_out="$(node "$REPO_DIR/src/updater.mjs" --check-release "--repo-dir=$REPO_DIR" --repo-slug='../evil' 2>/dev/null)"
+  [ "$update_out" == UNKNOWN ] \
+    && pass "the release check refuses an unsafe repository slug" \
+    || fail "the release check did not reject an unsafe repository slug (got '$update_out')"
+
+  if ! command -v git >/dev/null || ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
+    skip "proving the checkout is left untouched needs a git checkout"
   else
-    #a disposable clone of the branch actually being worked on - never runs against $REPO_DIR itself
-    clone_dir="$TEST_DIR/self-update-clone"
-    rm -rf "$clone_dir"
-    if ! git clone -q --branch "$branch" "$REPO_DIR" "$clone_dir" 2>/dev/null ;then
-      fail "could not clone $REPO_DIR (branch $branch) to test the self-updater"
+    branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
+    if [ "$branch" == HEAD ];then
+      skip "proving the checkout is left untouched needs a branch, not a detached HEAD"
     else
-      #point the clone's self-updater at this same repo/branch, so it dynamically pulls whatever is actually being worked on
-      update_env=(UPDATE_REPO_URL="$REPO_DIR" UPDATE_REF="$branch" NO_UPDATE=0 ROOT_DEV=/dev/__wor_flasher_test_root__ DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 BID="$GOOD_BID" RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2)
-
-      progress "self-updater: checking clean clone already on $branch"
-      LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
-      LAST_CODE=$?
-      progress "self-updater clean-clone check finished with exit $LAST_CODE"
-      expect_ok "already level with $branch: flasher still runs"
-      expect_no_output "already level with $branch: self-updater stays quiet" "Auto-updating wor-flasher"
-
-      #fall one commit behind $REPO_DIR's $branch, so the clone actually has something to pull
-      if git -C "$clone_dir" reset -q --hard HEAD~1 2>/dev/null ;then
-        printf '\n' >> "$clone_dir/README.md"
-        progress "self-updater: checking dirty clone protection"
-        LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
-        LAST_CODE=$?
-        progress "self-updater dirty-clone check finished with exit $LAST_CODE"
-        expect_ok "dirty behind $branch: flasher still runs"
-        expect_output "dirty behind $branch: self-updater preserves local changes" "Skipping automatic update because this checkout has uncommitted changes"
-        git -C "$clone_dir" diff --quiet \
-          && fail "dirty behind $branch: self-updater discarded local changes" \
-          || pass "dirty behind $branch: local changes were preserved"
-        git -C "$clone_dir" reset -q --hard HEAD
-
-        progress "self-updater: checking behind clone fast-forward and reload"
-        LAST_OUT="$(run_with_timeout env "${update_env[@]}" "$clone_dir/install-wor.sh" 2>&1)"
-        LAST_CODE=$?
-        progress "self-updater behind-clone check finished with exit $LAST_CODE"
-        expect_ok "behind $branch: flasher still runs after update"
-        expect_output "behind $branch: self-updater detects the update" "Auto-updating wor-flasher"
-        expect_output "behind $branch: self-updater pulls and reloads" "Reloading script"
-        [ "$(git -C "$clone_dir" rev-parse HEAD)" == "$(git -C "$REPO_DIR" rev-parse "$branch")" ] \
-          && pass "self-updater fast-forwarded the clone to $branch" \
-          || fail "self-updater did not fast-forward the clone to $branch"
-      else
-        skip "$branch has no earlier commit to test dirty update protection"
+      #a disposable clone, deliberately left one commit behind - never runs against $REPO_DIR itself
+      clone_dir="$TEST_DIR/update-check-clone"
+      rm -rf "$clone_dir"
+      if ! git clone -q --branch "$branch" "$REPO_DIR" "$clone_dir" 2>/dev/null ;then
+        fail "could not clone $REPO_DIR (branch $branch) to test the update check"
+      elif ! git -C "$clone_dir" reset -q --hard HEAD~1 2>/dev/null ;then
         skip "$branch has no earlier commit to fall behind"
+      else
+        behind_commit="$(git -C "$clone_dir" rev-parse HEAD)"
+        printf '\n' >> "$clone_dir/README.md"
+        LAST_OUT="$(run_with_timeout env NO_UPDATE=0 ROOT_DEV=/dev/__wor_flasher_test_root__ \
+          DL_DIR="$TEST_DL_DIR" WIN_LANG="$TEST_WIN_LANG" RUN_MODE=cli DRY_RUN=1 BID="$GOOD_BID" \
+          RPI_MODEL=4 DEVICE="$DEV_INSTALL" CAN_INSTALL_ON_SAME_DRIVE=1 USE_CACHE=2 \
+          "$clone_dir/install-wor.sh" 2>&1)"
+        LAST_CODE=$?
+        expect_ok "a checkout behind its remote still runs"
+        expect_no_output "the engine never announces a self-update" "Auto-updating wor-flasher"
+        expect_no_output "the engine never reloads itself after updating" "Reloading script"
+        [ "$(git -C "$clone_dir" rev-parse HEAD)" == "$behind_commit" ] \
+          && pass "the update check left the checkout on its original commit" \
+          || fail "the update check moved the checkout to another commit"
+        git -C "$clone_dir" diff --quiet -- README.md \
+          && fail "the update check discarded local changes" \
+          || pass "the update check preserved local changes"
       fi
     fi
   fi

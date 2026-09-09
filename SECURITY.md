@@ -52,8 +52,8 @@ whole disk. The interesting failure modes follow from that:
   credential keep-alive run while the user's timestamp is live.
 - **Command or argument injection** through a filename, drive label, environment
   variable or `config.txt` body that reaches a shell, `osascript`, or `yad`.
-- **Secrets in the logs.** Failures keep a log at `$DL_DIR/last-run.log`, or wherever
-  `WOR_LOG_FILE` points; it must never contain a
+- **Secrets in the logs.** Failures keep timestamped logs under `$DL_DIR/logs/`, refresh
+  `$DL_DIR/last-run.log`, or write wherever `WOR_LOG_FILE` points; they must never contain a
   password.
 
 ## What we do not consider a vulnerability
@@ -65,9 +65,11 @@ whole disk. The interesting failure modes follow from that:
 - **Erasing the drive you selected.** You are warned twice.
 - **`VERIFY_TLS=0`.** It exists for hosts with a broken CA bundle, is documented as a
   downgrade, and is opt-in.
-- **The self-updater.** It is off by default (`NO_UPDATE=1`), only fast-forwards a clean
-  git checkout, and refuses to touch one with uncommitted changes. Report it if you can
-  make it do something else.
+- **The release check.** It is enabled by default, makes one read-only HTTPS request to the
+  GitHub releases API, and only prints a notice. It never writes to disk, never executes
+  downloaded content, and never modifies the installation. It can be disabled with
+  `CHECK_FOR_UPDATES=0` or the legacy `NO_UPDATE=1`. Report it if you can make it do
+  anything beyond reporting a version.
 - Vulnerabilities in Windows itself, in the WoR PE installer, or in the Pi UEFI
   firmware. Report those to [worproject.com][wor] and [pftf][pftf] respectively.
 

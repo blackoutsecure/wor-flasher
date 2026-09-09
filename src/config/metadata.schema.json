@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WoR-Flasher Project Metadata",
+  "description": "Project/runtime metadata used by shell runtime and Node release tooling. User run configuration belongs in config-templates/config.json.",
+  "type": "object",
+  "required": ["product", "systemDefaults", "runtimePaths"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "product": {
+      "type": "object",
+      "required": [
+        "name",
+        "version",
+        "description",
+        "license",
+        "keywords",
+        "fundingUrls",
+        "bundleIdentifier",
+        "minimumMacosVersion",
+        "iconName",
+        "iconFilename",
+        "assetsDirname",
+        "logoFilename"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "license": { "type": "string", "minLength": 1 },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        },
+        "fundingUrls": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^https://" },
+          "minItems": 1
+        },
+        "bundleIdentifier": { "type": "string", "minLength": 1 },
+        "minimumMacosVersion": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "iconName": { "type": "string", "minLength": 1 },
+        "iconFilename": { "type": "string", "minLength": 1 },
+        "assetsDirname": { "type": "string", "minLength": 1 },
+        "logoFilename": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "systemDefaults": {
+      "type": "object",
+      "required": [
+        "peInstallerUrl",
+        "peInstallerSha256",
+        "uefiVerPi3",
+        "uefiVerPi4",
+        "uefiVerPi5",
+        "uefiRepoPi3",
+        "uefiRepoPi4",
+        "uefiRepoPi5",
+        "driverVer",
+        "driversRepo",
+        "armv80MaxBuild",
+        "win11MinBuild",
+        "win10OldestBuild",
+        "exampleBid",
+        "armv80SafeBid",
+        "repoSlug",
+        "logDirname"
+      ],
+      "properties": {
+        "peInstallerUrl": { "type": "string", "pattern": "^https://" },
+        "peInstallerSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "uefiVerPi3": { "type": "string", "minLength": 1 },
+        "uefiVerPi4": { "type": "string", "minLength": 1 },
+        "uefiVerPi5": { "type": "string", "minLength": 1 },
+        "uefiRepoPi3": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "uefiRepoPi4": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "uefiRepoPi5": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "driverVer": { "type": "string", "minLength": 1 },
+        "driversRepo": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "armv80MaxBuild": { "type": "integer", "minimum": 1 },
+        "win11MinBuild": { "type": "integer", "minimum": 1 },
+        "win10OldestBuild": { "type": "string", "minLength": 1 },
+        "exampleBid": { "type": "string", "minLength": 1 },
+        "armv80SafeBid": { "type": "string", "minLength": 1 },
+        "repoSlug": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+        "logDirname": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "runtimePaths": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "not": { "pattern": "(^/|(^|/)\\.\\.(/|$))" }
+      }
+    }
+  },
+  "additionalProperties": false
+}

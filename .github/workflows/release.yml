@@ -75,8 +75,8 @@ jobs:
               create_tag=false
             else
               if [ "$SKIP_PROJECT_VERSION_UPDATE" != true ];then
-                node src/node/set-version.mjs "${tag#v}"
-                if [ -n "$(git status --porcelain -- src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json)" ];then
+                node src/set-version.mjs "${tag#v}"
+                if [ -n "$(git status --porcelain -- src/config/metadata.json src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json)" ];then
                   source_branch="${REF#refs/heads/}"
                   [ "$source_branch" != "$REF" ] || {
                     echo "Manual releases must run from a branch." >&2
@@ -84,7 +84,7 @@ jobs:
                   }
                   git config user.name 'github-actions[bot]'
                   git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-                  git add src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json
+                  git add src/config/metadata.json src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json
                   git commit -m "chore: prepare $tag"
                   git push origin "HEAD:$source_branch"
                 fi
@@ -141,7 +141,7 @@ jobs:
         run: shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
-        run: npm run build:macos && node src/node/package-macos-app.mjs --check
+        run: npm run build:macos && node src/package-macos-app.mjs --check
 
       - name: Verify release packaging plan
         run: npm run check
@@ -165,7 +165,7 @@ jobs:
         run: /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
-        run: npm run build:macos && node src/node/package-macos-app.mjs --check
+        run: npm run build:macos && node src/package-macos-app.mjs --check
 
       - name: Verify release packaging plan
         run: npm run check

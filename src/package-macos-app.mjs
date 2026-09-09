@@ -3,13 +3,15 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  formatRuntimeManifest,
   generateRuntimeManifest,
   verifyRuntimeManifest,
   readRuntimePaths,
-} from "./updater.mjs";
+  readProjectMetadata,
+} from "./lib/node-runtime.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const repoDir = join(scriptDir, "..", "..");
+const repoDir = join(scriptDir, "..");
 const appRoot =
   process.env.WOR_MACOS_APP_ROOT ||
   join(repoDir, "release", "macos", "WoR-Flasher.app");
@@ -21,7 +23,7 @@ function fail(msg) {
 }
 
 if (mode !== "--check" && mode !== "--write") {
-  console.error("Usage: node src/node/package-macos-app.mjs [--check|--write]");
+  console.error("Usage: node src/package-macos-app.mjs [--check|--write]");
   process.exit(2);
 }
 
@@ -30,10 +32,9 @@ if (!existsSync(infoPlist)) {
   fail(`macOS app template is missing at ${appRoot}; run npm run build:macos.`);
 }
 
-const metadataFile = join(repoDir, "src", "lib", "metadata.sh");
-const metadataContent = readFileSync(metadataFile, "utf8");
-const match = metadataContent.match(/^WOR_FLASHER_VERSION=['"]([^'"]+)['"]/m);
-const version = match ? match[1] : "1.0.2";
+const version = readProjectMetadata().product?.version;
+if (!version)
+  fail("product.version could not be read from src/config/metadata.json.");
 
 const resourcesDir = join(appRoot, "Contents", "Resources");
 const runtimeDir = join(resourcesDir, "runtime");
@@ -64,6 +65,6 @@ if (mode === "--check") {
     runtimePaths,
     repoDir,
   );
-  writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\n");
+  writeFileSync(manifestFile, formatRuntimeManifest(manifest));
   console.log(`Packaged macOS runtime ${version}.`);
 }

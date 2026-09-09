@@ -15,14 +15,14 @@ preserving Botspot's original authorship and the project's community connections
 
 ## Where to send your change
 
-Open bug fixes, features and documentation changes at [blackoutsecure/wor-flasher][issues].
+Open bug fixes, features and documentation changes at [Botspot/wor-flasher][issues].
 Keep changes focused, preserve original attribution and explain user-visible behavior
 in the pull request.
 
 ## Getting set up
 
 ```bash
-git clone https://github.com/blackoutsecure/wor-flasher
+git clone https://github.com/Botspot/wor-flasher
 cd wor-flasher
 ```
 
@@ -117,14 +117,14 @@ Use the [issue templates][issues]. Include:
 
 - Host OS and version, and Raspberry Pi model.
 - The exact command or GUI choices you used.
-- `$DL_DIR/last-run.log` if the flash failed — the GUI keeps it there for exactly this. Set
-  `WOR_LOG_FILE` to put it somewhere else.
+- The timestamped log shown in the failure dialog, or `$DL_DIR/last-run.log` as the latest-run
+  shortcut. Set `WOR_LOG_FILE` to put it somewhere else.
 - What you expected, and what happened instead.
 
 For real-time help, the [Botspot Software Discord][botspot-discord] is the best place
 for WoR-Flasher itself, and the [WoR project Discord][wor-discord] is the place for
 questions about Windows on Raspberry as an operating system.
 
-[issues]: https://github.com/blackoutsecure/wor-flasher/issues/new/choose
+[issues]: https://github.com/Botspot/wor-flasher/issues/new/choose
 [botspot-discord]: https://discord.gg/RXSTvaUvuu
 [wor-discord]: https://discord.gg/jQCpfVK

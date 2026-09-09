@@ -84,9 +84,10 @@ compatibility changes, record real hardware coverage separately when available.
   launcher executable, icons, and logo). The checked-in root `WoR-Flasher.app` is deleted;
   staged bundles are written to `release/macos/WoR-Flasher.app` by Node release tooling
   (`npm run build`).
-- Node release tooling (`package.json`, `src/node/build-release.mjs`, `src/node/runtime-paths.json`)
+- Node release tooling (`package.json`, `src/build-release.mjs`, `src/lib/node-runtime.mjs`)
   stages deterministic release artifacts into `release/` (ignored by Git and cleaned with
-  `npm run clean`).
+  `npm run clean`). `src/config/metadata.json` owns the explicit `runtimePaths` list of files
+  shipped in release artifacts, plus the runtime/system defaults loaded by `src/lib/metadata.sh`.
 - `config-templates/` contains required boot, setup inputs, and JSON configuration schema/template files (`config.schema.json`, `config.json`). Keep these files
   tracked and validate changes carefully; a missing or empty template can produce
   unbootable media.
@@ -113,9 +114,11 @@ safety-critical code.
 - Preserve registered cleanup for mounts, loop devices, temporary files, and
   interrupted runs. Do not replace an existing `EXIT` trap in a way that drops
   earlier cleanup handlers.
-- Keep source-checkout self-updates opt-in. They may fast-forward a clean checkout
-  but must refuse to overwrite uncommitted work, rewrite history, or update from
-  an untrusted repository or ref.
+- The tool must never rewrite its own installation. The engine and the launcher perform a
+  read-only release check and nothing more: no `git fetch`, `merge`, `pull`, or self-replacing
+  update, on any platform. A half-updated disk flasher is more dangerous than an out-of-date
+  one. The single exception is the macOS app's verified runtime updater, which installs only
+  a digest-verified release archive into a staged runtime store with rollback.
 - WSL is deliberately rejected because its visible disks are not safe flashing
   targets. Do not broaden host support without a tested device-safety design.
 - Never run a real flash against physical media during automated validation. Use
@@ -139,10 +142,10 @@ safety-critical code.
   "does not" instead of "doesn't".
 - The macOS application bundle is a launcher for the same maintained scripts, not
   a separate implementation. Preserve the complete-checkout execution model and
-  its bounded preflight: repair only missing tracked files, update only by an
-  approved fast-forward of a clean checkout, and install only missing Homebrew
-  formulae. Never add `git reset`, `git clean`, `brew upgrade`, or a remote script
-  piped into a shell.
+  its bounded preflight: repair only missing tracked files from the local revision,
+  and install only missing Homebrew formulae. It must not update a source checkout
+  from any remote. Never add `git fetch`, `git merge`, `git reset`, `git clean`,
+  `brew upgrade`, or a remote script piped into a shell.
 - Model and firmware compatibility changes require authoritative upstream evidence
   plus tests. Keep known pins and model restrictions unless the relevant upstream
   issue is resolved and the replacement is tested on applicable hardware.

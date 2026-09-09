@@ -9,7 +9,9 @@ on:
       - "assets/**"
       - "config-templates/**"
       - "src/macos-app/**"
-      - "src/node/runtime-paths.json"
+      - "src/*.mjs"
+      - "src/lib/*.mjs"
+      - ".github/workflows/release.yml"
       - ".github/workflows/shellcheck.yml"
       - "README.md"
   pull_request:
@@ -20,7 +22,9 @@ on:
       - "assets/**"
       - "config-templates/**"
       - "src/macos-app/**"
-      - "src/node/runtime-paths.json"
+      - "src/*.mjs"
+      - "src/lib/*.mjs"
+      - ".github/workflows/release.yml"
       - ".github/workflows/shellcheck.yml"
       - "README.md"
   workflow_dispatch:
@@ -59,7 +63,7 @@ jobs:
         run: shellcheck --severity=warning src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
-        run: npm run build:macos && node src/node/package-macos-app.mjs --check
+        run: npm run build:macos && node src/package-macos-app.mjs --check
 
       - name: Verify Node release tooling
         run: npm run check
@@ -73,7 +77,7 @@ jobs:
         run: /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
-        run: npm run build:macos && node src/node/package-macos-app.mjs --check
+        run: npm run build:macos && node src/package-macos-app.mjs --check
 
       - name: Verify Node release tooling
         run: npm run check

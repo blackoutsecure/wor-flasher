@@ -11,7 +11,7 @@
   <key>CFBundleIconName</key>
   <string>WoR-Flasher</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.blackoutsecure.wor-flasher</string>
+  <string>com.botspot.wor-flasher</string>
   <key>CFBundleName</key>
   <string>WoR-Flasher</string>
   <key>CFBundlePackageType</key>

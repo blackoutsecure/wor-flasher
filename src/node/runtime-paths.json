@@ -1,9 +1,0 @@
-[
-  "install-wor.sh",
-  "install-wor-gui.sh",
-  "install-wor-hook.sh",
-  "src/lib",
-  "src/node",
-  "config-templates",
-  "assets"
-]

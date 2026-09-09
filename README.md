@@ -38,7 +38,7 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
     - [Graphical interface](#graphical-interface)
       - [macOS walkthrough](#macos-walkthrough)
     - [Terminal interface](#terminal-interface)
-    - [Non-interactive use](#non-interactive-use)
+    - [Non-interactive use](#non-interactive-use--json-configuration)
   - [Integration adapter](#integration-adapter)
   - [Parameters](#parameters)
   - [Application setup](#application-setup)
@@ -93,7 +93,7 @@ Windows, WSL and non-Debian Linux distributions are **not** supported. WoR-Flash
 ## Install
 
 ```bash
-git clone https://github.com/blackoutsecure/wor-flasher
+git clone https://github.com/Botspot/wor-flasher
 cd wor-flasher
 ./install-wor-gui.sh
 ```
@@ -184,7 +184,7 @@ RPI_MODEL=4 WIN_LANG=en-us BID=22631.2861 DEVICE=/dev/sda CAN_INSTALL_ON_SAME_DR
 ./install-wor.sh --config config-templates/config.json
 ```
 
-Refer to [`config-templates/config.json`](config-templates/config.json) and [`config-templates/config.schema.json`](config-templates/config.schema.json) for the full JSON configuration schema and default settings.
+Refer to [`config-templates/config.json`](config-templates/config.json) for the default run configuration and [`config-templates/config.schema.json`](config-templates/config.schema.json) for the full JSON configuration schema. Project pins such as the WoR-PE package URL, SHA-256 digest, firmware versions, driver version, Windows build guardrails and update target live in [`src/config/metadata.json`](src/config/metadata.json), are loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and remain overrideable through environment variables or a custom config file.
 
 Sourcing with the `source` argument makes the engine's functions available without running a flash. Useful ones include `list_devs`, `list_dev_paths`, `drive_capability`, `describe_device`, `get_bid`, `get_os_name`, `list_langs`, `validate_iso_file`, `list_cached_winfiles`, `settings_summary` and `install_packages`.
 
@@ -203,30 +203,35 @@ Sourcing with the `source` argument makes the engine's functions available witho
 ./install-wor-hook.sh list-devices
 ./install-wor-hook.sh describe-device /dev/sda
 
-DEVICE=/dev/sda RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us \
-  CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh summary
+./install-wor-hook.sh --set DEVICE=/dev/sda --set RPI_MODEL=4 \
+  --set BID=22631.2861 --set WIN_LANG=en-us \
+  --set CAN_INSTALL_ON_SAME_DRIVE=1 summary
 
-DEVICE=/dev/sda RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us \
-  CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor-hook.sh run
+./install-wor-hook.sh --progress-file /tmp/wor.progress \
+  --set DEVICE=/dev/sda --set RPI_MODEL=4 --set BID=22631.2861 \
+  --set WIN_LANG=en-us --set CAN_INSTALL_ON_SAME_DRIVE=1 run
 ```
 
 Standalone bootstrap requires `git`. These variables control where the hook obtains the engine; only point them at a repository and ref you trust:
 
-| Variable               | Default                                             | Purpose                                      |
-| ---------------------- | --------------------------------------------------- | -------------------------------------------- |
-| `WOR_HOOK_REPOSITORY`  | `https://github.com/blackoutsecure/wor-flasher.git` | Git repository containing the complete tool  |
-| `WOR_HOOK_REF`         | `main`                                              | Branch or tag cloned by the hook             |
-| `WOR_HOOK_INSTALL_DIR` | `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook`  | Persistent checkout used by standalone hooks |
+| Variable               | Default                                            | Purpose                                      |
+| ---------------------- | -------------------------------------------------- | -------------------------------------------- |
+| `WOR_HOOK_REPOSITORY`  | `https://github.com/Botspot/wor-flasher.git`       | Git repository containing the complete tool  |
+| `WOR_HOOK_REF`         | `main`                                             | Branch or tag cloned by the hook             |
+| `WOR_HOOK_INSTALL_DIR` | `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook` | Persistent checkout used by standalone hooks |
 
-Discovery is a snapshot, not authorization to erase a path later. `list-devices` rejects unsupported hosts and excludes the current boot drive, but device state can change. `describe-device` formats any supplied path and `summary` previews settings; neither validates that a device is currently safe. Call `list-devices` again before `run`, and let `run` perform the engine's final host, device, capacity and installation-mode checks. For unattended operation, provide all required values from [Parameters](#parameters); otherwise the engine can prompt for missing choices.
+Discovery is a snapshot, not authorization to erase a path later. `list-devices` rejects unsupported hosts and excludes the current boot drive, but device state can change. `describe-device` formats any supplied path and `summary` previews settings; neither validates that a device is currently safe. Call `list-devices` again before `run`, and let `run` perform the engine's final host, device, capacity and installation-mode checks. For unattended operation, provide all required values from [Parameters](#parameters) through environment variables or repeated `--set NAME=VALUE` options; otherwise the engine can prompt for missing choices.
 
-The adapter is transport-neutral. A GUI, desktop launcher, test harness or another local imaging application can present its own choices and invoke the same engine without copying its flashing logic. Set `WOR_GUI_PROGRESS_FILE` to a writable path to receive line-oriented, tab-separated events while `run` is active:
+The adapter is transport-neutral. A GUI, desktop launcher, test harness or another local imaging application can present its own choices and invoke the same engine without copying its flashing logic. Pass `--progress-file FILE` or set `WOR_GUI_PROGRESS_FILE` to a writable path to receive line-oriented, tab-separated events while `run` is active:
 
 ```text
 STATUS<TAB>message
 STEP<TAB>current<TAB>total<TAB>message
 SUBSTEP<TAB>percent
+TASK<TAB>percent<TAB>label
 ```
+
+`STEP` reports the major workflow stage. `SUBSTEP` reports the current stage's numeric progress. `TASK` carries the friendly current operation, such as `install.wim`, paired with the same percentage so an external progress bar can display `install.wim: 84%` without parsing terminal output.
 
 The adapter returns the underlying command's exit status. Usage errors, including an unknown command or a missing `DEVICE` for `describe-device`, return `2`.
 
@@ -242,10 +247,18 @@ npm run build          # stage fresh macOS, Linux and Windows-placeholder releas
 npm run build:macos    # stage release/macos/WoR-Flasher.app and SHA256SUMS
 npm run build:linux    # stage release/linux/wor-flasher and SHA256SUMS
 npm run package:all    # refresh the embedded .app runtime, then stage every release folder
+npm run pe:check       # download the pinned WoR-PE package and verify the recorded SHA-256
+npm run pe:update      # resolve the latest WoR-PE package, hash it and update project metadata
+npm run metadata:check # verify package.json matches src/config/metadata.json
+npm run metadata:write # rewrite package.json to match src/config/metadata.json
 npm run clean          # remove generated release output
 ```
 
 Generated release output is written under `release/` and is intentionally ignored by Git. It is rebuilt from the source checkout and the embedded macOS runtime each time, so the release folder is not another maintained copy of the project. Review the staged app or Linux payload and the matching `SHA256SUMS` before publishing.
+
+`pe:check` and `pe:update` are maintainer commands because they download release assets. Keep `pe:check` out of routine CI unless network access is expected; use `pe:update` only when deliberately refreshing the pinned WoR-PE package URL and digest in [`src/config/metadata.json`](src/config/metadata.json).
+
+[`src/config/metadata.json`](src/config/metadata.json) is the source of truth for `package.json`'s `version`, `description`, `license`, `homepage`, `repository`, `bugs`, `funding`, and `keywords`; edit `product.*` there, then run `npm run metadata:write` (or `npm run version:set`, which calls it automatically). `npm run build` and `npm run package:all` refuse to stage a release while `package.json` is out of sync, and `npm run check` runs `metadata:check` too.
 
 Windows packaging is intentionally only a placeholder today. A Windows UI should drive the same `install-wor-hook.sh` / engine contract only after a separate device-safety design exists for Windows disks, elevation and removable media. Until then, Windows users should use the official Windows on Raspberry Imager.
 
@@ -253,38 +266,36 @@ Windows packaging is intentionally only a placeholder today. A Windows UI should
 
 Every prompt has a matching environment variable.
 
-| Variable                    | Default                    | Function                                                                                    |
-| --------------------------- | -------------------------- | ------------------------------------------------------------------------------------------- |
-| `DL_DIR`                    | `~/wor-flasher-files`      | Where components are downloaded and Windows images are extracted                            |
-| `RPI_MODEL`                 | _ask_                      | Target Raspberry Pi: `3`, `4` or `5`                                                        |
-| `BID`                       | _ask_                      | Exact Windows build ID, e.g. `22631.2861`                                                   |
-| `WIN_LANG`                  | _ask_                      | Windows language code, e.g. `en-us`                                                         |
-| `DEVICE`                    | _ask_                      | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                               |
-| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                      | `1` to install Windows onto the target itself, `0` to make recovery media for another drive |
-| `SOURCE_FILE`               | unset                      | Path to an existing Windows ARM64 ISO, instead of downloading                               |
-| `CONFIG_TXT`                | shipped template           | Body of `config.txt` written to the boot partition                                          |
-| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                        | `0` leaves the UEFI firmware package's own `config.txt` in place                            |
-| `OOBE_NETWORK_BYPASS`       | `1`                        | `0` requires the standard network-connected Windows setup flow                              |
-| `WINDOWS_ACCOUNT_SETUP`     | `0`                        | `1` creates the optional local Windows administrator configured in Advanced Options         |
-| `WINDOWS_ACCOUNT_USERNAME`  | unset                      | Username for the optional local Windows account                                             |
-| `WINDOWS_ACCOUNT_PASSWORD`  | unset                      | Password for the optional account; written to unattended setup only when enabled            |
-| `WINDOWS_LOCALE_SETUP`      | `0`                        | `1` applies `WINDOWS_LOCALE` to Windows keyboard and regional settings                      |
-| `WINDOWS_LOCALE`            | `en-US`                    | Locale such as `en-US` or `en-GB` used when locale setup is enabled                         |
-| `PI4_AUTO_DISABLE_3GB`      | `1`                        | Pi 4 only. `0` keeps the 3 GB RAM limit                                                     |
-| `UEFI_USE_LATEST`           | `0`                        | `1` queries GitHub for the newest UEFI firmware instead of the pinned version               |
-| `DRIVERS_USE_LATEST`        | `1`                        | `0` uses the pinned driver package version                                                  |
-| `SKIP_IMAGE_VERIFICATION`   | `0`                        | `1` skips post-flash verification. Not recommended                                          |
-| `UPDATE_REPO_URL`           | blackoutsecure/wor-flasher | Git repository used by the opt-in self-updater; override for a trusted mirror               |
-| `UPDATE_REF`                | `HEAD`                     | Branch or ref checked by the self-updater                                                   |
-| `NO_UPDATE`                 | `1`                        | `0` opts in to fast-forwarding a clean source checkout                                      |
-| `HIDE_EMPTY_DRIVES`         | `1`                        | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
-| `USE_CACHE`                 | `1`                        | See [Download cache](#download-cache)                                                       |
-| `DRY_RUN`                   | `0`                        | `1` runs every step except writing to the drive                                             |
-| `WOR_LOG_FILE`              | `$DL_DIR/last-run.log`     | Where a failed run's log is kept                                                            |
-| `VERIFY_TLS`                | `1`                        | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                |
-| `NO_UPDATE`                 | `1`                        | `0` opts in to the self-updater. See [Updating](#updating)                                  |
-| `RUN_MODE`                  | `cli`                      | `gui` makes the engine show graphical error dialogs                                         |
-| `SKIP_PACKAGE_INSTALL`      | unset                      | `1` assumes dependencies are already present                                                |
+| Variable                    | Default                                    | Function                                                                                    |
+| --------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `DL_DIR`                    | `~/wor-flasher-files`                      | Where components are downloaded and Windows images are extracted                            |
+| `RPI_MODEL`                 | _ask_                                      | Target Raspberry Pi: `3`, `4` or `5`                                                        |
+| `BID`                       | _ask_                                      | Exact Windows build ID, e.g. `22631.2861`                                                   |
+| `WIN_LANG`                  | _ask_                                      | Windows language code, e.g. `en-us`                                                         |
+| `DEVICE`                    | _ask_                                      | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                               |
+| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                                      | `1` to install Windows onto the target itself, `0` to make recovery media for another drive |
+| `SOURCE_FILE`               | unset                                      | Path to an existing Windows ARM64 ISO, instead of downloading                               |
+| `CONFIG_TXT`                | shipped template                           | Body of `config.txt` written to the boot partition                                          |
+| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                                        | `0` leaves the UEFI firmware package's own `config.txt` in place                            |
+| `OOBE_NETWORK_BYPASS`       | `1`                                        | `0` requires the standard network-connected Windows setup flow                              |
+| `WINDOWS_ACCOUNT_SETUP`     | `0`                                        | `1` creates the optional local Windows administrator configured in Advanced Options         |
+| `WINDOWS_ACCOUNT_USERNAME`  | unset                                      | Username for the optional local Windows account                                             |
+| `WINDOWS_ACCOUNT_PASSWORD`  | unset                                      | Password for the optional account; written to unattended setup only when enabled            |
+| `WINDOWS_LOCALE_SETUP`      | `0`                                        | `1` applies `WINDOWS_LOCALE` to Windows keyboard and regional settings                      |
+| `WINDOWS_LOCALE`            | `en-US`                                    | Locale such as `en-US` or `en-GB` used when locale setup is enabled                         |
+| `PI4_AUTO_DISABLE_3GB`      | `1`                                        | Pi 4 only. `0` keeps the 3 GB RAM limit                                                     |
+| `UEFI_USE_LATEST`           | `0`                                        | `1` queries GitHub for the newest UEFI firmware instead of the pinned version               |
+| `DRIVERS_USE_LATEST`        | `1`                                        | `0` uses the pinned driver package version                                                  |
+| `SKIP_IMAGE_VERIFICATION`   | `0`                                        | `1` skips post-flash verification. Not recommended                                          |
+| `CHECK_FOR_UPDATES`         | `1`                                        | `0` disables the read-only release check                                                    |
+| `NO_UPDATE`                 | `0`                                        | Legacy inverse of `CHECK_FOR_UPDATES`; `1` disables update checks                           |
+| `HIDE_EMPTY_DRIVES`         | `1`                                        | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
+| `USE_CACHE`                 | `1`                                        | See [Download cache](#download-cache)                                                       |
+| `DRY_RUN`                   | `0`                                        | `1` runs every step except writing to the drive                                             |
+| `WOR_LOG_FILE`              | `$DL_DIR/logs/wor-flasher-<timestamp>.log` | Where a failed run's primary log is kept; `last-run.log` is refreshed for support           |
+| `VERIFY_TLS`                | `1`                                        | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                |
+| `RUN_MODE`                  | `cli`                                      | `gui` makes the engine show graphical error dialogs                                         |
+| `SKIP_PACKAGE_INSTALL`      | unset                                      | `1` assumes dependencies are already present                                                |
 
 Example:
 
@@ -381,22 +392,42 @@ Move the completed drive to the Pi and connect a display, a wired keyboard and a
 
 ## Updating
 
-WoR-Flasher is a git checkout, so updating is a pull:
+WoR-Flasher never rewrites its own installation. Nothing in the tool runs `git pull`, `git merge`,
+or replaces its own files on a source checkout, because a partly-updated disk flasher is far more
+dangerous than an out-of-date one. Updating is always something you choose to do.
+
+If you installed from a git checkout, update it yourself:
 
 ```bash
 cd wor-flasher
 git pull
 ```
 
-An opt-in self-updater is also built in. It is **off by default** (`NO_UPDATE=1`). When enabled it only fast-forwards a clean checkout, and refuses to touch one with uncommitted changes:
+If you installed from a release archive, download the newer archive from the
+[releases page](https://github.com/Botspot/wor-flasher/releases) and verify it against the published
+`SHA256SUMS` before use.
+
+To help you notice a new version, the engine performs a **read-only** release check before setup,
+downloads, or flashing begin, and prints a one-line notice when a newer release exists. It makes a
+single HTTPS request to the GitHub releases API, writes nothing, and changes nothing. The check
+needs Node.js; on a host without Node.js it is silently skipped and the flash proceeds normally.
 
 ```bash
-NO_UPDATE=0 ./install-wor.sh
+CHECK_FOR_UPDATES=0 ./install-wor.sh  # skip the release check
 ```
 
-When launched from a source checkout, the macOS app checks the checkout's configured `origin` and current branch for an update before launch. It prompts before changing a clean checkout and applies only a fast-forward update. It silently skips the update when tracked files are modified or `HEAD` is detached, and continues with the installed revision when no update is available. Set `UPDATE_REPO_URL` and `UPDATE_REF` before opening the app from a shell to test another trusted remote or ref.
+Legacy callers can still set `NO_UPDATE=1` to disable update checks. You can run the same check on
+its own with `npm run update-check`.
 
-When the app is copied away from its checkout, it never modifies its own bundle. On first launch it validates the embedded runtime and copies it to `~/Library/Application Support/WoR-Flasher/runtimes/<version>/runtime`. Detached updates are staged there from release metadata over HTTPS, and are accepted only after the archive SHA-256, every extracted file digest, and every recorded file mode match the signed package manifest. Unsafe archive entries, incomplete payloads, equal versions, and downgrades are rejected. Runtime selection falls back in this order: active, previous, then the immutable embedded copy.
+The macOS app is the one component that can install an update, and only when it has been copied away
+from a checkout. It never modifies its own bundle. On first launch it validates the embedded runtime
+and copies it to `~/Library/Application Support/WoR-Flasher/runtimes/<version>/runtime`. Detached
+updates are staged there from release metadata over HTTPS, and are accepted only after the archive
+SHA-256, every extracted file digest, and every recorded file mode match the signed package manifest.
+Unsafe archive entries, incomplete payloads, equal versions, and downgrades are rejected. Runtime
+selection falls back in this order: active, previous, then the immutable embedded copy. Launched from
+a source checkout, the app updates nothing — it only restores missing tracked files, with your
+confirmation, from the revision already in your local checkout.
 
 Check what you are running with `./install-wor.sh --version`.
 
@@ -413,7 +444,7 @@ Source-file repair requires a complete Git checkout. A detached app instead vali
 
 ## Troubleshooting
 
-If a flash fails from the GUI, the full log is kept at `$DL_DIR/last-run.log` — or wherever `WOR_LOG_FILE` points — and the path is shown in the error dialog. It is also listed on the confirmation screen before you start. Attach it to any bug report.
+If a flash fails from the GUI, the full log is kept under `$DL_DIR/logs/` with a UTC timestamp in the filename, or wherever `WOR_LOG_FILE` points. `$DL_DIR/last-run.log` is also refreshed as a stable support shortcut. The primary path is shown in the error dialog and listed on the confirmation screen before you start. Attach that log to any bug report.
 
 <details>
 <summary><b>macOS: "Operation not permitted" formatting the drive</b></summary>
@@ -503,7 +534,7 @@ This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unloc
 ./tests/run-linux-integration.sh    # force the Dockerised Linux suite
 npm run check                       # shell syntax, package-plan checks, and release-tool syntax
 npm run build:macos                 # generate release/macos/WoR-Flasher.app
-node src/node/package-macos-app.mjs --check  # verify generated macOS runtime matches canonical sources
+node src/package-macos-app.mjs --check  # verify generated macOS runtime matches canonical sources
 shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 ```
 
@@ -593,7 +624,8 @@ These additions are maintained directly by Blackout Secure in cooperation with B
 
 ## Versions
 
-This maintained source uses its own version line. The product name, window title and current version are defined once in [`src/lib/metadata.sh`](src/lib/metadata.sh). The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion` in the app property list. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
+- **9.9.9** - Release version update.
+  This maintained source uses its own version line. The product name, window title, current version, runtime file list and pinned system defaults are defined in [`src/config/metadata.json`](src/config/metadata.json), loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and checked against [`package.json`](package.json) and the macOS app property list. The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion`. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
 
 - **1.0.2**
   - `WoR-Flasher.app` can run independently of a Git checkout using an immutable embedded runtime, validated writable runtime copies under Application Support, and active/previous/embedded fallback.

@@ -2,8 +2,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
-  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -16,16 +14,20 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateRuntimeManifest } from "./updater.mjs";
+import {
+  copyTree,
+  formatRuntimeManifest,
+  generateRuntimeManifest,
+  readProjectMetadata,
+  readRuntimePaths,
+} from "./lib/node-runtime.mjs";
+import { checkPackageMetadata } from "./sync-package-metadata.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const repoDir = join(scriptDir, "..", "..");
+const repoDir = join(scriptDir, "..");
 const releaseDir = join(repoDir, "release");
 const macosAppTemplate = join(repoDir, "src", "macos-app");
-const runtimePathsFile = join(scriptDir, "runtime-paths.json");
-const runtimePaths = Object.freeze(
-  JSON.parse(readFileSync(runtimePathsFile, "utf8")),
-);
+const runtimePaths = Object.freeze(readRuntimePaths());
 
 const platformPlans = Object.freeze({
   macos: {
@@ -82,19 +84,6 @@ function walk(root) {
     else if (info.isFile()) entries.push(path);
   }
   return entries.sort();
-}
-
-function copyTree(source, target) {
-  const info = statSync(source);
-  if (info.isDirectory()) {
-    mkdirSync(target, { recursive: true });
-    for (const name of readdirSync(source))
-      copyTree(join(source, name), join(target, name));
-    return;
-  }
-  mkdirSync(dirname(target), { recursive: true });
-  copyFileSync(source, target);
-  chmodSync(target, info.mode);
 }
 
 function copyRuntime(targetRoot) {
@@ -170,6 +159,15 @@ function verifyShellRuntime() {
   } catch (err) {
     fail(`Invalid JSON in configuration templates: ${err.message}`);
   }
+
+  //src/config/metadata.json is the source of truth for package.json's description, license,
+  //homepage, repository, bugs, funding, and keywords; a release must not ship them stale.
+  const packageDrift = checkPackageMetadata();
+  if (packageDrift.length > 0) {
+    fail(
+      `package.json is out of sync with src/config/metadata.json (${packageDrift.map((d) => d.key).join(", ")}); run: node src/sync-package-metadata.mjs --write`,
+    );
+  }
 }
 
 function buildMacos(root) {
@@ -187,8 +185,21 @@ function buildMacos(root) {
     join(macosAppTemplate, "Contents", "Resources", "WoR-Flasher.icns"),
     "src/macos-app/Contents/Resources/WoR-Flasher.icns is missing",
   );
+  const metadata = readProjectMetadata();
+  const assetsDirname = metadata.product?.assetsDirname;
+  const logoFilename = metadata.product?.logoFilename;
+  if (!assetsDirname || !logoFilename) {
+    fail(
+      "product.assetsDirname or product.logoFilename is missing from src/config/metadata.json",
+    );
+  }
+  const logoSource = join(repoDir, assetsDirname, logoFilename);
+  assertExists(logoSource, `Missing ${assetsDirname}/${logoFilename}`);
   const appTarget = join(root, "WoR-Flasher.app");
   copyTree(macosAppTemplate, appTarget);
+  // The app bundle template does not check in its own logo copy; it is always
+  // staged from the single canonical source in assets/ to prevent drift.
+  copyTree(logoSource, join(appTarget, "Contents", "Resources", logoFilename));
   const pkg = JSON.parse(readFileSync(join(repoDir, "package.json"), "utf8"));
   const runtimeTarget = join(appTarget, "Contents", "Resources", "runtime");
   const manifestTarget = join(
@@ -203,7 +214,7 @@ function buildMacos(root) {
     runtimePaths,
     repoDir,
   );
-  writeFileSync(manifestTarget, JSON.stringify(manifest, null, 2) + "\n");
+  writeFileSync(manifestTarget, formatRuntimeManifest(manifest));
   writeReadme(root, [
     "WoR-Flasher macOS release artifact",
     "",
@@ -246,7 +257,7 @@ function buildWindowsPlaceholder(root) {
 try {
   if (args.includes("--help") || args.includes("-h")) {
     console.log(
-      `WoR-Flasher Release Builder\n\nUsage: node src/node/build-release.mjs [options]\n\nOptions:\n  --platform=all|macos|linux|windows  Target platform (default: all)\n  --check                             Validate release packaging without writing artifacts\n  --clean                             Remove release/ staging directory\n  --help, -h                          Show this help message\n`,
+      `WoR-Flasher Release Builder\n\nUsage: node src/build-release.mjs [options]\n\nOptions:\n  --platform=all|macos|linux|windows  Target platform (default: all)\n  --check                             Validate release packaging without writing artifacts\n  --clean                             Remove release/ staging directory\n  --help, -h                          Show this help message\n`,
     );
     process.exit(0);
   }

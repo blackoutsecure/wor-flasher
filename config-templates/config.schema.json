@@ -125,19 +125,58 @@
           "type": "boolean",
           "description": "Whether to verify TLS certificates during downloads"
         },
+        "checkForUpdates": {
+          "type": "boolean",
+          "description": "Whether to report a newer published release before setup work starts. The check is read-only and never modifies this installation."
+        },
         "noUpdate": {
           "type": "boolean",
-          "description": "Whether to disable self-updater checks"
+          "description": "Legacy inverse of checkForUpdates; true disables the release check"
         },
         "logFile": {
           "type": "string",
-          "description": "Custom log file path for installation output"
+          "description": "Optional custom path for installer output. Omit to use a timestamped log under the download directory's logs/ folder, with last-run.log refreshed for support."
+        }
+      },
+      "additionalProperties": false
+    },
+    "notifications": {
+      "type": "object",
+      "description": "How the GUI announces the end of a flash. Only the completion sound is selectable; a failure always uses the platform's own error sound.",
+      "properties": {
+        "playSound": {
+          "type": "boolean",
+          "description": "Whether to play a sound when the flash finishes"
+        },
+        "showNotification": {
+          "type": "boolean",
+          "description": "Whether to post a desktop notification when the flash finishes (macOS Notification Center, or notify-send on Linux)"
+        },
+        "sounds": {
+          "type": "object",
+          "description": "Completion sound per host platform. A name this host cannot play falls back to the platform default.",
+          "properties": {
+            "macos": {
+              "type": "string",
+              "description": "Name of a sound in /System/Library/Sounds (e.g. Glass, Hero, Ping, Submarine)"
+            },
+            "linux": {
+              "type": "string",
+              "description": "freedesktop sound-theme event name (e.g. complete, bell, message)"
+            },
+            "windows": {
+              "type": "string",
+              "description": "Reserved: Windows is not a supported host, so no sound is played there"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
     },
     "system": {
       "type": "object",
+      "description": "Advanced overrides for project runtime metadata. Defaults live in src/config/metadata.json and are loaded by src/lib/metadata.sh; ordinary configs should usually omit this block.",
       "properties": {
         "peInstallerUrl": {
           "type": "string",
@@ -183,17 +222,9 @@
           "type": "string",
           "description": "Recommended safe build ID for ARMv8.0 hardware"
         },
-        "updateRepoUrl": {
-          "type": "string",
-          "description": "Git repository URL for self-updater target"
-        },
-        "updateRef": {
-          "type": "string",
-          "description": "Git ref for self-updater target"
-        },
         "repoSlug": {
           "type": "string",
-          "description": "GitHub repository owner/repo slug for release updates"
+          "description": "GitHub repository owner/repo slug checked for newer releases"
         }
       },
       "additionalProperties": false

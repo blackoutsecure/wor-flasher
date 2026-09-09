@@ -7,12 +7,26 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 ENGINE="$SCRIPT_DIR/install-wor.sh"
 
+hook_export_assignment() { #Input: NAME=VALUE. Export one engine setting passed as a hook option.
+  local assignment="$1" name
+  name="${assignment%%=*}"
+  case "$assignment" in
+    *=*) ;;
+    *) printf 'Invalid --set value. Expected NAME=VALUE.\n' >&2; exit 2 ;;
+  esac
+  case "$name" in
+    ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) printf 'Invalid --set name: %s\n' "$name" >&2; exit 2 ;;
+  esac
+  export "$assignment"
+}
+
 hook_checkout_complete() { #Input: checkout directory. Output: success when every runtime file exists.
   local checkout_dir="$1"
   local required_path
   for required_path in \
     install-wor.sh \
-    src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh \
+    src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh \
+    src/config/metadata.json src/config/metadata.schema.json \
     config-templates/config.json config-templates/config.schema.json \
     config-templates/pi3.config.txt config-templates/pi4.config.txt config-templates/pi5.config.txt \
     config-templates/pi4-ram-unlock.ps1 config-templates/pi4-ram-unlock-specialize.xml \
@@ -22,7 +36,7 @@ hook_checkout_complete() { #Input: checkout directory. Output: success when ever
 }
 
 if ! hook_checkout_complete "$SCRIPT_DIR" ;then
-  : "${WOR_HOOK_REPOSITORY:=https://github.com/blackoutsecure/wor-flasher.git}"
+  : "${WOR_HOOK_REPOSITORY:=https://github.com/Botspot/wor-flasher.git}"
   #a released hook must clone a durable ref; working branches are deleted after merge
   : "${WOR_HOOK_REF:=main}"
   : "${WOR_HOOK_INSTALL_DIR:=${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook}"
@@ -55,9 +69,35 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --config)
-      [ -n "${2:-}" ] || { printf 'Usage: %s [--config FILE] COMMAND\n' "$0" >&2; exit 2; }
+      [ -n "${2:-}" ] || { printf 'Usage: %s [--config FILE] [--progress-file FILE] [--set NAME=VALUE] COMMAND\n' "$0" >&2; exit 2; }
       WOR_CONFIG_FILE="$2"
       export WOR_CONFIG_FILE
+      shift 2
+      ;;
+    --progress-file=*)
+      WOR_GUI_PROGRESS_FILE="${1#*=}"
+      case "$WOR_GUI_PROGRESS_FILE" in
+        ''|*$'\n'*|*$'\r'*) printf 'Invalid --progress-file value.\n' >&2; exit 2 ;;
+      esac
+      export WOR_GUI_PROGRESS_FILE
+      shift
+      ;;
+    --progress-file)
+      [ -n "${2:-}" ] || { printf 'Usage: %s [--config FILE] [--progress-file FILE] [--set NAME=VALUE] COMMAND\n' "$0" >&2; exit 2; }
+      WOR_GUI_PROGRESS_FILE="$2"
+      case "$WOR_GUI_PROGRESS_FILE" in
+        ''|*$'\n'*|*$'\r'*) printf 'Invalid --progress-file value.\n' >&2; exit 2 ;;
+      esac
+      export WOR_GUI_PROGRESS_FILE
+      shift 2
+      ;;
+    --set=*)
+      hook_export_assignment "${1#*=}"
+      shift
+      ;;
+    --set)
+      [ -n "${2:-}" ] || { printf 'Usage: %s [--config FILE] [--progress-file FILE] [--set NAME=VALUE] COMMAND\n' "$0" >&2; exit 2; }
+      hook_export_assignment "$2"
       shift 2
       ;;
     *)
@@ -89,7 +129,7 @@ case "${1:-}" in
     ;;
   *)
     cat >&2 <<USAGE
-Usage: $(basename "$0") [--config FILE] COMMAND
+Usage: $(basename "$0") [--config FILE] [--progress-file FILE] [--set NAME=VALUE] COMMAND
 
 Commands:
   list-devices              Print safe whole-disk device paths, one per line.
@@ -99,6 +139,8 @@ Commands:
 
 Set the same variables documented in README.md before calling run, including
 DEVICE, RPI_MODEL, BID, WIN_LANG and CAN_INSTALL_ON_SAME_DRIVE, or pass --config FILE.
+Use --progress-file FILE with run to receive STATUS, STEP, SUBSTEP and TASK events.
+Use --set NAME=VALUE to pass engine settings as options instead of environment variables.
 
 If install-wor.sh is not next to this adapter, the complete WoR-Flasher checkout
 is obtained automatically. Override WOR_HOOK_REPOSITORY, WOR_HOOK_REF or

@@ -14,10 +14,6 @@ INFO_PLIST="${WOR_APP_INFO_PLIST:-$APP_CONTENTS/Info.plist}"
 RESOURCES_DIR="${WOR_APP_RESOURCES_DIR:-$APP_CONTENTS/Resources}"
 EMBEDDED_RUNTIME="$RESOURCES_DIR/runtime"
 EMBEDDED_MANIFEST="$RESOURCES_DIR/runtime-manifest.json"
-APP_SUPPORT_DIR="${WOR_APP_SUPPORT_DIR:-$HOME/Library/Application Support/WoR-Flasher}"
-RUNTIMES_DIR="$APP_SUPPORT_DIR/runtimes"
-ACTIVE_RUNTIME_FILE="$APP_SUPPORT_DIR/active-runtime"
-PREVIOUS_RUNTIME_FILE="$APP_SUPPORT_DIR/previous-runtime"
 REPO_DIR=''
 GUI_SCRIPT=''
 METADATA_FILE=''
@@ -25,7 +21,23 @@ DEPENDENCIES_FILE=''
 RUNTIME_MANIFEST=''
 SOURCE_CHECKOUT=0
 WOR_FLASHER_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO_PLIST" 2>/dev/null || printf 'WoR-Flasher')"
+#the shared metadata is not loadable until a runtime is verified, so derive the window title from the bundle
+WOR_BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST" 2>/dev/null || printf '')"
+[ -n "$WOR_BUNDLE_VERSION" ] && WOR_WINDOW_TITLE="$WOR_FLASHER_NAME v$WOR_BUNDLE_VERSION" || WOR_WINDOW_TITLE="$WOR_FLASHER_NAME"
 BUNDLE_ICON_FILENAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$INFO_PLIST" 2>/dev/null || printf 'WoR-Flasher.icns')"
+#Application Support folder name matches the bundle's own display name, so a rebrand needs no launcher edit
+APP_SUPPORT_DIR="${WOR_APP_SUPPORT_DIR:-$HOME/Library/Application Support/$WOR_FLASHER_NAME}"
+RUNTIMES_DIR="$APP_SUPPORT_DIR/runtimes"
+ACTIVE_RUNTIME_FILE="$APP_SUPPORT_DIR/active-runtime"
+PREVIOUS_RUNTIME_FILE="$APP_SUPPORT_DIR/previous-runtime"
+#src/config/metadata.json is the source of truth for license/repository branding; read before any
+#runtime is selected, since the JXA startup window below cannot source src/lib/metadata.sh yet
+EARLY_METADATA_FILE="$CHECKOUT_DIR/src/config/metadata.json"
+if [ ! -d "$CHECKOUT_DIR/.git" ] || [ ! -x "$CHECKOUT_DIR/install-wor-gui.sh" ];then
+  EARLY_METADATA_FILE="$EMBEDDED_RUNTIME/src/config/metadata.json"
+fi
+WOR_PRODUCT_LICENSE="$(/usr/bin/plutil -extract product.license raw -o - "$EARLY_METADATA_FILE" 2>/dev/null)"
+WOR_REPO_SLUG="$(/usr/bin/plutil -extract systemDefaults.repoSlug raw -o - "$EARLY_METADATA_FILE" 2>/dev/null)"
 STARTUP_STATUS=''
 STARTUP_DONE=''
 STARTUP_PID=''
@@ -155,10 +167,13 @@ install_staged_runtime() { #Input: staged version directory. Validate and promot
   validate_runtime "$staged/runtime" "$staged/runtime-manifest.json" || return 1
   target="$RUNTIMES_DIR/$version"
   if [ -e "$target" ];then
-    if cmp -s "$target/runtime-manifest.json" "$staged/runtime-manifest.json";then
-      validate_runtime "$target/runtime" "$target/runtime-manifest.json" || return 1
+    if cmp -s "$target/runtime-manifest.json" "$staged/runtime-manifest.json" \
+      && validate_runtime "$target/runtime" "$target/runtime-manifest.json" ;then
+      #an identical, intact runtime is already installed, so keep it and discard the staged copy
       rm -rf "$staged"
     else
+      #the installed copy is a different version or has been corrupted; the staged copy was
+      #validated above, so replacing it repairs the install instead of stranding a bad runtime
       rm -rf "$target" || return 1
       mv "$staged" "$target" || return 1
     fi
@@ -203,7 +218,8 @@ archive_entries_are_safe() { #Input: tar.gz archive. Reject links and paths esca
 }
 
 check_for_runtime_update() {
-  local metadata_url="${WOR_UPDATE_METADATA_URL:-https://github.com/blackoutsecure/wor-flasher/releases/latest/download/macos-runtime.json}"
+  #systemDefaults.repoSlug in src/config/metadata.json is the source of truth for the update source
+  local metadata_url="${WOR_UPDATE_METADATA_URL:-https://github.com/${WOR_DEFAULT_REPO_SLUG:-Botspot/wor-flasher}/releases/latest/download/macos-runtime.json}"
   local curl_bin="${WOR_CURL_BIN:-/usr/bin/curl}"
   local work_dir metadata archive version archive_url expected_digest actual_digest staged current_version
   case "$metadata_url" in
@@ -213,7 +229,7 @@ check_for_runtime_update() {
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wor-flasher-runtime-update.XXXXXX")" || return 0
   metadata="$work_dir/metadata.json"
   archive="$work_dir/runtime.tar.gz"
-  if ! "$curl_bin" --fail --location --silent --show-error --max-time 15 "$metadata_url" -o "$metadata" ;then
+  if ! "$curl_bin" --fail --location --silent --max-time 15 "$metadata_url" -o "$metadata" ;then
     rm -rf "$work_dir"
     return 0
   fi
@@ -230,7 +246,7 @@ check_for_runtime_update() {
   printf '%s' "$expected_digest" | grep -Eq '^[0-9a-f]{64}$' || { rm -rf "$work_dir"; return 0; }
   ask_to_continue "WoR-Flasher $version is available as a verified runtime update." 'Update Now' \
     || { rm -rf "$work_dir"; return 0; }
-  if ! "$curl_bin" --fail --location --silent --show-error --max-time 120 "$archive_url" -o "$archive" ;then
+  if ! "$curl_bin" --fail --location --silent --max-time 120 "$archive_url" -o "$archive" ;then
     rm -rf "$work_dir"
     return 0
   fi
@@ -252,7 +268,9 @@ check_for_runtime_update() {
 start_startup_window() {
   local icon_path="$RESOURCES_DIR/$BUNDLE_ICON_FILENAME"
   rm -f "$STARTUP_DONE"
-  /usr/bin/osascript -l JavaScript - "$STARTUP_STATUS" "$STARTUP_DONE" "$WOR_FLASHER_NAME" "$icon_path" <<'JXA' >/dev/null 2>&1 &
+  #this window opens before any runtime is validated, so it cannot load the shared window library from
+  #src/lib/metadata.sh; keep its chrome in step with worMakeWindow by hand instead
+  /usr/bin/osascript -l JavaScript - "$STARTUP_STATUS" "$STARTUP_DONE" "$WOR_FLASHER_NAME" "$icon_path" "$WOR_WINDOW_TITLE" "$WOR_PRODUCT_LICENSE" "$WOR_REPO_SLUG" <<'JXA' >/dev/null 2>&1 &
 ObjC.import('AppKit')
 ObjC.import('Foundation')
 const args = $.NSProcessInfo.processInfo.arguments
@@ -260,20 +278,136 @@ const statusPath = ObjC.unwrap(args.objectAtIndex(4))
 const donePath = ObjC.unwrap(args.objectAtIndex(5))
 const appTitle = ObjC.unwrap(args.objectAtIndex(6))
 const iconPath = ObjC.unwrap(args.objectAtIndex(7))
+const windowTitle = ObjC.unwrap(args.objectAtIndex(8) || appTitle)
+const licenseText = ObjC.unwrap(args.objectAtIndex(9)) || 'GPL-3.0-or-later'
+const repoSlugText = ObjC.unwrap(args.objectAtIndex(10)) || 'Botspot/wor-flasher'
 const fm = $.NSFileManager.defaultManager
 $.NSProcessInfo.processInfo.processName = appTitle
 const app = $.NSApplication.sharedApplication
 app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
 app.setApplicationIconImage($.NSImage.alloc.initWithContentsOfFile($(iconPath)))
 
+let aboutWindow = null
+let aboutController = null
+
+function appVersion() {
+  const prefix = appTitle + ' v'
+  if (windowTitle.indexOf(prefix) === 0) return windowTitle.substring(prefix.length)
+  return ''
+}
+
+function showAboutWindow() {
+  if (aboutWindow) {
+    aboutWindow.makeKeyAndOrderFront(null)
+    app.activateIgnoringOtherApps(true)
+    return
+  }
+  const width = 500
+  const height = 300
+  const style = $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskClosable
+  aboutWindow = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(0, 0, width, height), style, $.NSBackingStoreBuffered, false)
+  aboutWindow.title = 'About ' + appTitle
+  aboutWindow.center
+  const zoomButton = aboutWindow.standardWindowButton($.NSWindowZoomButton)
+  if (zoomButton) zoomButton.hidden = true
+  const miniButton = aboutWindow.standardWindowButton($.NSWindowMiniaturizeButton)
+  if (miniButton) miniButton.hidden = true
+  const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, height))
+  aboutWindow.contentView = content
+
+  const imageView = $.NSImageView.alloc.initWithFrame($.NSMakeRect(28, 182, 72, 72))
+  imageView.image = $.NSImage.alloc.initWithContentsOfFile($(iconPath))
+  imageView.imageScaling = $.NSImageScaleProportionallyUpOrDown
+  content.addSubview(imageView)
+
+  const title = $.NSTextField.labelWithString(appTitle)
+  title.frame = $.NSMakeRect(116, 226, width - 144, 30)
+  title.font = $.NSFont.systemFontOfSizeWeight(22, $.NSFontWeightBold)
+  content.addSubview(title)
+
+  const subtitle = $.NSTextField.labelWithString(appVersion().length > 0 ? 'Version ' + appVersion() : 'Version unavailable')
+  subtitle.frame = $.NSMakeRect(116, 202, width - 144, 22)
+  subtitle.font = $.NSFont.systemFontOfSizeWeight(13, $.NSFontWeightMedium)
+  subtitle.textColor = $.NSColor.secondaryLabelColor
+  content.addSubview(subtitle)
+
+  const body = $.NSTextField.labelWithString('Create bootable Windows 10/11 ARM64 media for Raspberry Pi from Linux or macOS.\n\nMaintainers: Botspot + Blackout Secure\nLicense: ' + licenseText + '\nRepository: github.com/' + repoSlugText + '\nRuntime: validated standalone macOS launcher')
+  body.frame = $.NSMakeRect(28, 70, width - 56, 112)
+  body.font = $.NSFont.systemFontOfSize(12)
+  body.setUsesSingleLineMode(false)
+  body.cell.setWraps(true)
+  body.cell.setScrollable(false)
+  content.addSubview(body)
+
+  const okButton = $.NSButton.buttonWithTitleTargetAction('OK', aboutController, 'closeAbout:')
+  okButton.bezelStyle = $.NSBezelStyleRounded
+  okButton.keyEquivalent = '\r'
+  okButton.sizeToFit
+  const okWidth = Math.max(96, okButton.frame.size.width)
+  okButton.frame = $.NSMakeRect(width - 28 - okWidth, 24, okWidth, 32)
+  content.addSubview(okButton)
+
+  aboutWindow.makeKeyAndOrderFront(null)
+  app.activateIgnoringOtherApps(true)
+}
+
+const AboutController = ObjC.registerSubclass({
+  name: 'WorLauncherAboutController',
+  superclass: 'NSObject',
+  methods: {
+    'showAbout:': {
+      types: ['void', ['id']],
+      implementation: function() { showAboutWindow() }
+    },
+    'closeAbout:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        if (aboutWindow) {
+          aboutWindow.close
+          aboutWindow = null
+        }
+      }
+    }
+  }
+})
+aboutController = $.WorLauncherAboutController.alloc.init
+
+const mainMenu = $.NSMenu.alloc.initWithTitle(appTitle)
+const appMenuItem = $.NSMenuItem.alloc.init
+appMenuItem.title = appTitle
+const appMenu = $.NSMenu.alloc.initWithTitle(appTitle)
+const aboutItem = appMenu.addItemWithTitleActionKeyEquivalent('About ' + appTitle, 'showAbout:', '')
+aboutItem.target = aboutController
+//AppKit auto-validates menu actions against the responder chain, which never finds a JXA-only target
+appMenu.autoenablesItems = false
+aboutItem.enabled = true
+//leave target nil so these resolve through the standard first-responder chain to NSApp, the same
+//way they always have; only autoenablesItems needed the explicit override, for the custom About action
+const hideItem = appMenu.addItemWithTitleActionKeyEquivalent('Hide ' + appTitle, 'hide:', 'h')
+hideItem.enabled = true
+const hideOthersItem = appMenu.addItemWithTitleActionKeyEquivalent('Hide Others', 'hideOtherApplications:', 'h')
+hideOthersItem.enabled = true
+const showAllItem = appMenu.addItemWithTitleActionKeyEquivalent('Show All', 'unhideAllApplications:', '')
+showAllItem.enabled = true
+appMenu.addItem($.NSMenuItem.separatorItem)
+const quitItem = appMenu.addItemWithTitleActionKeyEquivalent('Quit ' + appTitle, 'terminate:', 'q')
+quitItem.enabled = true
+appMenuItem.submenu = appMenu
+mainMenu.addItem(appMenuItem)
+app.mainMenu = mainMenu
+
+//the close box quits outright, the same as the app menu's Quit item, rather than merely hiding
+//this window while the verification it reports on kept running unattended
 const window = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
   $.NSMakeRect(0, 0, 440, 150),
-  $.NSWindowStyleMaskTitled,
+  $.NSWindowStyleMaskTitled | $.NSWindowStyleMaskMiniaturizable | $.NSWindowStyleMaskClosable,
   $.NSBackingStoreBuffered,
   false,
 )
-window.title = appTitle
+window.title = windowTitle
 window.center
+const zoomButton = window.standardWindowButton($.NSWindowZoomButton)
+if (zoomButton) zoomButton.hidden = true
 
 const heading = $.NSTextField.labelWithString('Preparing WoR-Flasher')
 heading.font = $.NSFont.boldSystemFontOfSize(17)
@@ -318,9 +452,18 @@ ObjC.registerSubclass({
         detail.stringValue = readStatus()
       },
     },
+    //without this, the close box would hide the window while verification kept running unattended
+    'windowShouldClose:': {
+      types: ['bool', ['id']],
+      implementation: function () {
+        app.terminate(null)
+        return true
+      },
+    },
   },
 })
 const controller = $.WorStartupController.alloc.init
+window.setDelegate(controller)
 const timer = $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(
   0.15,
   controller,
@@ -439,7 +582,7 @@ APPLESCRIPT
 
 repair_missing_files() {
   local required_path
-  local required_paths=(install-wor.sh install-wor-gui.sh src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh config-templates assets/logo-full.png assets/partnership.png)
+  local required_paths=(install-wor.sh install-wor-gui.sh src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh config-templates assets/logo-full.png assets/partnership.png)
   local missing=()
   if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
     while IFS= read -r required_path ;do
@@ -461,41 +604,6 @@ repair_missing_files() {
     || return 1
   git -C "$REPO_DIR" restore --source=HEAD -- "${missing[@]}" \
     || { show_error 'WoR-Flasher could not restore its missing files.'; return 1; }
-}
-
-check_for_update() {
-  command -v git >/dev/null || return 0
-  git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 || return 0
-  [ -z "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no)" ] || return 0
-
-  local update_repository="${UPDATE_REPO_URL:-}"
-  local update_ref="${UPDATE_REF:-}"
-  local local_commit remote_commit remote_file remote_pid attempt
-  [ -n "$update_repository" ] || update_repository="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null)" || return 0
-  [ -n "$update_ref" ] || update_ref="refs/heads/$(git -C "$REPO_DIR" symbolic-ref --short HEAD 2>/dev/null)" || return 0
-  local_commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)" || return 0
-  remote_file="$(mktemp "${TMPDIR:-/tmp}/wor-flasher-update.XXXXXX")" || return 0
-  git ls-remote "$update_repository" "$update_ref" > "$remote_file" 2>/dev/null &
-  remote_pid=$!
-  for attempt in {1..80};do
-    kill -0 "$remote_pid" 2>/dev/null || break
-    sleep 0.1
-  done
-  if kill -0 "$remote_pid" 2>/dev/null ;then
-    kill "$remote_pid" 2>/dev/null
-  fi
-  wait "$remote_pid" 2>/dev/null || true
-  remote_commit="$(awk 'NR == 1 {print $1}' "$remote_file")"
-  rm -f "$remote_file"
-  [ -n "$remote_commit" ] && [ "$local_commit" != "$remote_commit" ] || return 0
-
-  ask_to_continue $'A WoR-Flasher update is available.\n\nCurrent: '"${local_commit:0:12}"$'\nAvailable: '"${remote_commit:0:12}"$'\n\nUpdate this clean checkout before launching?' 'Update Now' \
-    || return 0
-  if ! git -C "$REPO_DIR" fetch --quiet "$update_repository" "$update_ref" \
-    || ! git -C "$REPO_DIR" merge --ff-only FETCH_HEAD >/dev/null ;then
-    show_error 'The update could not be applied safely. Your current checkout was not replaced.'
-    return 1
-  fi
 }
 
 prepare_dependencies() {
@@ -535,10 +643,6 @@ launcher_main() {
   if [ "$SOURCE_CHECKOUT" == 1 ];then
     repair_missing_files || exit 1
     load_metadata || { show_error 'WoR-Flasher metadata could not be loaded after repair.'; exit 1; }
-    startup_phase 'Checking for a safe source update...'
-    check_for_update || exit 1
-    startup_phase 'Verifying updated files...'
-    load_metadata || { show_error 'Updated WoR-Flasher metadata could not be loaded.'; exit 1; }
     startup_phase 'Synchronizing application resources...'
     sync_bundle_metadata || { show_error 'The updated macOS app metadata could not be synchronized.'; exit 1; }
   else
