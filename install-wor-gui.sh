@@ -41,6 +41,24 @@ if [ ! -d "$DIRECTORY" ] || [ ! -f "$cli_script" ];then
   exit 1
 fi
 
+repair_missing_checkout_runtime() { #Restore only absent runtime files from local HEAD before shared libraries are sourced.
+  local required_path
+  local missing=()
+  command -v git >/dev/null 2>&1 && git -C "$DIRECTORY" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  while IFS= read -r required_path ;do
+    [ -e "$DIRECTORY/$required_path" ] || missing+=("$required_path")
+  done < <(git -C "$DIRECTORY" ls-tree -r --name-only HEAD -- \
+    install-wor.sh install-wor-gui.sh install-wor-hook.sh src/lib src/config src/updater.mjs \
+    config-templates assets)
+  [ "${#missing[@]}" -gt 0 ] || return 0
+  printf 'Repairing missing WoR-Flasher files from local Git HEAD:\n' 1>&2
+  printf '  %s\n' "${missing[@]}" 1>&2
+  git -C "$DIRECTORY" restore --source=HEAD -- "${missing[@]}" \
+    || { printf 'Failed to restore missing WoR-Flasher files from local Git HEAD.\n' 1>&2; return 1; }
+}
+
+repair_missing_checkout_runtime || exit 1
+
 #shellcheck disable=SC1090
 source "$cli_script" source #by sourcing, this script checks for and applies updates.
 
@@ -2121,34 +2139,63 @@ linux_no_device_message() { #Output: explanation when lsblk sees devices but no 
     'If you expected a drive to appear, run lsblk and confirm it is not the system disk.'
 }
 
+linux_choose_one() { #Input: newline choices, prompt, default, optional Back label. Output: choice or Back.
+  local choices="$1" prompt="$2" default_choice="$3" back_label="${4:-}" choice result button rows=''
+  local buttons=(--button='<b>Next</b>':0)
+  [ -z "$back_label" ] || buttons=(--button="<b>$back_label</b>":1 "${buttons[@]}")
+  while IFS= read -r choice ;do
+    [ -n "$choice" ] || continue
+    if [ "$choice" == "$default_choice" ];then
+      rows+="TRUE\n${choice}\n"
+    else
+      rows+="FALSE\n${choice}\n"
+    fi
+  done <<< "$choices"
+  result="$(printf '%b' "$rows" | yad "${yadflags[@]}" --width="$(wor_yad_width 560)" --height="$(wor_yad_height 420)" \
+    --list --radiolist --no-selection --no-headers --column=selected:CHK --column=choice \
+    --print-column=2 --text="<big><b>$prompt</b></big>" "${buttons[@]}")"
+  button=$?
+  if [ "$button" == 0 ];then
+    [ -n "$result" ] || return 1
+    printf '%s\n' "$result"
+  elif [ "$button" == 1 ] && [ -n "$back_label" ];then
+    printf 'Back\n'
+  else
+    return 1
+  fi
+}
+
 ensure_linux_desktop_identity
 
 #this array stores flags that are used in all yad windows - saves on the typing and makes it easy to change an attribute on all dialogs from one place.
 #--class sets the window's WM_CLASS so the taskbar/Alt-Tab switcher shows WoR-Flasher instead of
 #the generic "yad" process name
 wor_init_yad_flags
+announcement_image="$(wor_yad_image_for_screen "$WOR_ASSETS_DIR/partnership.png" "$WOR_LOGO_PATH" 880 740)"
 
 #display partnership announcement
-#the shared 400px yadflags width squeezes the text column next to the 800px-wide banner down to
-#one word per line; give this dialog enough room for the image plus a readable text column
-yad "${yadflags[@]}" --width=960 --height=620 --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT" --timeout-indicator=bottom \
-  --image="$WOR_ASSETS_DIR/partnership.png" \
-  --text=$'<a href="https://blackoutsecure.app/">Blackout Secure</a> is proud to partner with <a href="https://github.com/Botspot">Botspot</a> and the <a href="https://worproject.com/">Windows on R</a> community, carrying WoR-Flasher forward while preserving Botspot\'s original authorship and project direction.\n\nReport issues, share feedback, or contribute at <a href="https://github.com/Botspot/wor-flasher">Botspot/wor-flasher</a>.\n\nSupport continued development by <a href="https://github.com/sponsors/Botspot">sponsoring Botspot</a> or <a href="https://github.com/sponsors/blackoutsecure?frequency=one-time&amp;amount=8">buying Blackout Secure a coffee</a> on GitHub.' \
-  --button='<b>Proceed with WoR-Flasher</b>':0
+#match the macOS announcement composition: the full banner sits above readable centered copy rather
+#than consuming almost the whole width and squeezing the text into a one-word column beside it
+yad "${yadflags[@]}" --width="$(wor_yad_width 840)" --height="$(wor_yad_height 720)" --center --image-on-top --text-align=center \
+  --form --align=center --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT" --timeout-indicator=bottom \
+  --image="$announcement_image" \
+  --field=$'<a href="https://blackoutsecure.app/">Blackout Secure</a> is proud to partner with <a href="https://github.com/Botspot">Botspot</a> and the <a href="https://worproject.com/">Windows on R</a> community, carrying WoR-Flasher forward while preserving Botspot\'s original authorship and project direction.\n\nReport issues, share feedback, or contribute at <a href="https://github.com/Botspot/wor-flasher">Botspot/wor-flasher</a>.\n\nSupport continued development by <a href="https://github.com/sponsors/Botspot">sponsoring Botspot</a> or <a href="https://github.com/sponsors/blackoutsecure?frequency=one-time&amp;amount=8">buying Blackout Secure a coffee</a> on GitHub.':LBL '' \
+  --button='<b>Proceed with WoR-Flasher</b>':0 >/dev/null || exit 0
 
 { #choose destination RPi model and windows build ID
 if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
-  output="$(yad "${yadflags[@]}" --height=1 --form --columns=2 \
-    --image="$WOR_LOGO_PATH" \
-    --text=$'<big><b>Welcome to WoR-Flasher</b></big>\nThis Blackout Secure fork carries Botspot\'s original WoR-Flasher forward, adding macOS support, safer image verification, a more polished interface, and ongoing maintenance for Raspberry Pi Windows installs.' \
-    --field="Install":CB "Windows 11!Windows 10!More options" \
-    --field="on a":CB "Pi5!Pi4/Pi400!Pi3/Pi2_v1.2" \
-    --button='<b>Next</b>':0)"
-  button=$?
-  [ $button != 0 ] && exit 0
-
-  WINDOWS_VER="$(echo "$output" | sed -n 1p)"
-  RPI_MODEL="$(echo "$output" | sed -n 2p | sed 's+Pi5+5+g' | sed 's+Pi4/Pi400+4+g' | sed 's+Pi3/Pi2_v1.2+3+g')"
+  while true;do
+    WINDOWS_VER="$(linux_choose_one $'Windows 11\nWindows 10\nMore options' 'Choose Windows version' 'Windows 11')" || exit 0
+    rpi_choice="$(linux_choose_one $'Raspberry Pi 5\nRaspberry Pi 4 / Pi 400\nRaspberry Pi 3 / Pi 2 v1.2' 'Choose Raspberry Pi model' 'Raspberry Pi 5' Back)" || exit 0
+    [ "$rpi_choice" == Back ] && continue
+    case "$rpi_choice" in
+      'Raspberry Pi 5') RPI_MODEL=5 ;;
+      'Raspberry Pi 4 / Pi 400') RPI_MODEL=4 ;;
+      'Raspberry Pi 3 / Pi 2 v1.2') RPI_MODEL=3 ;;
+      *) continue ;;
+    esac
+    break
+  done
 
   case "$WINDOWS_VER" in
     'Windows 11' | 'Windows 10')
@@ -2173,7 +2220,7 @@ if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
       while [ -z "$BID" ];do
         reply="$(echo -e "FALSE\nChoose an exact Windows version to download\nenter exact
 FALSE\nUse a Windows ISO file\nuse iso
-FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "${yadflags[@]}" --width=420 \
+FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "${yadflags[@]}" --width="$(wor_yad_width 420)" \
           --list --radiolist --column=chk:CHK --column=human --column=script:HD --no-headers --print-column=3 --no-selection \
           --text=$'<big><b>More options</b></big>' \
           --button='<b>Next</b>':0)"
@@ -2185,7 +2232,7 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
             list_bids 10 >/dev/null #set $versions globally so it is not downloaded twice
             while [ -z "$BID" ];do
               BID="$(echo -n "$(list_bids_supported 11 | sed 's/^/Windows 11 /g'
-              list_bids_supported 10 | sed 's/^/Windows 10 /g')" | sed 's/^/FALSE\n/g' | yad "${yadflags[@]}" --width=420 \
+              list_bids_supported 10 | sed 's/^/Windows 10 /g')" | sed 's/^/FALSE\n/g' | yad "${yadflags[@]}" --width="$(wor_yad_width 420)" \
                 --list --radiolist --column=chk:CHK --column=human --no-headers --print-column=2 --no-selection \
                 --text=$'Choose version of Windows:' \
                 --button='<b>Next</b>':0)"
@@ -2198,7 +2245,7 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
             break
             ;;
           'use iso')
-            SOURCE_FILE="$(yad "${yadflags[@]}" --width=420 \
+            SOURCE_FILE="$(yad "${yadflags[@]}" --width="$(wor_yad_width 420)" \
               --file --file-filter "ISO disk images | *.ISO *.iso" \
               --text=$'<big><b>Import ISO file</b></big>\nMust be an ARM64 version of Windows from <a href="https://uupdump.net">uupdump.net</a>' \
               --button="<b>Cancel</b>":1 --button="<b>OK</b>":0)"
@@ -2251,7 +2298,7 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
               done
               unset BID WIN_LANG #Avoid leaving these variables set from the loop
 
-              folder="$(echo -ne "$list" | yad "${yadflags[@]}" --height=320 \
+              folder="$(echo -ne "$list" | yad "${yadflags[@]}" --height="$(wor_yad_height 320)" \
                 --list --radiolist --column=chk:CHK --column=human --column=script:HD --no-headers --print-column=3 --no-selection \
                 --text=$'<big><b>Choose cached version</b></big>\nIf the list is empty, please use the same working directory (DL_DIR) you used last time.\nDL_DIR: <b><u>'"$DL_DIR"'</u></b>' \
                 --button='<b>Change DL<u>  </u>DIR</b>':2 \
@@ -2274,7 +2321,7 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
                   ;;
                 2) #change DL_DIR
                   DL_DIR="$(yad "${yadflags[@]}" --file --directory --mime-filter="Directories | inode/directory" \
-                    --width=500 --height=400 --title="Choose DL_DIR" \
+                    --width="$(wor_yad_width 500)" --height="$(wor_yad_height 400)" --title="Choose DL_DIR" \
                     --text=$'Choose directory for everything to be downloaded.\nIn this case you should select the directory where everything <i>was</i> downloaded the last time you ran WoR-Flasher.' \
                     --button="<b>Cancel</b>":1 --button="<b>OK</b>":0 \
                     || echo "$DL_DIR")"
@@ -2326,7 +2373,7 @@ $DEV_LIST"
       device_prompt='Choose device to flash:'
     fi
 
-    DEVICE="$(echo -n "$DEV_LIST" | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" --text="$device_prompt" --width=520 \
+    DEVICE="$(echo -n "$DEV_LIST" | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" --text="$device_prompt" --width="$(wor_yad_width 520)" \
       --list --radiolist --no-selection --no-headers --column=chk:CHK --column=echoname:HD --column=name --column=size --column=pretty-name \
       --print-column=2 --tooltip-column=3 \
       --button="<b>Refresh</b>!!Reload the list of connected drives to detect new ones":2 --button='<b>Next</b>':0)"
@@ -2359,7 +2406,7 @@ if [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ] && [ "$device_capability" == recovery ];t
   CAN_INSTALL_ON_SAME_DRIVE=0
 elif [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
   while [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];do
-    install_mode="$(echo -e "TRUE\ninstall\nInstallation drive\nInstall Windows onto this 25 GB+ drive\nFALSE\nrecovery\nRecovery drive\nInstall Windows onto another >16 GB drive" | yad "${yadflags[@]}" --width=520 \
+    install_mode="$(echo -e "TRUE\ninstall\nInstallation drive\nInstall Windows onto this 25 GB+ drive\nFALSE\nrecovery\nRecovery drive\nInstall Windows onto another >16 GB drive" | yad "${yadflags[@]}" --width="$(wor_yad_width 520)" \
       --list --radiolist --column=chk:CHK --column=value:HD --column=Mode --column=Description --no-headers --print-column=2 --no-selection \
       --text=$'<big><b>Installation mode</b></big>\nThis drive is large enough for either mode. Choose what you want it to do:' \
       --button='<b>Next</b>':0)"
@@ -2395,7 +2442,7 @@ if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ ! -f "
         tooltip='Will setup a RAM-compression tool from Pi-Apps and then set DL_DIR to the new ramdisk at <u>/zram</u>. Please note that Pi-Apps itself will not be installed.'
       fi
 
-      yad "${yadflags[@]}" --width=500 --form --field="About 4.2GB of files need to be downloaded to system storage before flashing can begin.
+      yad "${yadflags[@]}" --width="$(wor_yad_width 500)" --form --field="About 4.2GB of files need to be downloaded to system storage before flashing can begin.
 But your system has $(echo "scale=1 ; $( awk '/MemTotal/ {print $2}' /proc/meminfo ) / 1048576 " | bc )GB of RAM. Everything can be downloaded to RAM if you prefer.
 Choose this if:
 - You don't have enough space in $HOME
@@ -2409,7 +2456,7 @@ Choose this if:
       if [ "$button" == 0 ];then
         status "User chose to download everything to RAM."
         echo "For best results, please close all other programs. (especially web browsers and games)"
-        yad "${yadflags[@]}" --width=500 --image="$WOR_ASSETS_DIR/ram.png" --image-on-top \
+        yad "${yadflags[@]}" --width="$(wor_yad_width 500)" --image="$WOR_ASSETS_DIR/ram.png" --image-on-top \
           --form --field="OK! Will download everything to RAM. For best results, please close all other programs. (especially web browsers and games):LBL" \
           --button='<b>OK</b>':0 >/dev/null
 
@@ -2498,20 +2545,14 @@ while true;do #repeat the Installation Overview window until Flash button clicke
     deletion_warning_2="$deletion_warning Backup any files before it's too late!"
   fi
 
-  output="$(yad "${yadflags[@]}" --width=500 --height=400 --image="$WOR_ASSETS_DIR/overview.png" --image-on-top \
-    --form --field="$window_text":LBL '' \
+  yad "${yadflags[@]}" --width="$(wor_yad_width 640)" --height="$(wor_yad_height 700)" --image="$WOR_ASSETS_DIR/overview.png" --image-on-top \
+    --form --scroll --field="$window_text":LBL '' \
     "${existing_img_chk[@]}" \
-    --field="<b>Edit config.txt:</b>     <small><a href=\"https://www.raspberrypi.com/documentation/computers/config_txt.html\">Configuration reference</a></small>":TXT "$CONFIG_TXT" \
     --field="$deletion_warning":LBL '' \
+    --button='<b>View / Edit config.txt...</b>':3 \
     --button='<b>Advanced...</b>'!!"More settings, intended for the advanced user or for troubleshooting":2 \
-    --button='<b>Flash</b>'!!"$deletion_warning_2":0
-  )"
+    --button='<b>Flash</b>'!!"$deletion_warning_2":0 >/dev/null
   button=$?
-
-  #remove first line from yad output - remove newline from label field
-  output="$(echo -e "$output" | tail -n +2)"
-
-  CONFIG_TXT="$output"
 
   if [ $button == 0 ];then
     #button: Flash
@@ -2651,9 +2692,9 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         fields+=("--field=Show a notification when the flash finishes":CHK "$(wor_yad_bool "${SHOW_NOTIFICATION:-1}")")
       fi
 
-      output="$(yad "${yadflags[@]}" --width=500 --height=400 --image-on-top \
+      output="$(yad "${yadflags[@]}" --width="$(wor_yad_width 640)" --height="$(wor_yad_height 700)" --image-on-top \
         "${refresh_prompt[@]}" \
-        --form \
+        --form --scroll \
         "${fields[@]}" \
         --button="<b>Back</b>":1 --button="<b>OK</b>":0
       )"
@@ -2743,6 +2784,15 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       fi
     done #end of repeating the advanced options window
 
+  elif [ $button == 3 ];then
+    config_output="$(yad "${yadflags[@]}" --width="$(wor_yad_width 640)" --height="$(wor_yad_height 600)" \
+      --form --scroll \
+      --field="<b>View / Edit config.txt</b>     <small><a href=\"https://www.raspberrypi.com/documentation/computers/config_txt.html\">Configuration reference</a></small>":TXT "$CONFIG_TXT" \
+      --button="<b>Back</b>":1 --button="<b>Save</b>":0)"
+    config_button=$?
+    [ "$config_button" == 0 ] && CONFIG_TXT="$config_output"
+    continue
+
   else
     #User exited when reviewing information and customizing config.txt
     exit 1
@@ -2762,6 +2812,7 @@ echo -e "CONFIG_TXT: ⤵\n$(echo "$CONFIG_TXT" | sed 's/^/  > /g')\nCONFIG_TXT: 
 
 echo "Running install-wor.sh"
 
+abort_marker="$(mktemp -u)"
 gui_start_installer
 
 progress_fifo="$(mktemp -u)"
@@ -2790,18 +2841,40 @@ awk -F'\t' '
   /^SUBSTEP/ { pct=$2+0; if (pct<0) pct=0; if (pct>100) pct=100; overall(); fflush() }
   /^TASK/    { pct=$2+0; if (pct<0) pct=0; if (pct>100) pct=100; task_title=$3; overall(); fflush() }
   /^STATUS/  { status_msg=$2; if (step+0 == 0) overall(); else printf("# %s\n", status_msg); fflush() }
-' < "$progress_fifo" | yad "${yadflags[@]}" --progress --no-buttons --text="Starting..." &
+' < "$progress_fifo" | yad "${yadflags[@]}" --width="$(wor_yad_width 680)" --height="$(wor_yad_height 330)" \
+  --progress --image="$WOR_LOGO_PATH" --text="Starting..." --button='<b>Abort</b>':1 &
 yad_pid=$!
 
+progress_aborted=0
 while [ ! -f "$done_marker" ];do
+  if ! kill -0 "$yad_pid" 2>/dev/null ;then
+    progress_aborted=1
+    break
+  fi
   sleep 0.3
 done
+
+if [ "$progress_aborted" == 1 ];then
+  touch "$abort_marker"
+  status "Aborting at your request"
+  kill_process_tree "$installer_pid"
+  wait "$installer_pid" 2>/dev/null
+  kill "$tail_pid" 2>/dev/null
+  wait "$tail_pid" 2>/dev/null
+  rm -f "$progress_fifo" "$progress_file" "$done_marker" "$auth_marker" "$abort_marker" "$error_marker"
+  saved_log="$(gui_save_failure_log)"
+  wor_play_result_sound failure
+  wor_show_result_notification failure
+  yad "${yadflags[@]}" --text="Flashing was stopped before it finished.\n\n$DEVICE is now in an unusable state and has to be flashed again before it can boot.\n\nFull log: $saved_log"
+  exit 1
+fi
+
 exitcode="$(cat "$done_marker" 2>/dev/null)"
 [ -z "$exitcode" ] && exitcode=1
 
 kill "$tail_pid" "$yad_pid" 2>/dev/null
 wait "$tail_pid" "$yad_pid" 2>/dev/null
-rm -f "$progress_fifo" "$progress_file" "$done_marker" "$auth_marker"
+rm -f "$progress_fifo" "$progress_file" "$done_marker" "$auth_marker" "$abort_marker"
 
 #clear zram - avoid leaving files occupying space in /zram
 if [ "$DL_DIR" == /zram ];then
@@ -2813,8 +2886,10 @@ if [ "$exitcode" == 0 ];then
   wor_play_result_sound success
   wor_show_result_notification success
   #display "next steps" window
-  yad --center --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" \
-    --image="$WOR_ASSETS_DIR/next-steps.png" --text="It is now safe to remove your USB drive." --button=Close:0
+  linux_completion_image="$(wor_yad_image_for_screen "$WOR_ASSETS_DIR/next-steps.png" "$WOR_LOGO_PATH" 730 440)"
+  yad --center --width="$(wor_yad_width 690)" --height="$(wor_yad_height 380)" --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" \
+    --form --align=center --image-on-top --buttons-layout=center --image="$linux_completion_image" \
+    --field="It is now safe to remove your USB drive.":LBL '' --button=Close:0 >/dev/null
 else
   #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
   saved_log="$(gui_save_failure_log)"

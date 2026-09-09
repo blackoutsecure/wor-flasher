@@ -186,8 +186,51 @@ JXA
 # --- Linux (yad) ------------------------------------------------------------------------------
 #macOS has no equivalent of these flags; they are Linux-only by nature rather than by omission.
 
+wor_detect_yad_screen() { #Sets WOR_YAD_SCREEN_WIDTH/HEIGHT from the active desktop, with a conservative fallback.
+	local geometry=''
+	[[ "${WOR_YAD_SCREEN_WIDTH:-}x${WOR_YAD_SCREEN_HEIGHT:-}" =~ ^[0-9]+x[0-9]+$ ]] && return 0
+	if command -v xrandr >/dev/null ;then
+		geometry="$(xrandr --current 2>/dev/null | awk '$0 ~ /[0-9]+x[0-9]+/ && $0 ~ /\*/ {print $1; exit}')"
+	fi
+	if [[ ! "$geometry" =~ ^[0-9]+x[0-9]+$ ]] && command -v xdpyinfo >/dev/null ;then
+		geometry="$(xdpyinfo 2>/dev/null | awk '/dimensions:/ {print $2; exit}')"
+	fi
+	if [[ ! "$geometry" =~ ^[0-9]+x[0-9]+$ ]] && command -v xwininfo >/dev/null ;then
+		local root_width root_height
+		root_width="$(xwininfo -root 2>/dev/null | awk '/Width:/ {print $2; exit}')"
+		root_height="$(xwininfo -root 2>/dev/null | awk '/Height:/ {print $2; exit}')"
+		geometry="${root_width}x${root_height}"
+	fi
+	[[ "$geometry" =~ ^[0-9]+x[0-9]+$ ]] || geometry='1024x768'
+	WOR_YAD_SCREEN_WIDTH="${geometry%x*}"
+	WOR_YAD_SCREEN_HEIGHT="${geometry#*x}"
+}
+
+wor_yad_width() { #Input: desired width. Output: width clamped inside the detected desktop.
+	local desired_width="$1" maximum_width=$((WOR_YAD_SCREEN_WIDTH - 40))
+	[ "$maximum_width" -gt 0 ] || maximum_width="$WOR_YAD_SCREEN_WIDTH"
+	[ "$desired_width" -le "$maximum_width" ] || desired_width="$maximum_width"
+	printf '%s' "$desired_width"
+}
+
+wor_yad_height() { #Input: desired height. Output: height clamped inside the detected desktop.
+	local desired_height="$1" maximum_height=$((WOR_YAD_SCREEN_HEIGHT - 60))
+	[ "$maximum_height" -gt 0 ] || maximum_height="$WOR_YAD_SCREEN_HEIGHT"
+	[ "$desired_height" -le "$maximum_height" ] || desired_height="$maximum_height"
+	printf '%s' "$desired_height"
+}
+
+wor_yad_image_for_screen() { #Input: preferred image, fallback image, minimum width and height for preferred image.
+	if [ "$WOR_YAD_SCREEN_WIDTH" -ge "$3" ] && [ "$WOR_YAD_SCREEN_HEIGHT" -ge "$4" ];then
+		printf '%s' "$1"
+	else
+		printf '%s' "$2"
+	fi
+}
+
 wor_init_yad_flags() { #Sets the shared yadflags array. Assigns rather than echoes, because it is an array.
-	yadflags=(--center --width=400 --height=250 --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" --separator='\n')
+	wor_detect_yad_screen
+	yadflags=(--center --fixed --buttons-layout=center --width="$(wor_yad_width 400)" --height="$(wor_yad_height 250)" --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" --separator='\n')
 }
 
 wor_yad_label() { #Input: label, caution flag. Output: label with the shared not-recommended marker.

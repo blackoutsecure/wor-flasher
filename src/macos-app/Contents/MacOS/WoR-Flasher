@@ -582,12 +582,18 @@ APPLESCRIPT
 
 repair_missing_files() {
   local required_path
-  local required_paths=(install-wor.sh install-wor-gui.sh src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh config-templates assets/logo-full.png assets/partnership.png)
+  local required_paths=()
   local missing=()
   if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
     while IFS= read -r required_path ;do
       [ -n "$required_path" ] && required_paths+=("$required_path")
-    done < <(git -C "$REPO_DIR" ls-tree -r --name-only HEAD -- config-templates)
+    done < <(git -C "$REPO_DIR" ls-tree -r --name-only HEAD -- \
+      install-wor.sh install-wor-gui.sh install-wor-hook.sh src/lib src/config src/updater.mjs \
+      config-templates assets)
+  else
+    required_paths=(install-wor.sh install-wor-gui.sh src/lib/metadata.sh src/lib/dependencies.sh \
+      src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh config-templates assets/logo-full.png \
+      assets/partnership.png assets/next-steps.png)
   fi
   for required_path in "${required_paths[@]}" ;do
     [ -e "$REPO_DIR/$required_path" ] || missing+=("$required_path")
@@ -637,9 +643,15 @@ launcher_main() {
   STARTUP_STATUS="$(mktemp "${TMPDIR:-/tmp}/wor-flasher-startup.XXXXXX")" || exit 1
   STARTUP_DONE="${STARTUP_STATUS}.done"
   trap cleanup_startup EXIT INT TERM
-  startup_phase 'Checking application files...'
+  startup_phase 'Checking for updates and repairs...'
   start_startup_window
 
+  #Classify the source tree before branching. select_runtime also detects it, but calling that only
+  #inside the packaged branch made the local missing-file repair unreachable during normal startup.
+  if [ -d "$CHECKOUT_DIR/.git" ];then
+    SOURCE_CHECKOUT=1
+    set_runtime_paths "$CHECKOUT_DIR" ''
+  fi
   if [ "$SOURCE_CHECKOUT" == 1 ];then
     repair_missing_files || exit 1
     load_metadata || { show_error 'WoR-Flasher metadata could not be loaded after repair.'; exit 1; }
@@ -650,7 +662,7 @@ launcher_main() {
     bootstrap_embedded_runtime || { show_error 'The embedded WoR-Flasher runtime could not be installed safely.'; exit 1; }
     select_runtime || { show_error 'The installed WoR-Flasher runtime could not be selected.'; exit 1; }
     load_metadata || { show_error 'Verified WoR-Flasher metadata could not be loaded.'; exit 1; }
-    startup_phase 'Checking for a verified update...'
+    startup_phase 'Checking for updates and repairs...'
     check_for_runtime_update
     select_runtime || { show_error 'No verified WoR-Flasher runtime remains available.'; exit 1; }
     load_metadata || { show_error 'Verified WoR-Flasher metadata could not be loaded.'; exit 1; }

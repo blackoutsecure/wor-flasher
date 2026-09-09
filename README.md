@@ -135,6 +135,12 @@ Both therefore write identical media from identical settings. The built-in GUI i
 
 The overview image shows the shared installation workflow. On macOS, the same choices are presented in native AppKit windows rather than Linux `yad` dialogs.
 
+Both front-ends size windows from the active screen. The Linux GUI detects its desktop geometry with `xrandr`, `xdpyinfo` or `xwininfo`, clamps every requested width and height inside fixed screen margins, and falls back to the narrow product logo when a full-size illustration cannot fit. A conservative `1024x768` fallback is used when the display server exposes no geometry command.
+
+Linux follows the same staged route as macOS: partnership announcement, Windows version, Raspberry Pi model, target drive, installation mode, overview, Advanced Options, progress, and completion. Its overview and Advanced Options scroll inside their bounded windows, and `config.txt` opens in a separate Save/Back editor. Progress-window Abort and close both stop the installer tree before reporting failure.
+
+Window chrome remains native to each desktop. On Ubuntu, GNOME/Mutter draws the title bar and its controls; WoR-Flasher marks yad dialogs fixed-size so they support native minimize, restore, and close without allowing resize or maximize. Replacing those controls with imitation macOS traffic lights would remove native accessibility and window-manager behavior.
+
 The front-end is never chosen automatically. `DISPLAY` is also set over SSH and in CI, and a tool that erases a drive should do exactly what it was asked to do.
 
 An **Advanced Options** window is reachable from the confirmation screen on both platforms. It exposes every configuration-only option as a checkbox, plus an editable `config.txt`: [offline Windows setup](#offline-windows-setup), the [Pi 4 RAM unlock](#pi-4-ram-unlock), whether to use the latest UEFI firmware or drivers instead of the tested pinned versions (the pinned version is shown in each label), whether to skip the final written-image verification, and dry run. `APPLY_CUSTOM_CONFIG_TXT` controls whether the editable `config.txt` is applied at all; unchecking it dims the editor and leaves the UEFI firmware package's own default in place. A **Downloaded files** menu selects the [cache mode](#download-cache), since it has three settings rather than two.
@@ -428,8 +434,9 @@ updates are staged there from release metadata over HTTPS, and are accepted only
 SHA-256, every extracted file digest, and every recorded file mode match the signed package manifest.
 Unsafe archive entries, incomplete payloads, equal versions, and downgrades are rejected. Runtime
 selection falls back in this order: active, previous, then the immutable embedded copy. Launched from
-a source checkout, the app updates nothing — it only restores missing tracked files, with your
-confirmation, from the revision already in your local checkout.
+a source checkout, the combined startup update-and-repair check updates nothing remotely. It restores
+only missing tracked runtime files, with your confirmation, from the revision already in your local
+checkout.
 
 Check what you are running with `./install-wor.sh --version`.
 
@@ -437,7 +444,7 @@ Check what you are running with `./install-wor.sh --version`.
 
 The app performs a bounded preflight rather than a destructive general-purpose "self-heal":
 
-- If a required tracked script, template directory or image is absent, the app offers to restore only that missing path from the local Git `HEAD`.
+- If a tracked runtime script, configuration file, template or image is absent, the app offers to restore only that missing file from the local Git `HEAD`.
 - If a required Homebrew formula is absent, the app lists the exact formulae and asks before installing only those dependencies. It never runs `brew upgrade`.
 - If Homebrew itself is absent, the app offers to open the official [Homebrew website](https://brew.sh/). It does not run a remote installer automatically.
 - Existing modified files, untracked files, downloaded Windows content and user settings are never reset or replaced. Download recovery remains controlled by the selected [cache mode](#download-cache).

@@ -25,6 +25,7 @@ MACOS_ONLY_TEST_NAMES=(
   "runtime-selection test detects an active/previous priority mutation"
   "macOS launcher startup status is source-testable and cleans up its state"
   "macOS launcher inventories Homebrew once and installs only missing dependencies"
+  "macOS startup repairs missing tracked runtime assets without overwriting modifications"
   "macOS launcher no longer updates a source checkout from a git remote"
   "macOS app bundle metadata matches the shared name, version, and logo"
 )
@@ -54,6 +55,9 @@ macos_app_and_launcher_checks() { #Requires: real Darwin host. Stages release/ma
     && grep -qF 'installed_formulae="$(brew list --formula 2>/dev/null)"' "$launcher" \
     && grep -qF '[ "$logo_source" -nt "$icon_resource" ]' "$launcher" \
     && grep -qF 'trap cleanup_startup EXIT INT TERM' "$launcher" \
+    && grep -qF "startup_phase 'Checking for updates and repairs...'" "$launcher" \
+    && grep -qF 'if [ -d "$CHECKOUT_DIR/.git" ];then' "$launcher" \
+    && grep -qF 'set_runtime_paths "$CHECKOUT_DIR"' "$launcher" \
     && grep -qF 'export NO_UPDATE=1' "$launcher" \
     && ! grep -qE 'git (reset|clean)|brew upgrade|curl.+\|.+(ba)?sh' "$launcher" \
     && [ -x "$launcher" ] \
@@ -346,6 +350,32 @@ macos_app_and_launcher_checks() { #Requires: real Darwin host. Stages release/ma
     pass "macOS launcher inventories Homebrew once and installs only missing dependencies"
   else
     fail "macOS launcher repeats Homebrew inventory or installs the wrong dependencies"
+  fi
+  rm -rf "$launcher_test_dir"
+
+  launcher_test_dir="$(mktemp -d)"
+  repair_checkout="$launcher_test_dir/checkout"
+  mkdir -p "$repair_checkout/assets"
+  printf 'original script\n' > "$repair_checkout/install-wor.sh"
+  printf 'next steps\n' > "$repair_checkout/assets/next-steps.png"
+  git -C "$repair_checkout" init -q
+  git -C "$repair_checkout" add install-wor.sh assets/next-steps.png
+  git -C "$repair_checkout" -c user.name=Test -c user.email=test@example.com commit -qm fixture
+  printf 'modified script\n' > "$repair_checkout/install-wor.sh"
+  rm "$repair_checkout/assets/next-steps.png"
+  if WOR_LAUNCHER_SOURCE_ONLY=1 bash -c '
+    set -e
+    source "$1"
+    REPO_DIR="$2"
+    ask_to_continue() { [ "$2" == Repair ]; }
+    show_error() { printf "unexpected error: %s\n" "$1" >&2; return 1; }
+    repair_missing_files
+    [ "$(cat "$REPO_DIR/assets/next-steps.png")" == "next steps" ]
+    [ "$(cat "$REPO_DIR/install-wor.sh")" == "modified script" ]
+  ' _ "$launcher" "$repair_checkout" ;then
+    pass "macOS startup repairs missing tracked runtime assets without overwriting modifications"
+  else
+    fail "macOS startup repair misses assets or overwrites a modified file"
   fi
   rm -rf "$launcher_test_dir"
 

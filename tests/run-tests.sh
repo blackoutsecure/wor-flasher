@@ -318,6 +318,10 @@ static_checks() {
     && grep -qF '$.NSForegroundColorAttributeName, $.NSColor.linkColor, range' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Blackout Secure is proud to partner with Botspot' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "printf -v announcement_text '%s\\n\\n%s\\n\\n%s\\n'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'yad "${yadflags[@]}" --width="$(wor_yad_width 840)" --height="$(wor_yad_height 720)" --center --image-on-top --text-align=center' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--form --align=center --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'announcement_image="$(wor_yad_image_for_screen' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--field=\$'<a href=\"https://blackoutsecure.app/\">Blackout Secure</a>" "$REPO_DIR/install-wor-gui.sh" \
     && pass "the partnership announcement renders with its attribution links" \
     || fail "the partnership announcement, its copy, or an attribution link is missing"
 
@@ -330,6 +334,16 @@ static_checks() {
   [ -n "$banner_width" ] && [ -n "$banner_height" ] && [ "$banner_width" -le 1000 ] && [ "$banner_height" -le 700 ] \
     && pass "the partnership banner fits a yad dialog at its native size" \
     || fail "assets/partnership.png is ${banner_width}x${banner_height}; yad cannot scale it down"
+
+  responsive_yad="$(run_in_engine 'WOR_YAD_SCREEN_WIDTH=800; WOR_YAD_SCREEN_HEIGHT=600; wor_init_yad_flags; printf "%s|%s|%s|%s" "$(wor_yad_width 840)" "$(wor_yad_height 720)" "$(wor_yad_image_for_screen preferred fallback 880 740)" "$(WOR_YAD_SCREEN_WIDTH=1024 WOR_YAD_SCREEN_HEIGHT=768 wor_yad_image_for_screen preferred fallback 880 740)"')"
+  [ "$responsive_yad" == '760|540|fallback|preferred' ] \
+    && grep -qF 'wor_detect_yad_screen() {' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'command -v xrandr' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'command -v xdpyinfo' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'command -v xwininfo' "$REPO_DIR/src/lib/gui.sh" \
+    && [ "$(grep -cE -- '--(width|height)=[0-9]+' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
+    && pass "Linux dialogs clamp to the detected screen and use smaller artwork when needed" \
+    || fail "Linux dialog sizing is fixed or can place content outside the screen: '$responsive_yad'"
 
   #gtk_window_resize asserts height > 0, so a zero height logs a Gtk-CRITICAL on every dialog
   ! grep -qF -- '--height=0' "$REPO_DIR/install-wor-gui.sh" \
@@ -616,6 +630,41 @@ disk5 Second drive"
     && pass "macOS and Linux GUIs expose an Advanced Options window for site-documented customizations" \
     || fail "Advanced Options window is missing or incomplete"
 
+  grep -qF 'linux_choose_one() {' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "WINDOWS_VER=\"\$(linux_choose_one \$'Windows 11\\nWindows 10\\nMore options'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "rpi_choice=\"\$(linux_choose_one \$'Raspberry Pi 5\\nRaspberry Pi 4 / Pi 400" "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF -- '--form --columns=2' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--button='<b>View / Edit config.txt...</b>':3" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--field="<b>View / Edit config.txt</b>' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(grep -cF -- '--form --scroll' "$REPO_DIR/install-wor-gui.sh")" -ge 3 ] \
+    && grep -qF 'yadflags=(--center --fixed --buttons-layout=center' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF -- "--button='<b>Abort</b>':1" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if ! kill -0 "$yad_pid"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'kill_process_tree "$installer_pid"' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "Linux follows the macOS screen route, bounded forms, fixed windows, and safe progress close" \
+    || fail "Linux still uses its old combined route, embedded editor, resizable windows, or unsafe progress close"
+
+  linux_repair_dir="$(mktemp -d)"
+  mkdir -p "$linux_repair_dir/assets"
+  cp "$REPO_DIR/install-wor-gui.sh" "$linux_repair_dir/install-wor-gui.sh"
+  printf 'original script\n' > "$linux_repair_dir/install-wor.sh"
+  printf 'next steps\n' > "$linux_repair_dir/assets/next-steps.png"
+  git -C "$linux_repair_dir" init -q
+  git -C "$linux_repair_dir" add install-wor-gui.sh install-wor.sh assets/next-steps.png
+  git -C "$linux_repair_dir" -c user.name=Test -c user.email=test@example.com commit -qm fixture
+  printf 'modified script\n' > "$linux_repair_dir/install-wor.sh"
+  rm "$linux_repair_dir/assets/next-steps.png"
+  awk '{print} /repair_missing_checkout_runtime \|\| exit 1/{exit}' "$linux_repair_dir/install-wor-gui.sh" > "$linux_repair_dir/repair-probe.sh"
+  chmod +x "$linux_repair_dir/repair-probe.sh"
+  if DIRECTORY="$linux_repair_dir" bash "$linux_repair_dir/repair-probe.sh" >/dev/null 2>&1 \
+    && [ "$(cat "$linux_repair_dir/assets/next-steps.png")" == 'next steps' ] \
+    && [ "$(cat "$linux_repair_dir/install-wor.sh")" == 'modified script' ];then
+    pass "Linux startup repairs missing tracked runtime files before loading shared libraries"
+  else
+    fail "Linux startup repair is too late, misses assets, or overwrites modified files"
+  fi
+  rm -rf "$linux_repair_dir"
+
   ! grep -qF 'OVERRIDE_CONFIG_TXT' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'OVERRIDE_PI4_RAM_UNLOCK' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'OVERRIDE_OOBE_TEMPLATE' "$REPO_DIR/install-wor-gui.sh" \
@@ -741,7 +790,7 @@ disk5 Second drive"
     && grep -qF $'STATUS\t$1' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'LINUX_ASKPASS="$(mktemp)"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$WOR_LOGO_PATH" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF "yad \"\${yadflags[@]}\" --progress --no-buttons" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--progress --image="$WOR_LOGO_PATH" --text="Starting..."' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF '"$DIRECTORY/terminal-run"' "$REPO_DIR/install-wor-gui.sh" \
     && pass "GUI mode runs the installer without a visible terminal on macOS and Linux" \
     || fail "GUI mode still depends on a visible terminal"
@@ -878,7 +927,7 @@ SH
   #a failed flash must leave the log behind; the GUI has no terminal to fall back on
   grep -qF 'saved_log="$(wor_log_file)"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Installer log saved to $saved_log' "$REPO_DIR/install-wor-gui.sh" \
-    && [ "$(grep -cF 'saved_log="$(gui_save_failure_log)"' "$REPO_DIR/install-wor-gui.sh")" == 3 ] \
+    && [ "$(grep -cF 'saved_log="$(gui_save_failure_log)"' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
     && pass "a failed run keeps its installer log for diagnosis" \
     || fail "a failed run deletes the only record of what went wrong"
 
@@ -928,7 +977,9 @@ SH
 
   [ "$(grep -cF 'It is now safe to remove your USB drive.' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
     && grep -qF 'completion_text="Process completed successfully.' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- '--text="It is now safe to remove your USB drive."' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'linux_completion_image="$(wor_yad_image_for_screen' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--form --align=center --image-on-top --buttons-layout=center --image="$linux_completion_image"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--field="It is now safe to remove your USB drive.":LBL' "$REPO_DIR/install-wor-gui.sh" \
     && pass "both success screens say when the USB drive is safe to remove" \
     || fail "a success screen does not tell the user the USB drive is safe to remove"
 
@@ -1452,14 +1503,18 @@ JSON
     && pass "no function is defined in both install-wor.sh and install-wor-gui.sh" \
     || fail "these functions are defined twice and will drift apart: $duplicate_functions"
 
-  #the GUI's own helpers call shared ones, so the source has to happen before any of them are defined
+  #bootstrap repair is the sole pre-source helper because it restores missing shared libraries;
+  #every other GUI helper still has to come after the engine is loaded
   gui_source_line="$(grep -an 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
   gui_first_function_line="$(grep -anE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
-  [ -n "$gui_source_line" ] && [ -n "$gui_first_function_line" ] \
-    && [ "$gui_source_line" -lt "$gui_first_function_line" ] \
+  gui_second_function_line="$(grep -anE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | sed -n '2p' | cut -d: -f1)"
+  [ -n "$gui_source_line" ] && [ -n "$gui_first_function_line" ] && [ -n "$gui_second_function_line" ] \
+    && [ "$gui_first_function_line" -lt "$gui_source_line" ] \
+    && [ "$gui_source_line" -lt "$gui_second_function_line" ] \
+    && grep -qF 'repair_missing_checkout_runtime() {' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(grep -ac 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
-    && pass "the GUI sources install-wor.sh once, before it defines anything of its own" \
-    || fail "the GUI defines functions before sourcing install-wor.sh, so shared ones are unavailable"
+    && pass "bootstrap repair runs before the GUI sources its engine; all other helpers run after" \
+    || fail "a non-bootstrap GUI helper is defined before shared engine functions are available"
 
   #every shared name the GUI relies on has to survive as a function, on both platforms
   missing_shared="$(run_in_engine 'for fn in error warning status echo_red gui_error_dialog settings_summary \
@@ -1663,7 +1718,7 @@ rc=1" ] \
     && grep -qF 'export WOR_GUI_PROGRESS_FILE' "$REPO_DIR/install-wor-hook.sh" \
     && grep -qF 'Use --progress-file FILE with run' "$REPO_DIR/install-wor-hook.sh" \
     && grep -A2 -F 'list-devices)' "$REPO_DIR/install-wor-hook.sh" | grep -qF 'require_linux_host' \
-    && ! grep -qF 'install-wor-hook.sh' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qE '(exec|source|bash)[[:space:]]+.*install-wor-hook\.sh' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(cd "$REPO_DIR" && ./install-wor-hook.sh run --version)" == "WoR-Flasher $version" ] \
     && [ "$hook_progress_out" == "WoR-Flasher $version" ] \
     && [ ! -e "$hook_progress_file" ] \
