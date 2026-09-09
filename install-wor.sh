@@ -1859,6 +1859,8 @@ default_win_lang() { #Output: the host locale's matching Windows language code, 
 }
 
 list_bids() { #input: '10' or '11', Output: build IDs for ESD releases. Format: "$BID ($date)"
+  local LC_ALL=C
+  export LC_ALL
   if [ -z "$versions" ];then
     #Get list of major Windows ESD versions from worproject.com
     versions="$(cache_downloader 'https://worproject.com/dldserv/esd/getversions.php')" || return 1

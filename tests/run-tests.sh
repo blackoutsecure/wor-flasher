@@ -1528,6 +1528,12 @@ JSON
     && pass "both GUIs offer the same language order and accept the same codes" \
     || fail "the language list differs between front-ends, or an invalid code is accepted"
 
+  malformed_catalogue_out="$(run_in_engine 'RPI_MODEL=5; versions="<releases><version number=\"10\"><release build=\"22631.2861\"><date>2024-01-01</date>$(printf "\377")</release></version></releases>"; list_bids 10' 2>&1)"
+  [[ "$malformed_catalogue_out" == *22631.2861* ]] \
+    && [[ "$malformed_catalogue_out" != *'illegal byte sequence'* ]] \
+    && pass "Windows release catalogue parsing tolerates a malformed response byte on macOS" \
+    || fail "a malformed release catalogue byte can close the macOS wizard"
+
   [ "$(run_in_engine 'windows_locale_from_language_code sr-latn-rs')" == 'sr-Latn-RS' ] \
     && [ "$(run_in_engine 'list_windows_locale_options | head -n1')" == $'en-US\tEnglish (United States) (en-US)' ] \
     && run_in_engine 'WINDOWS_LOCALE_SETUP=1 WINDOWS_LOCALE=sr-Latn-RS true' \
