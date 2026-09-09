@@ -41,7 +41,9 @@
 #
 #Version history
 #---------------
-#9.9.9 - Release version update.
+#2.0.0 - Modernized the cross-platform flashing workflow, release tooling and configuration.
+#        Added a native standalone macOS runtime, resilient disk handling, configurable completion
+#          sounds and notifications, password-retry resume, and a compact config.txt editor.
 #1.0.2 - WoR-Flasher.app now carries a validated immutable runtime for standalone use, stages
 #          detached updates under Application Support, rejects downgrades, and falls back through
 #          active, previous, and embedded runtimes without modifying its own bundle.
@@ -2048,11 +2050,15 @@ windows_locale_from_language_code() { #Input: Windows language code. Output: Win
 
 list_wim_locale_codes() { #Input: install.wim. Output: locale codes declared by the image, when wimlib exposes them.
   local image="$1"
-  [ -f "$image" ] && command -v wiminfo >/dev/null 2>&1 || return 1
+  [ -f "$image" ] && command -v wiminfo >/dev/null 2>&1 && command -v iconv >/dev/null 2>&1 || return 1
+  #wiminfo emits one-line UTF-16LE XML. Feeding those NUL-bearing bytes to BSD sed fails under
+  #the macOS UTF-8 locale, and matching the whole line is ambiguous when every image repeats tags.
   wiminfo --xml "$image" 2>/dev/null \
-    | sed -n 's/.*<\(DEFAULT\|LANGUAGE\)>\([^<][^<]*\)<\/\1>.*/\2/p' \
+    | iconv -f UTF-16LE -t UTF-8 \
+    | tr '<>' '\n\n' \
+    | awk 'previous == "LANGUAGE" || previous == "DEFAULT" {print tolower($0)} {previous=$0}' \
     | grep -E '^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8}){0,2}$' \
-    | awk '{print tolower($0)}'
+    | awk '!seen[$0]++'
 }
 
 list_windows_locale_options() { #Output: tab-separated locale and label choices for Windows regional settings.

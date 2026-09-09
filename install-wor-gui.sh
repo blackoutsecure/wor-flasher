@@ -1889,47 +1889,59 @@ const Controller = ObjC.registerSubclass({
 const controller = $.WorProgressController.alloc.init
 app.setDelegate(controller)
 
-const width = 560
-const height = 268
+const width = 680
+const height = 330
 window = worMakeWindow({ width: width, height: height, title: windowTitle, delegate: controller })
 
 const content = window.contentView
 window.contentView = content
 
+const logoWidth = 56
+const logoHeight = 173
+const progressX = 96
+const progressWidth = width - progressX - 20
+const logoImage = $.NSImage.alloc.initWithContentsOfFile($(iconPath))
+if (!logoImage.isNil()) {
+  const logoView = $.NSImageView.alloc.initWithFrame($.NSMakeRect(20, height - 20 - logoHeight, logoWidth, logoHeight))
+  logoView.image = logoImage
+  logoView.imageScaling = $.NSImageScaleProportionallyUpOrDown
+  content.addSubview(logoView)
+}
+
 phaseLabel = $.NSTextField.labelWithString('Starting...')
-phaseLabel.frame = $.NSMakeRect(20, 198, width - 140, 24)
+phaseLabel.frame = $.NSMakeRect(progressX, 260, width - progressX - 140, 24)
 phaseLabel.font = $.NSFont.systemFontOfSizeWeight(14, $.NSFontWeightBold)
 content.addSubview(phaseLabel)
 
 stepLabel = $.NSTextField.labelWithString('')
-stepLabel.frame = $.NSMakeRect(width - 120, 198, 100, 24)
+stepLabel.frame = $.NSMakeRect(width - 120, 260, 100, 24)
 stepLabel.font = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightRegular)
 stepLabel.alignment = $.NSTextAlignmentRight
 content.addSubview(stepLabel)
 
 stepPercentLabel = $.NSTextField.labelWithString('')
-stepPercentLabel.frame = $.NSMakeRect(width - 120, 150, 100, 16)
+stepPercentLabel.frame = $.NSMakeRect(width - 140, 207, 120, 16)
 stepPercentLabel.font = $.NSFont.monospacedDigitSystemFontOfSizeWeight(11, $.NSFontWeightMedium)
 stepPercentLabel.alignment = $.NSTextAlignmentRight
 content.addSubview(stepPercentLabel)
 
 detailLabel = $.NSTextField.labelWithString('')
-detailLabel.frame = $.NSMakeRect(20, 116, width - 190, 16)
+detailLabel.frame = $.NSMakeRect(progressX, 163, progressWidth - 170, 16)
 detailLabel.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightRegular)
 content.addSubview(detailLabel)
 
 taskPercentLabel = $.NSTextField.labelWithString('')
-taskPercentLabel.frame = $.NSMakeRect(width - 170, 116, 150, 16)
+taskPercentLabel.frame = $.NSMakeRect(width - 170, 163, 150, 16)
 taskPercentLabel.font = $.NSFont.monospacedDigitSystemFontOfSizeWeight(11, $.NSFontWeightMedium)
 taskPercentLabel.alignment = $.NSTextAlignmentRight
 content.addSubview(taskPercentLabel)
 
-bar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(20, 130, width - 40, 20))
+bar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(progressX, 185, progressWidth, 20))
 bar.indeterminate = true
 bar.startAnimation(null)
 content.addSubview(bar)
 
-taskBar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(20, 100, width - 40, 10))
+taskBar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(progressX, 142, progressWidth, 10))
 taskBar.indeterminate = false
 taskBar.minValue = 0
 taskBar.maxValue = 100
@@ -1937,15 +1949,17 @@ taskBar.doubleValue = 0
 content.addSubview(taskBar)
 
 const noteLabel = $.NSTextField.labelWithString('This window will close automatically when the process finishes.')
-noteLabel.frame = $.NSMakeRect(20, 66, width - 40, 20)
+noteLabel.frame = $.NSMakeRect(20, 82, width - 40, 20)
 noteLabel.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightRegular)
+//1, not $.NSTextAlignmentCenter: that constant bridges as 2, which this runtime draws right-aligned
+noteLabel.alignment = 1
 content.addSubview(noteLabel)
 
 const abortButton = $.NSButton.buttonWithTitleTargetAction('Abort', controller, 'abortClicked:')
 abortButton.bezelStyle = $.NSBezelStyleRounded
 abortButton.sizeToFit
 const abortWidth = Math.max(96, abortButton.frame.size.width)
-abortButton.frame = $.NSMakeRect(width - 20 - abortWidth, 22, abortWidth, 32)
+abortButton.frame = $.NSMakeRect(Math.round((width - abortWidth) / 2), 22, abortWidth, 32)
 content.addSubview(abortButton)
 
 window.makeKeyAndOrderFront(null)
@@ -1996,7 +2010,9 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
 
     if [ "$installer_status" == 0 ];then
       rm -f "$output_log" "$error_marker"
-      completion_text="Process completed successfully."
+      completion_text="Process completed successfully.
+
+    It is now safe to remove your USB drive."
     else
       #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
       saved_log="$(gui_save_failure_log)"
@@ -2798,7 +2814,7 @@ if [ "$exitcode" == 0 ];then
   wor_show_result_notification success
   #display "next steps" window
   yad --center --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" \
-    --image="$WOR_ASSETS_DIR/next-steps.png" --button=Close:0
+    --image="$WOR_ASSETS_DIR/next-steps.png" --text="It is now safe to remove your USB drive." --button=Close:0
 else
   #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
   saved_log="$(gui_save_failure_log)"

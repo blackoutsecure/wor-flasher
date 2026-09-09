@@ -1,6 +1,6 @@
 {
   "name": "wor-flasher",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "description": "Release tooling for WoR-Flasher packaging; disk flashing remains in the shell engine.",

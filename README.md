@@ -4,7 +4,7 @@
 
 ![Maintainer partnership banner](assets/partnership.png)
 
-[![Version](https://img.shields.io/badge/version-1.0.2-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
+[![Version](https://img.shields.io/badge/version-2.0.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
 [![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=555555&logo=githubactions&logoColor=ffffff&color=0a7ea4&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
 [![License](https://img.shields.io/badge/license-GPL--3.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnu&logoColor=ffffff)](LICENSE)
 [![Platform](https://img.shields.io/badge/host-Linux%20%7C%20macOS-0a7ea4?style=for-the-badge&labelColor=555555&logo=linux&logoColor=ffffff)](#requirements)
@@ -325,6 +325,8 @@ PI4_AUTO_DISABLE_3GB=0 ./install-wor.sh
 
 Windows Setup changes the pftf `RamLimitTo3GB` firmware variable during the `specialize` pass, after the injected drivers are installed, and reboots once before OOBE so the new memory map takes effect. It also clears any BCD-level `truncatememory` cap, a separate Windows Boot Manager memory limit noted in worproject's [imager customization guide](https://worproject.com/guides/wor-imager-customization#configuration-file).
 
+The `specialize` answer-file command invokes the staged `Pi4Disable3GB.ps1` file instead of embedding the PowerShell program. Windows limits `RunSynchronousCommand/Path` to 259 characters and rejects the entire answer file when that limit is exceeded. The script logs its result to `%WINDIR%\Temp\Pi4Disable3GB.log` and always returns success so a firmware-setting failure cannot abort Windows Setup.
+
 > [!IMPORTANT]
 > **Set `PI4_AUTO_DISABLE_3GB=0` on Compute Module 4.** Per the [worproject FAQ](https://worproject.com/faq#does-it-work-on-the-compute-module-cm), CM4 requires the RAM limit set to 1 GB — not simply left at 3 GB — for USB to work at all, and PCIe does not work regardless. WoR-Flasher cannot distinguish a CM4 from a Pi 4/400, so do not rely on the automatic default for CM4 hardware.
 
@@ -624,8 +626,13 @@ These additions are maintained directly by Blackout Secure in cooperation with B
 
 ## Versions
 
-- **9.9.9** - Release version update.
-  This maintained source uses its own version line. The product name, window title, current version, runtime file list and pinned system defaults are defined in [`src/config/metadata.json`](src/config/metadata.json), loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and checked against [`package.json`](package.json) and the macOS app property list. The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion`. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
+- **2.0.0**
+  - Modernized the cross-platform flashing workflow, release tooling and configuration.
+  - Added a native standalone macOS runtime with validated, rollback-capable updates.
+  - Improved macOS disk preparation, remount handling and post-write verification resilience.
+  - Added password-retry resume, configurable completion sounds and desktop notifications.
+  - Reworked Advanced Options with a compact, dedicated `config.txt` editor.
+    This maintained source uses its own version line. The product name, window title, current version, runtime file list and pinned system defaults are defined in [`src/config/metadata.json`](src/config/metadata.json), loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and checked against [`package.json`](package.json) and the macOS app property list. The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion`. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
 
 - **1.0.2**
   - `WoR-Flasher.app` can run independently of a Git checkout using an immutable embedded runtime, validated writable runtime copies under Application Support, and active/previous/embedded fallback.

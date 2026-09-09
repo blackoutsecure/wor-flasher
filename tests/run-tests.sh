@@ -506,6 +506,7 @@ disk5 Second drive"
     && grep -qF '[ -z "$PI4_AUTO_DISABLE_3GB" ] && PI4_AUTO_DISABLE_3GB=1' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'SetFirmwareEnvironmentVariableEx("RamLimitTo3GB", "{CD7CC258-31DB-22E6-9F22-63B0B8EED6B5}"' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
     && grep -qF '<settings pass="specialize">' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
+    && grep -qF '<Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%WINDIR%\Setup\Scripts\Pi4Disable3GB.ps1"</Path>' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
     && grep -qF '<WillReboot>Always</WillReboot>' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
     && grep -qF 'read_config_template pi4-ram-unlock.ps1' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'read_config_template pi4-ram-unlock-specialize.xml' "$REPO_DIR/install-wor.sh" \
@@ -925,6 +926,12 @@ SH
     && pass "the completion screen centres the banner, message and button in one column" \
     || fail "the completion screen no longer centres its banner, message and button"
 
+  [ "$(grep -cF 'It is now safe to remove your USB drive.' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
+    && grep -qF 'completion_text="Process completed successfully.' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--text="It is now safe to remove your USB drive."' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "both success screens say when the USB drive is safe to remove" \
+    || fail "a success screen does not tell the user the USB drive is safe to remove"
+
   #macOS can drop a freshly formatted FAT/exFAT volume part-way through the copy, so a mount point
   #resolved once at the start goes stale and the next write dies with "No such file or directory"
   grep -qF 'darwin_mount_point_or_die() {' "$REPO_DIR/install-wor.sh" \
@@ -1138,6 +1145,18 @@ SH
     && grep -qF 'Stop flashing this drive?' "$REPO_DIR/install-wor-gui.sh" \
     && pass "the progress window can be aborted, shows step x of y, and has close and minimise" \
     || fail "the progress window cannot be aborted or lacks its window controls"
+
+  grep -qF 'const width = 680' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const height = 330' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const logoWidth = 56' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const logoHeight = 173' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const progressX = 96' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'logoView.imageScaling = $.NSImageScaleProportionallyUpOrDown' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'bar = $.NSProgressIndicator.alloc.initWithFrame($.NSMakeRect(progressX' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'noteLabel.alignment = 1' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'abortButton.frame = $.NSMakeRect(Math.round((width - abortWidth) / 2)' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the macOS progress window is larger, branded, and has a centered footer" \
+    || fail "the macOS progress window lost its larger branded layout"
 
   #clicking the Dock icon sends aevt/rapp; without a handler a minimised window can never be restored
   gui_windows="$(grep -cF 'window = worMakeWindow({' "$REPO_DIR/install-wor-gui.sh")"
@@ -1534,6 +1553,21 @@ JSON
     && pass "Windows release catalogue parsing tolerates a malformed response byte on macOS" \
     || fail "a malformed release catalogue byte can close the macOS wizard"
 
+  #wiminfo --xml emits UTF-16LE with a BOM and no line breaks. Passing that directly to BSD sed
+  #closes the macOS wizard with "illegal byte sequence" whenever cached Windows files are present.
+  wim_locale_dir="$(mktemp -d)"
+  mkdir -p "$wim_locale_dir/bin"
+  touch "$wim_locale_dir/install.wim"
+  printf '<WIM><IMAGE><WINDOWS><LANGUAGES><LANGUAGE>en-US</LANGUAGE><DEFAULT>en-US</DEFAULT></LANGUAGES></WINDOWS></IMAGE></WIM>' \
+    | iconv -f UTF-8 -t UTF-16LE > "$wim_locale_dir/wim.xml"
+  { printf '#!/bin/sh\n'; printf 'cat "$WIM_XML_FIXTURE"\n'; } > "$wim_locale_dir/bin/wiminfo"
+  chmod +x "$wim_locale_dir/bin/wiminfo"
+  wim_locale_out="$(run_in_engine 'WIM_XML_FIXTURE="'"$wim_locale_dir"'/wim.xml"; export WIM_XML_FIXTURE; PATH="'"$wim_locale_dir"'/bin:$PATH"; list_wim_locale_codes "'"$wim_locale_dir"'/install.wim"' 2>&1)"
+  [ "$wim_locale_out" == en-us ] \
+    && pass "cached WIM locale discovery decodes wiminfo UTF-16LE output before parsing" \
+    || fail "cached WIM locale discovery cannot parse wiminfo XML: '$wim_locale_out'"
+  rm -rf "$wim_locale_dir"
+
   [ "$(run_in_engine 'windows_locale_from_language_code sr-latn-rs')" == 'sr-Latn-RS' ] \
     && [ "$(run_in_engine 'list_windows_locale_options | head -n1')" == $'en-US\tEnglish (United States) (en-US)' ] \
     && run_in_engine 'WINDOWS_LOCALE_SETUP=1 WINDOWS_LOCALE=sr-Latn-RS true' \
@@ -1771,11 +1805,16 @@ rc=1" ] \
   for ram_hook_expected in script-staged hook-copies-it not-staged-for-pi5 ;do
     printf '%s\n' "$ram_hook_out" | grep -qx "$ram_hook_expected" || missing_ram_hook="$missing_ram_hook $ram_hook_expected"
   done
-  #a RunSynchronousCommand that exits non-zero fails Windows Setup outright, so it must swallow its own errors
+  #Path is capped at 259 characters by the Windows unattend schema, and a non-zero script result
+  #fails Windows Setup outright, so invoke the staged file and let it swallow and log its own errors.
+  ram_command="$(sed -n 's/.*<Path>\(.*\)<\/Path>.*/\1/p' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml")"
   [ -z "$missing_ram_hook" ] \
     && grep -qF 'Setup\Scripts\Pi4Disable3GB.ps1' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
-    && grep -qF '; exit 0"' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
-    && ! grep -qF 'exit 1' "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" \
+    && [ "${#ram_command}" -le 259 ] \
+    && grep -qF '} catch {' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
+    && grep -qF "Set-Content \$log ('Pi 4 RAM unlock failed: ' + \$_.Exception.Message)" "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
+    && grep -qF 'exit 0' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
+    && ! grep -qF 'exit 1' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
     && pass "the Pi 4 RAM unlock reaches the installed OS and cannot fail Windows setup" \
     || fail "the RAM unlock is not delivered to the installed OS:$missing_ram_hook"
 

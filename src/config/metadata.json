@@ -2,7 +2,7 @@
   "$schema": "./metadata.schema.json",
   "product": {
     "name": "WoR-Flasher",
-    "version": "1.0.2",
+    "version": "2.0.0",
     "description": "Release tooling for WoR-Flasher packaging; disk flashing remains in the shell engine.",
     "license": "GPL-3.0-or-later",
     "keywords": [

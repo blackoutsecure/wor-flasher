@@ -1,3 +1,6 @@
+$log = Join-Path $env:windir 'Temp\Pi4Disable3GB.log'
+
+try {
 $source = @'
 using System;
 using System.ComponentModel;
@@ -50,3 +53,11 @@ Add-Type -TypeDefinition $source -Language CSharp
 if ((& bcdedit /enum '{current}') -match 'truncatememory') {
     & bcdedit /deletevalue '{current}' truncatememory | Out-Null
 }
+
+Set-Content $log 'Pi 4 RAM limit disabled.'
+} catch {
+    Set-Content $log ('Pi 4 RAM unlock failed: ' + $_.Exception.Message)
+}
+
+#A customization failure must not abort Windows Setup.
+exit 0
