@@ -1297,7 +1297,7 @@ verify_written_image() { #Input: device, boot partition, install partition, boot
     install_offset="$(darwin_device_value "$install_partition" '.PartitionMapPartitionOffset')"
     install_size="$(darwin_device_value "$install_partition" '.Size')"
   else
-    geometry="$(parted -ms "$device" unit B print)" || error "Written-image verification failed: could not read partition geometry from $device."
+    geometry="$(sudo parted -ms "$device" unit B print)" || error "Written-image verification failed: could not read partition geometry from $device."
     partition_count="$(awk -F: '$1 ~ /^[0-9]+$/ {count++} END {print count + 0}' <<<"$geometry")"
     boot_content="$(awk -F: '$1 == 1 {print $7}' <<<"$geometry")"
     install_content="$(awk -F: '$1 == 2 {print $7}' <<<"$geometry")"

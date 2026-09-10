@@ -2703,59 +2703,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
 
     while true;do #repeat the advanced options window until the DL_DIR is not changed, or until Cancel is clicked
       fields=()
-      fields+=("--field=<b>Downloads</b>:LBL" '')
       uefi_pinned="$(uefi_pinned_version)"
-      #make entry to change DL_DIR
-      if [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
-        #lock DL_DIR if winfiles come from previously extracted ISO - changing it would lose these files and they cannot be replaced by the internet
-        fields+=("--field=Working directory: (DL<u>  </u>DIR):RO" 'Cannot be changed')
-      else
-        fields+=("--field=Working directory: (DL<u>  </u>DIR):DIR" "$DL_DIR")
-      fi
-
-      #make entry for peinstaller
-      if [ -d "$DL_DIR/peinstaller" ];then
-        fields+=("--field=Check this box to re-download PE Installer":CHK 'FALSE')
-      else
-        fields+=("--field=Will download PE Installer":LBL '')
-      fi
-      fields+=("--field=            <u>$DL_DIR/peinstaller</u>":LBL '')
-
-      #make entry for driverpackage
-      if [ -d "$DL_DIR/driverpackage" ];then
-        fields+=("--field=Check this box to re-download RPi Drivers":CHK 'FALSE')
-      else
-        fields+=("--field=Will download RPi Drivers":LBL '')
-      fi
-      fields+=("--field=            <u>$DL_DIR/driverpackage</u>":LBL '')
-
-      #make entry for uefipackage
-      if [ -d "$DL_DIR/pi${RPI_MODEL}-uefipackage" ];then
-        fields+=("--field=Check this box to re-download UEFI package":CHK 'FALSE')
-      else
-        fields+=("--field=Will download UEFI package":LBL '')
-      fi
-      fields+=("--field=            <u>$DL_DIR/pi${RPI_MODEL}-uefipackage</u>":LBL '')
-
-      #display status of winfiles - if they will be downloaded or are ready to use
-      if [ -f "${DL_DIR}/winfiles_${BID}_${WIN_LANG}/alldone" ];then
-        #already extracted
-        fields+=("--field=Windows files: Already extracted and ready to use.":LBL '')
-        fields+=("--field=            <small><u>${DL_DIR}/winfiles_${BID}_${WIN_LANG}</u></small>":LBL '')
-      elif [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
-        #already extracted
-        fields+=("--field=Windows files: Already extracted and ready to use.":LBL '')
-        fields+=("--field=            <small><u>${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}</u></small>":LBL '')
-      elif [ ! -z "$SOURCE_FILE" ];then
-        #will use ISO file
-        fields+=("--field=Windows files: Will be extracted from your ISO file.":LBL '')
-        fields+=("--field=            <small><u>${SOURCE_FILE}</u></small>":LBL '')
-      else
-        #ESD will be downloaded
-        fields+=("--field=Windows files: Will download and extract Windows ESD image":LBL '')
-        fields+=("--field=            <small><u>${DL_DIR}/winfiles_${BID}_${WIN_LANG}</u></small>":LBL '')
-      fi
-
       #make entries for the customization toggles
       #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4; yad can't disable one field, so mark it and drop the value below
       [ "$RPI_MODEL" == 4 ] && pi4_applicable=1 || pi4_applicable=0
@@ -2773,6 +2721,44 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       fields+=("--field=$(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL"):CHK" "$(wor_yad_bool "$DRY_RUN")")
       #in recovery mode this config.txt boots the installer media; WoR-PE writes the target drive's own copy
       config_scope="$(wor_config_scope "$CAN_INSTALL_ON_SAME_DRIVE")"
+      fields+=("--field=<b>Downloads</b>:LBL" '')
+      #make entry to change DL_DIR
+      if [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
+        fields+=("--field=Working directory: (DL<u>  </u>DIR):RO" 'Cannot be changed')
+      else
+        fields+=("--field=Working directory: (DL<u>  </u>DIR):DIR" "$DL_DIR")
+      fi
+      if [ -d "$DL_DIR/peinstaller" ];then
+        fields+=("--field=Check this box to re-download PE Installer":CHK 'FALSE')
+      else
+        fields+=("--field=Will download PE Installer":LBL '')
+      fi
+      fields+=("--field=            <u>$DL_DIR/peinstaller</u>":LBL '')
+      if [ -d "$DL_DIR/driverpackage" ];then
+        fields+=("--field=Check this box to re-download RPi Drivers":CHK 'FALSE')
+      else
+        fields+=("--field=Will download RPi Drivers":LBL '')
+      fi
+      fields+=("--field=            <u>$DL_DIR/driverpackage</u>":LBL '')
+      if [ -d "$DL_DIR/pi${RPI_MODEL}-uefipackage" ];then
+        fields+=("--field=Check this box to re-download UEFI package":CHK 'FALSE')
+      else
+        fields+=("--field=Will download UEFI package":LBL '')
+      fi
+      fields+=("--field=            <u>$DL_DIR/pi${RPI_MODEL}-uefipackage</u>":LBL '')
+      if [ -f "${DL_DIR}/winfiles_${BID}_${WIN_LANG}/alldone" ];then
+        fields+=("--field=Windows files: Already extracted and ready to use.":LBL '')
+        fields+=("--field=            <small><u>${DL_DIR}/winfiles_${BID}_${WIN_LANG}</u></small>":LBL '')
+      elif [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
+        fields+=("--field=Windows files: Already extracted and ready to use.":LBL '')
+        fields+=("--field=            <small><u>${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}</u></small>":LBL '')
+      elif [ -n "$SOURCE_FILE" ];then
+        fields+=("--field=Windows files: Will be extracted from your ISO file.":LBL '')
+        fields+=("--field=            <small><u>${SOURCE_FILE}</u></small>":LBL '')
+      else
+        fields+=("--field=Windows files: Will download and extract Windows ESD image":LBL '')
+        fields+=("--field=            <small><u>${DL_DIR}/winfiles_${BID}_${WIN_LANG}</u></small>":LBL '')
+      fi
       #USE_CACHE has three values, so it needs a combo rather than a check box; the selected item comes first
       case "$USE_CACHE" in
         0) cache_items='Re-download everything, ignoring the cache!Reuse cached files when they still match (recommended)!Trust the cache without checking it' ;;
@@ -2780,6 +2766,21 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         *) cache_items='Reuse cached files when they still match (recommended)!Re-download everything, ignoring the cache!Trust the cache without checking it' ;;
       esac
       fields+=("--field=Downloaded files":CB "$cache_items")
+      fields+=("--field=<b>Notifications</b>:LBL" '')
+      sound_items=""
+      curr_sound_item=""
+      other_sound_items=""
+      sel_sound="$(wor_completion_sound)"
+      while IFS=$'\t' read -r sound_value sound_label ;do
+        [ -z "$sound_value" ] && continue
+        if [ "$sound_value" == "$sel_sound" ];then curr_sound_item="$sound_label"; else [ -n "$other_sound_items" ] && other_sound_items+="!${sound_label}" || other_sound_items="${sound_label}"; fi
+      done < <(wor_sound_options)
+      if [ -n "$curr_sound_item" ] || [ -n "$other_sound_items" ];then
+        [ -n "$curr_sound_item" ] && sound_items="${curr_sound_item}!${other_sound_items}" || sound_items="${other_sound_items}"
+        fields+=("--field=Play a sound when the flash finishes":CHK "$(wor_yad_bool "${PLAY_SOUND:-1}")")
+        fields+=("--field=Completion sound":CB "$sound_items")
+        fields+=("--field=Show a notification when the flash finishes":CHK "$(wor_yad_bool "${SHOW_NOTIFICATION:-1}")")
+      fi
       fields+=("--field=<b>Windows account</b>:LBL" '')
       fields+=("--field=Create an optional local Windows administrator account":CHK "$(wor_yad_bool "$WINDOWS_ACCOUNT_SETUP")")
       fields+=("--field=Windows username":TXT "$WINDOWS_ACCOUNT_USERNAME")
@@ -2816,27 +2817,8 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       fields+=("--field=Choose Windows language":CB "$lang_items")
       fields+=("--field=<b>Raspberry Pi boot config</b>:LBL" '')
       fields+=("--field=$(wor_config_txt_label "$config_scope")  <span foreground=\"green\">Recommended</span>:CHK" "$(wor_yad_bool "$APPLY_CUSTOM_CONFIG_TXT")")
-      fields+=("--field=<b>Notifications</b>:LBL" '')
-      sound_items=""
-      curr_sound_item=""
-      other_sound_items=""
-      sel_sound="$(wor_completion_sound)"
-      while IFS=$'\t' read -r sound_value sound_label ;do
-        [ -z "$sound_value" ] && continue
-        if [ "$sound_value" == "$sel_sound" ];then
-          curr_sound_item="$sound_label"
-        else
-          [ -n "$other_sound_items" ] && other_sound_items+="!${sound_label}" || other_sound_items="${sound_label}"
-        fi
-      done < <(wor_sound_options)
-      if [ -n "$curr_sound_item" ] || [ -n "$other_sound_items" ];then
-        [ -n "$curr_sound_item" ] && sound_items="${curr_sound_item}!${other_sound_items}" || sound_items="${other_sound_items}"
-        fields+=("--field=Play a sound when the flash finishes":CHK "$(wor_yad_bool "${PLAY_SOUND:-1}")")
-        fields+=("--field=Completion sound":CB "$sound_items")
-        fields+=("--field=Show a notification when the flash finishes":CHK "$(wor_yad_bool "${SHOW_NOTIFICATION:-1}")")
-      fi
 
-      output="$(yad "${yadflags[@]}" --width="$(wor_yad_width 640)" --height="$(wor_yad_height 700)" --image-on-top \
+      output="$(yad "${yadflags[@]}" --use-markup --width="$(wor_yad_width 640)" --height="$(wor_yad_height 700)" --image-on-top \
         "${refresh_prompt[@]}" \
         --form --scroll \
         "${fields[@]}" \
@@ -2867,22 +2849,22 @@ while true;do #repeat the Installation Overview window until Flash button clicke
 
         else #if DL_DIR was not changed, then review the subsequent check-box values
           #peinstaller
-          if [ "$(echo "$output" | sed -n 3p)" == TRUE ];then
+          if [ "$(echo "$output" | sed -n 12p)" == TRUE ];then
             echo "User checked the box to delete $DL_DIR/peinstaller"
             rm -rf "$DL_DIR/peinstaller"
           fi
           #driverpackage
-          if [ "$(echo "$output" | sed -n 5p)" == TRUE ];then
+          if [ "$(echo "$output" | sed -n 14p)" == TRUE ];then
             echo "User checked the box to delete $DL_DIR/driverpackage"
             rm -rf "$DL_DIR/driverpackage"
           fi
           #uefipackage
-          if [ "$(echo "$output" | sed -n 7p)" == TRUE ];then
+          if [ "$(echo "$output" | sed -n 16p)" == TRUE ];then
             echo "User checked the box to delete $DL_DIR/pi${RPI_MODEL}-uefipackage"
             rm -rf "$DL_DIR/pi${RPI_MODEL}-uefipackage"
           fi
           #windows image
-          if [ "$(echo "$output" | sed -n 9p)" == TRUE ];then
+          if [ "$(echo "$output" | sed -n 18p)" == TRUE ];then
             echo "User checked the box to delete $(echo "$DL_DIR"/uupdump/*ARM64*.ISO)"
             rm -f "$DL_DIR"/uupdump/*ARM64*.ISO
             rm_img=FALSE #This "Advanced..." dialog just deleted the windows image, so no need for the var to remain 'TRUE' - remove unnecessary output when removing twice
@@ -2896,37 +2878,37 @@ while true;do #repeat the Installation Overview window until Flash button clicke
             DRY_RUN=0
           fi
           #customization toggles
-          [ "$(echo "$output" | sed -n 12p)" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
+          [ "$(echo "$output" | sed -n 2p)" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
           #keep the existing preference when the toggle wasn't applicable, so switching back to a Pi 4 doesn't lose it
           if [ "$pi4_applicable" == 1 ];then
-            [ "$(echo "$output" | sed -n 13p)" == TRUE ] && PI4_AUTO_DISABLE_3GB=1 || PI4_AUTO_DISABLE_3GB=0
+            [ "$(echo "$output" | sed -n 3p)" == TRUE ] && PI4_AUTO_DISABLE_3GB=1 || PI4_AUTO_DISABLE_3GB=0
           fi
-          [ "$(echo "$output" | sed -n 15p)" == TRUE ] && UEFI_USE_LATEST=1 || UEFI_USE_LATEST=0
-          [ "$(echo "$output" | sed -n 16p)" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
-          [ "$(echo "$output" | sed -n 18p)" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
-          [ "$(echo "$output" | sed -n 30p)" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
+          [ "$(echo "$output" | sed -n 5p)" == TRUE ] && UEFI_USE_LATEST=1 || UEFI_USE_LATEST=0
+          [ "$(echo "$output" | sed -n 6p)" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
+          [ "$(echo "$output" | sed -n 8p)" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
+          [ "$(echo "$output" | sed -n 34p)" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
           case "$(echo "$output" | sed -n 20p)" in
             'Re-download everything'*) USE_CACHE=0 ;;
             'Trust the cache'*) USE_CACHE=2 ;;
             'Reuse cached files'*) USE_CACHE=1 ;;
           esac
-          [ "$(echo "$output" | sed -n 22p)" == TRUE ] && WINDOWS_ACCOUNT_SETUP=1 || WINDOWS_ACCOUNT_SETUP=0
-          WINDOWS_ACCOUNT_USERNAME="$(echo "$output" | sed -n 23p)"
-          WINDOWS_ACCOUNT_PASSWORD="$(echo "$output" | sed -n 24p)"
-          [ "$(echo "$output" | sed -n 26p)" == TRUE ] && WINDOWS_LOCALE_SETUP=1 || WINDOWS_LOCALE_SETUP=0
-          WINDOWS_LOCALE="$(echo "$output" | sed -n 27p | awk -F': ' '{print $1}')"
-          sel_lang="$(echo "$output" | sed -n 28p)"
+          [ "$(echo "$output" | sed -n 26p)" == TRUE ] && WINDOWS_ACCOUNT_SETUP=1 || WINDOWS_ACCOUNT_SETUP=0
+          WINDOWS_ACCOUNT_USERNAME="$(echo "$output" | sed -n 27p)"
+          WINDOWS_ACCOUNT_PASSWORD="$(echo "$output" | sed -n 28p)"
+          [ "$(echo "$output" | sed -n 30p)" == TRUE ] && WINDOWS_LOCALE_SETUP=1 || WINDOWS_LOCALE_SETUP=0
+          WINDOWS_LOCALE="$(echo "$output" | sed -n 31p | awk -F': ' '{print $1}')"
+          sel_lang="$(echo "$output" | sed -n 32p)"
           sel_code="${sel_lang%%:*}"
           if is_known_win_lang "$sel_code" ;then
             WIN_LANG="$sel_code"
           fi
           if [ -n "$sound_items" ];then
-            [ "$(echo "$output" | sed -n 32p)" == TRUE ] && PLAY_SOUND=1 || PLAY_SOUND=0
+            [ "$(echo "$output" | sed -n 22p)" == TRUE ] && PLAY_SOUND=1 || PLAY_SOUND=0
             #the combo shows labels, so map the chosen one back to the value the player needs
-            sel_sound_label="$(echo "$output" | sed -n 33p)"
+            sel_sound_label="$(echo "$output" | sed -n 23p)"
             sel_sound="$(wor_sound_options | awk -F'\t' -v l="$sel_sound_label" '$2 == l {print $1; exit}')"
             [ -n "$sel_sound" ] && COMPLETION_SOUND="$sel_sound"
-            [ "$(echo "$output" | sed -n 34p)" == TRUE ] && SHOW_NOTIFICATION=1 || SHOW_NOTIFICATION=0
+            [ "$(echo "$output" | sed -n 24p)" == TRUE ] && SHOW_NOTIFICATION=1 || SHOW_NOTIFICATION=0
           fi
           #end of parsing check-box values for advanced options window
 
@@ -2975,9 +2957,14 @@ fi
 gui_start_installer
 
 progress_fifo="$(mktemp -u)"
+subprogress_fifo="$(mktemp -u)"
 mkfifo "$progress_fifo"
+mkfifo "$subprogress_fifo"
 tail -n +1 -F "$progress_file" > "$progress_fifo" 2>/dev/null &
 tail_pid=$!
+tail -n +1 -F "$progress_file" > "$subprogress_fifo" 2>/dev/null &
+sub_tail_pid=$!
+# LINUX_PROGRESS_AWK_BEGIN
 awk -F'\t' '
   #pct, not sub: sub() is a built-in awk function and cannot be used as a variable
   #before the first STEP (e.g. while clearing the cache) the percentage stands on its own
@@ -3000,13 +2987,27 @@ awk -F'\t' '
   /^SUBSTEP/ { pct=$2+0; if (pct<0) pct=0; if (pct>100) pct=100; overall(); fflush() }
   /^TASK/    { pct=$2+0; if (pct<0) pct=0; if (pct>100) pct=100; task_title=$3; overall(); fflush() }
   /^STATUS/  { status_msg=$2; if (step+0 == 0) overall(); else printf("# %s\n", status_msg); fflush() }
-' < "$progress_fifo" | yad "${yadflags[@]}" --width="$(wor_yad_width 680)" --height="$(wor_yad_height 330)" \
+# LINUX_PROGRESS_AWK_END
+' < "$progress_fifo" |
+  yad "${yadflags[@]}" --width="$(wor_yad_width 680)" --height="$(wor_yad_height 330)" \
   --progress --image="$WOR_LOGO_PATH" --text="Starting..." --button='<b>Abort</b>':1 &
 yad_pid=$!
+awk -F'\t' '
+  function show(pct, label) {
+    if (pct < 0) pct=0; if (pct > 100) pct=100
+    printf "%d\n# %s (%d%%)\n", pct, label, pct
+    fflush()
+  }
+  /^STEP/ { phase=$4; show(0, phase) }
+  /^SUBSTEP/ { show($2+0, phase) }
+  /^TASK/ { show($2+0, $3) }
+' < "$subprogress_fifo" | yad "${yadflags[@]}" --title="$WOR_WINDOW_TITLE - Sub-progress" --geometry=680x180+100+430 \
+  --progress --text="Sub-progress" --button=Close:1 &
+sub_yad_pid=$!
 
 progress_aborted=0
 while [ ! -f "$done_marker" ];do
-  if ! kill -0 "$yad_pid" 2>/dev/null ;then
+  if ! kill -0 "$yad_pid" 2>/dev/null || ! kill -0 "$sub_yad_pid" 2>/dev/null ;then
     progress_aborted=1
     break
   fi
@@ -3018,9 +3019,9 @@ if [ "$progress_aborted" == 1 ];then
   status "Aborting at your request"
   kill_process_tree "$installer_pid"
   wait "$installer_pid" 2>/dev/null
-  kill "$tail_pid" 2>/dev/null
-  wait "$tail_pid" 2>/dev/null
-  rm -f "$progress_fifo" "$progress_file" "$done_marker" "$auth_marker" "$abort_marker" "$error_marker"
+  kill "$tail_pid" "$sub_tail_pid" "$sub_yad_pid" 2>/dev/null
+  wait "$tail_pid" "$sub_tail_pid" "$sub_yad_pid" 2>/dev/null
+  rm -f "$progress_fifo" "$subprogress_fifo" "$progress_file" "$done_marker" "$auth_marker" "$abort_marker" "$error_marker"
   saved_log="$(gui_save_failure_log)"
   wor_play_result_sound failure
   wor_show_result_notification failure
@@ -3031,9 +3032,9 @@ fi
 exitcode="$(cat "$done_marker" 2>/dev/null)"
 [ -z "$exitcode" ] && exitcode=1
 
-kill "$tail_pid" "$yad_pid" 2>/dev/null
-wait "$tail_pid" "$yad_pid" 2>/dev/null
-rm -f "$progress_fifo" "$progress_file" "$done_marker" "$auth_marker" "$abort_marker"
+kill "$tail_pid" "$sub_tail_pid" "$yad_pid" "$sub_yad_pid" 2>/dev/null
+wait "$tail_pid" "$sub_tail_pid" "$yad_pid" "$sub_yad_pid" 2>/dev/null
+rm -f "$progress_fifo" "$subprogress_fifo" "$progress_file" "$done_marker" "$auth_marker" "$abort_marker"
 
 #clear zram - avoid leaving files occupying space in /zram
 if [ "$DL_DIR" == /zram ];then

@@ -640,6 +640,10 @@ disk5 Second drive"
     || fail "Advanced Options window is missing or incomplete"
 
   grep -qF 'linux_choose_one() {' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--use-markup' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(grep -anF -- '--field=<b>Windows setup</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=<b>Firmware and drivers</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
+    && [ "$(grep -anF -- '--field=<b>Firmware and drivers</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=<b>Validation</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
+    && [ "$(grep -anF -- '--field=<b>Validation</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=<b>Downloads</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
     && grep -qF -- "--field='Windows version:CB' 'Windows 11!Windows 10!More options'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- "--field='Raspberry Pi model:CB' 'Raspberry Pi 5!Raspberry Pi 4 / Pi 400!Raspberry Pi 3 / Pi 2 v1.2'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "RPI_MODEL=''" "$REPO_DIR/install-wor-gui.sh" \
@@ -800,7 +804,11 @@ disk5 Second drive"
     && grep -qF $'STATUS\t$1' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'LINUX_ASKPASS="$(mktemp)"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$WOR_LOGO_PATH" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sudo parted -ms "$device" unit B print' "$REPO_DIR/install-wor.sh" \
     && grep -qF -- '--progress --image="$WOR_LOGO_PATH" --text="Starting..."' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'subprogress_fifo="$(mktemp -u)"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Sub-progress' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'sub_yad_pid=$!' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF '"$DIRECTORY/terminal-run"' "$REPO_DIR/install-wor-gui.sh" \
     && pass "GUI mode runs the installer without a visible terminal on macOS and Linux" \
     || fail "GUI mode still depends on a visible terminal"
@@ -1141,7 +1149,7 @@ SH
     || fail "copy failure diagnostics misclassify target media I/O errors: $copy_io_message"
 
   #sub() is a built-in awk function, so using it as a variable is a syntax error
-  linux_awk="$(sed -n "/^awk -F'\\\\t' '$/,/^' < \"\$progress_fifo\"/p" "$REPO_DIR/install-wor-gui.sh" | sed '1d;$d')"
+  linux_awk="$(sed -n '/# LINUX_PROGRESS_AWK_BEGIN/,/# LINUX_PROGRESS_AWK_END/p' "$REPO_DIR/install-wor-gui.sh" | sed '1d; /^awk -F/d; $d')"
   if [ -n "$linux_awk" ] && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" >/dev/null 2>&1 ;then
     [ "$(printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -vE '^#' | tail -n1)" == 31 ] \
       && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -qF '# [Step 3/8] install.wim (50%)' \
