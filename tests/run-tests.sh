@@ -641,16 +641,27 @@ disk5 Second drive"
 
   grep -qF 'linux_choose_one() {' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--use-markup' "$REPO_DIR/install-wor-gui.sh" \
-    && [ "$(grep -anF -- '--field=<b>Windows setup</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=<b>Firmware and drivers</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
-    && [ "$(grep -anF -- '--field=<b>Firmware and drivers</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=<b>Validation</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
-    && [ "$(grep -anF -- '--field=<b>Validation</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=<b>Downloads</b>:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
+    && [ "$(grep -anF -- '--field=Windows setup:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Firmware and drivers:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
+    && [ "$(grep -anF -- '--field=Firmware and drivers:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Validation:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
+    && [ "$(grep -anF -- '--field=Validation:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Downloads:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
     && grep -qF -- "--field='Windows version:CB' 'Windows 11!Windows 10!More options'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- "--field='Raspberry Pi model:CB' 'Raspberry Pi 5!Raspberry Pi 4 / Pi 400!Raspberry Pi 3 / Pi 2 v1.2'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "RPI_MODEL=''" "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF -- '--form --columns=2' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- "--button='<b>View / Edit config.txt...</b>':3" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- '--field="<b>View / Edit config.txt</b>' "$REPO_DIR/install-wor-gui.sh" \
-    && [ "$(grep -cF -- '--form --scroll' "$REPO_DIR/install-wor-gui.sh")" -ge 3 ] \
+    && ! grep -qF -- "--button='<b>View / Edit config.txt...</b>':3" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--field=<b>View / Edit config.txt</b>:BTN' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--changed-action="$changed_action"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'account_username_value=' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "account_username_value='@disabled@'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "account_password_value='@disabled@'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "locale_value='@disabled@'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "config_button_value='@disabled@'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'account_checkbox_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'locale_checkbox_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'config_checkbox_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'account_username_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'config_button_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && [ "$(grep -cF -- '--form --scroll' "$REPO_DIR/install-wor-gui.sh")" -ge 2 ] \
     && grep -qF 'yadflags=(--center --fixed --buttons-layout=center' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF -- "--button='<b>Abort</b>':1" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'if ! kill -0 "$yad_pid"' "$REPO_DIR/install-wor-gui.sh" \
@@ -806,9 +817,9 @@ disk5 Second drive"
     && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$WOR_LOGO_PATH" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'sudo parted -ms "$device" unit B print' "$REPO_DIR/install-wor.sh" \
     && grep -qF -- '--progress --image="$WOR_LOGO_PATH" --text="Starting..."' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'subprogress_fifo="$(mktemp -u)"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'Sub-progress' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'sub_yad_pid=$!' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--bar="Overall:NORM" --bar="Sub-progress:NORM"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '1:# Overall' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '2:# Sub-progress' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF '"$DIRECTORY/terminal-run"' "$REPO_DIR/install-wor-gui.sh" \
     && pass "GUI mode runs the installer without a visible terminal on macOS and Linux" \
     || fail "GUI mode still depends on a visible terminal"
@@ -1151,8 +1162,9 @@ SH
   #sub() is a built-in awk function, so using it as a variable is a syntax error
   linux_awk="$(sed -n '/# LINUX_PROGRESS_AWK_BEGIN/,/# LINUX_PROGRESS_AWK_END/p' "$REPO_DIR/install-wor-gui.sh" | sed '1d; /^awk -F/d; $d')"
   if [ -n "$linux_awk" ] && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" >/dev/null 2>&1 ;then
-    [ "$(printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -vE '^#' | tail -n1)" == 31 ] \
-      && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -qF '# [Step 3/8] install.wim (50%)' \
+    [ "$(printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -E '^1:' | grep -v '#' | tail -n1 | cut -d: -f2)" == 31 ] \
+    && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -qF '1:# Overall - Step 3/8: install.wim (50%)' \
+    && printf 'STEP\t3\t8\tThird\nSUBSTEP\t50\nTASK\t50\tinstall.wim\n' | awk -F'\t' "$linux_awk" | grep -qF '2:# Sub-progress: install.wim (50%)' \
       && pass "the Linux progress program runs and maps a mid-step percentage correctly" \
       || fail "the Linux progress program computes the wrong overall percentage"
   else
@@ -1174,7 +1186,7 @@ SH
     && grep -qF '"--field=Downloaded files":CB "$cache_items"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '"--field=Create an optional local Windows administrator account":CHK' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '"--field=Windows password":H' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF '"--field=Windows locale":CB "$locale_items"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '"--field=Windows locale":CB "$locale_value"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "awk -F': ' '{print \$1}'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE' "$REPO_DIR/install-wor.sh" \
     && pass "both GUIs can choose the download cache mode and pass it to the installer" \
