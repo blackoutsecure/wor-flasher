@@ -656,11 +656,14 @@ disk5 Second drive"
     && grep -qF "account_password_value='@disabled@'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "locale_value='@disabled@'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "config_button_value='@disabled@'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'account_checkbox_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'locale_checkbox_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'config_checkbox_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'account_username_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'config_button_field=$((${#fields[@]} + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'account_checkbox_field=$((${#fields[@]} / 2 + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'locale_checkbox_field=$((${#fields[@]} / 2 + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'config_checkbox_field=$((${#fields[@]} / 2 + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'account_username_field=$((${#fields[@]} / 2 + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'config_button_field=$((${#fields[@]} / 2 + 1))' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'yad_field_value()' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF '$(echo "$output" | sed -n 7p)' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF '$(echo "$output" | sed -n 18p)' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(grep -cF -- '--form --scroll' "$REPO_DIR/install-wor-gui.sh")" -ge 2 ] \
     && grep -qF 'yadflags=(--center --fixed --buttons-layout=center' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF -- "--button='<b>Abort</b>':1" "$REPO_DIR/install-wor-gui.sh" \

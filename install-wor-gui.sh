@@ -2713,21 +2713,29 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       pi4_label="$(wor_pi4_label "$RPI_MODEL")"
       [ "$pi4_applicable" == 1 ] || pi4_label="<i>$pi4_label</i>"
       fields+=("--field=Windows setup:LBL" '')
+      oobe_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label oobe "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution oobe)")":CHK "$(wor_yad_bool "$OOBE_NETWORK_BYPASS")")
+      pi4_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$pi4_label":CHK "$(wor_yad_bool "$([ "$pi4_applicable" == 1 ] && echo "$PI4_AUTO_DISABLE_3GB" || echo 0)")")
       fields+=("--field=Firmware and drivers:LBL" '')
+      uefi_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label uefi "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution uefi)")":CHK "$(wor_yad_bool "$UEFI_USE_LATEST")")
+      drivers_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label drivers "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution drivers)")":CHK "$(wor_yad_bool "$DRIVERS_USE_LATEST")")
       fields+=("--field=Validation:LBL" '')
+      verify_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label verify "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution verify)")":CHK "$(wor_yad_bool "$SKIP_IMAGE_VERIFICATION")")
+      dryrun_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL"):CHK" "$(wor_yad_bool "$DRY_RUN")")
       #in recovery mode this config.txt boots the installer media; WoR-PE writes the target drive's own copy
       config_scope="$(wor_config_scope "$CAN_INSTALL_ON_SAME_DRIVE")"
       fields+=("--field=Downloads:LBL" '')
       #make entry to change DL_DIR
       if [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
+        working_dir_field=$((${#fields[@]} / 2 + 1))
         fields+=("--field=Working directory: (DL<u>  </u>DIR):RO" 'Cannot be changed')
       else
+        working_dir_field=$((${#fields[@]} / 2 + 1))
         fields+=("--field=Working directory: (DL<u>  </u>DIR):DIR" "$DL_DIR")
       fi
       if [ -f "${DL_DIR}/winfiles_${BID}_${WIN_LANG}/alldone" ];then
@@ -2739,6 +2747,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       else
         windows_files_status='Will download and extract the Windows image'
       fi
+      windows_files_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Windows files:LBL" "$windows_files_status")
       #USE_CACHE has three values, so it needs a combo rather than a check box; the selected item comes first
       case "$USE_CACHE" in
@@ -2746,6 +2755,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         2) cache_items='Trust the cache without checking it!Re-download everything, ignoring the cache!Reuse cached files when they still match (recommended)' ;;
         *) cache_items='Reuse cached files when they still match (recommended)!Re-download everything, ignoring the cache!Trust the cache without checking it' ;;
       esac
+      cache_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Downloaded files":CB "$cache_items")
       fields+=("--field=Notifications:LBL" '')
       sound_items=""
@@ -2758,23 +2768,26 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       done < <(wor_sound_options)
       if [ -n "$curr_sound_item" ] || [ -n "$other_sound_items" ];then
         [ -n "$curr_sound_item" ] && sound_items="${curr_sound_item}!${other_sound_items}" || sound_items="${other_sound_items}"
+        play_sound_field=$((${#fields[@]} / 2 + 1))
         fields+=("--field=Play a sound when the flash finishes":CHK "$(wor_yad_bool "${PLAY_SOUND:-1}")")
+        completion_sound_field=$((${#fields[@]} / 2 + 1))
         fields+=("--field=Completion sound":CB "$sound_items")
+        notification_field=$((${#fields[@]} / 2 + 1))
         fields+=("--field=Show a notification when the flash finishes":CHK "$(wor_yad_bool "${SHOW_NOTIFICATION:-1}")")
       fi
       fields+=("--field=Windows account:LBL" '')
-      account_checkbox_field=$((${#fields[@]} + 1))
+      account_checkbox_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Create an optional local Windows administrator account":CHK "$(wor_yad_bool "$WINDOWS_ACCOUNT_SETUP")")
-      account_username_field=$((${#fields[@]} + 1))
+      account_username_field=$((${#fields[@]} / 2 + 1))
       account_username_value="$WINDOWS_ACCOUNT_USERNAME"
       account_password_value="$WINDOWS_ACCOUNT_PASSWORD"
       [ "$WINDOWS_ACCOUNT_SETUP" == 1 ] || account_username_value='@disabled@'
       [ "$WINDOWS_ACCOUNT_SETUP" == 1 ] || account_password_value='@disabled@'
       fields+=("--field=Windows username":TXT "$account_username_value")
-      account_password_field=$((${#fields[@]} + 1))
+      account_password_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Windows password":H "$account_password_value")
       fields+=("--field=Regional settings:LBL" '')
-      locale_checkbox_field=$((${#fields[@]} + 1))
+      locale_checkbox_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Configure Windows keyboard and regional settings":CHK "$(wor_yad_bool "$WINDOWS_LOCALE_SETUP")")
       locale_items=""
       curr_locale_item=""
@@ -2791,7 +2804,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       [ -n "$curr_locale_item" ] && locale_items="${curr_locale_item}!${other_locale_items}" || locale_items="${WINDOWS_LOCALE}: ${WINDOWS_LOCALE}!${other_locale_items}"
       locale_value="$locale_items"
       [ "$WINDOWS_LOCALE_SETUP" == 1 ] || locale_value='@disabled@'
-      locale_field=$((${#fields[@]} + 1))
+      locale_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Windows locale":CB "$locale_value")
       lang_items=""
       curr_item=""
@@ -2806,21 +2819,22 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         fi
       done < <(list_langs_preferred)
       [ -n "$curr_item" ] && lang_items="${curr_item}!${other_items}" || lang_items="${other_items}"
+      language_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Choose Windows language":CB "$lang_items")
       fields+=("--field=Raspberry Pi boot config:LBL" '')
       config_button_value="$config_editor_action"
       [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ] || config_button_value='@disabled@'
-      account_username_update="$(printf '%q' "$account_username_field:$account_username_value")"
-      account_password_update="$(printf '%q' "$account_password_field:$account_password_value")"
-      locale_update="$(printf '%q' "$locale_field:$locale_value")"
-      config_checkbox_field=$((${#fields[@]} + 1))
+      account_username_update="${account_username_field}:$(printf '%q' "$account_username_value")"
+      account_password_update="${account_password_field}:$(printf '%q' "$account_password_value")"
+      locale_update="${locale_field}:$(printf '%q' "$locale_value")"
+      config_checkbox_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_config_txt_label "$config_scope") (recommended):CHK" "$(wor_yad_bool "$APPLY_CUSTOM_CONFIG_TXT")")
-      config_button_field=$((${#fields[@]} + 1))
+      config_button_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=<b>View / Edit config.txt</b>:BTN" "$config_button_value")
       changed_action="case \"\$1\" in
-        ${account_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' ${account_username_update} ${account_password_update}; else printf \"${account_username_field}:@disabled@\\n${account_password_field}:@disabled@\\n\"; fi;;
-        ${locale_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' ${locale_update}; else printf \"${locale_field}:@disabled@\\n\"; fi;;
-        ${config_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '${config_button_field}:%s\\n' $(printf '%q' \"$config_editor_action\"); else printf '${config_button_field}:@disabled@\\n'; fi;;
+        ${account_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' \"${account_username_update}\" \"${account_password_update}\"; else printf \"${account_username_field}:@disabled@\\n${account_password_field}:@disabled@\\n\"; fi;;
+        ${locale_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' \"${locale_update}\"; else printf \"${locale_field}:@disabled@\\n\"; fi;;
+        ${config_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' \"${config_button_field}:${config_editor_action}\"; else printf '${config_button_field}:@disabled@\\n'; fi;;
       esac"
 
       output="$(yad "${yadflags[@]}" --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 640)" --height="$(wor_yad_height 700)" --image-on-top \
@@ -2834,9 +2848,10 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       rm -f "$config_edit_file"
 
       if [ "$button" == 0 ];then #everything in this if statement is skipped if Cancel is clicked
-        if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ "$DL_DIR" != "$(echo "$output" | sed -n 7p)" ];then
+        yad_field_value() { printf '%s\n' "$output" | sed -n "${1}p"; }
+        if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ "$DL_DIR" != "$(yad_field_value "$working_dir_field")" ];then
           #DL_DIR was changed - only honor the value if it is allowed to be changed
-          DL_DIR="$(echo "$output" | sed -n 7p)"
+          DL_DIR="$(yad_field_value "$working_dir_field")"
           echo "In the Advanced Options window, user changed DL_DIR to $DL_DIR"
 
           #explain to user why the Advanced Options window was refreshed when they clicked OK
@@ -2847,45 +2862,45 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         else #if DL_DIR was not changed, then review the subsequent check-box values
           #peinstaller
           #DRY_RUN
-          if [ "$(echo "$output" | sed -n 9p)" == TRUE ] && [ "$DRY_RUN" == 0 ];then
+          if [ "$(yad_field_value "$dryrun_field")" == TRUE ] && [ "$DRY_RUN" == 0 ];then
             echo "User checked the box to set DRY_RUN=1"
             DRY_RUN=1
-          elif [ "$(echo "$output" | sed -n 9p)" == FALSE ] && [ "$DRY_RUN" == 1 ];then
+          elif [ "$(yad_field_value "$dryrun_field")" == FALSE ] && [ "$DRY_RUN" == 1 ];then
             echo "User checked the box to set DRY_RUN=0"
             DRY_RUN=0
           fi
           #customization toggles
-          [ "$(echo "$output" | sed -n 1p)" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
+          [ "$(yad_field_value "$oobe_field")" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
           #keep the existing preference when the toggle wasn't applicable, so switching back to a Pi 4 doesn't lose it
           if [ "$pi4_applicable" == 1 ];then
-            [ "$(echo "$output" | sed -n 2p)" == TRUE ] && PI4_AUTO_DISABLE_3GB=1 || PI4_AUTO_DISABLE_3GB=0
+            [ "$(yad_field_value "$pi4_field")" == TRUE ] && PI4_AUTO_DISABLE_3GB=1 || PI4_AUTO_DISABLE_3GB=0
           fi
-          [ "$(echo "$output" | sed -n 3p)" == TRUE ] && UEFI_USE_LATEST=1 || UEFI_USE_LATEST=0
-          [ "$(echo "$output" | sed -n 4p)" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
-          [ "$(echo "$output" | sed -n 5p)" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
-          [ "$(echo "$output" | sed -n 18p)" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
-          case "$(echo "$output" | sed -n 8p)" in
+          [ "$(yad_field_value "$uefi_field")" == TRUE ] && UEFI_USE_LATEST=1 || UEFI_USE_LATEST=0
+          [ "$(yad_field_value "$drivers_field")" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
+          [ "$(yad_field_value "$verify_field")" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
+          [ "$(yad_field_value "$config_checkbox_field")" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
+          case "$(yad_field_value "$cache_field")" in
             'Re-download everything'*) USE_CACHE=0 ;;
             'Trust the cache'*) USE_CACHE=2 ;;
             'Reuse cached files'*) USE_CACHE=1 ;;
           esac
-          [ "$(echo "$output" | sed -n 13p)" == TRUE ] && WINDOWS_ACCOUNT_SETUP=1 || WINDOWS_ACCOUNT_SETUP=0
-          WINDOWS_ACCOUNT_USERNAME="$(echo "$output" | sed -n 14p)"
-          WINDOWS_ACCOUNT_PASSWORD="$(echo "$output" | sed -n 15p)"
-          [ "$(echo "$output" | sed -n 16p)" == TRUE ] && WINDOWS_LOCALE_SETUP=1 || WINDOWS_LOCALE_SETUP=0
-          WINDOWS_LOCALE="$(echo "$output" | sed -n 17p | awk -F': ' '{print $1}')"
-          sel_lang="$(echo "$output" | sed -n 9p)"
+          [ "$(yad_field_value "$account_checkbox_field")" == TRUE ] && WINDOWS_ACCOUNT_SETUP=1 || WINDOWS_ACCOUNT_SETUP=0
+          WINDOWS_ACCOUNT_USERNAME="$(yad_field_value "$account_username_field")"
+          WINDOWS_ACCOUNT_PASSWORD="$(yad_field_value "$account_password_field")"
+          [ "$(yad_field_value "$locale_checkbox_field")" == TRUE ] && WINDOWS_LOCALE_SETUP=1 || WINDOWS_LOCALE_SETUP=0
+          WINDOWS_LOCALE="$(yad_field_value "$locale_field" | awk -F': ' '{print $1}')"
+          sel_lang="$(yad_field_value "$language_field")"
           sel_code="${sel_lang%%:*}"
           if is_known_win_lang "$sel_code" ;then
             WIN_LANG="$sel_code"
           fi
           if [ -n "$sound_items" ];then
-            [ "$(echo "$output" | sed -n 10p)" == TRUE ] && PLAY_SOUND=1 || PLAY_SOUND=0
+            [ "$(yad_field_value "$play_sound_field")" == TRUE ] && PLAY_SOUND=1 || PLAY_SOUND=0
             #the combo shows labels, so map the chosen one back to the value the player needs
-            sel_sound_label="$(echo "$output" | sed -n 11p)"
+            sel_sound_label="$(yad_field_value "$completion_sound_field")"
             sel_sound="$(wor_sound_options | awk -F'\t' -v l="$sel_sound_label" '$2 == l {print $1; exit}')"
             [ -n "$sel_sound" ] && COMPLETION_SOUND="$sel_sound"
-            [ "$(echo "$output" | sed -n 12p)" == TRUE ] && SHOW_NOTIFICATION=1 || SHOW_NOTIFICATION=0
+            [ "$(yad_field_value "$notification_field")" == TRUE ] && SHOW_NOTIFICATION=1 || SHOW_NOTIFICATION=0
           fi
           #end of parsing check-box values for advanced options window
 
