@@ -2175,10 +2175,12 @@ announcement_image="$(wor_yad_image_for_screen "$WOR_ASSETS_DIR/partnership.png"
 
 #display partnership announcement
 #match the macOS announcement composition: the full banner sits above readable centered copy rather
-#than consuming almost the whole width and squeezing the text into a one-word column beside it
-yad "${yadflags[@]}" --width="$(wor_yad_width 840)" --height="$(wor_yad_height 720)" --center --image-on-top --text-align=center \
+#than consuming almost the whole width and squeezing the text into a one-word column beside it.
+#--image must precede --form (as it does for the overview.png dialog below) or yad packs the image
+#beside the field column instead of above it, regardless of --image-on-top.
+yad "${yadflags[@]}" --width="$(wor_yad_width 840)" --height="$(wor_yad_height 720)" --center \
+  --image="$announcement_image" --image-on-top --text-align=center \
   --form --align=center --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT" --timeout-indicator=bottom \
-  --image="$announcement_image" \
   --field=$'<a href="https://blackoutsecure.app/">Blackout Secure</a> is proud to partner with <a href="https://github.com/Botspot">Botspot</a> and the <a href="https://worproject.com/">Windows on R</a> community, carrying WoR-Flasher forward while preserving Botspot\'s original authorship and project direction.\n\nReport issues, share feedback, or contribute at <a href="https://github.com/Botspot/wor-flasher">Botspot/wor-flasher</a>.\n\nSupport continued development by <a href="https://github.com/sponsors/Botspot">sponsoring Botspot</a> or <a href="https://github.com/sponsors/blackoutsecure?frequency=one-time&amp;amount=8">buying Blackout Secure a coffee</a> on GitHub.':LBL '' \
   --button='<b>Proceed with WoR-Flasher</b>':0 >/dev/null || exit 0
 

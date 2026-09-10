@@ -318,7 +318,8 @@ static_checks() {
     && grep -qF '$.NSForegroundColorAttributeName, $.NSColor.linkColor, range' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Blackout Secure is proud to partner with Botspot' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "printf -v announcement_text '%s\\n\\n%s\\n\\n%s\\n'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'yad "${yadflags[@]}" --width="$(wor_yad_width 840)" --height="$(wor_yad_height 720)" --center --image-on-top --text-align=center' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'yad "${yadflags[@]}" --width="$(wor_yad_width 840)" --height="$(wor_yad_height 720)" --center' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--image="$announcement_image" --image-on-top --text-align=center' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--form --align=center --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'announcement_image="$(wor_yad_image_for_screen' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- "--field=\$'<a href=\"https://blackoutsecure.app/\">Blackout Secure</a>" "$REPO_DIR/install-wor-gui.sh" \
