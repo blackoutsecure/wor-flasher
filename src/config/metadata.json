@@ -28,6 +28,8 @@
   "systemDefaults": {
     "peInstallerUrl": "https://github.com/worproject/dldserv-mirror/releases/download/13%2F02%2F2024/WoR-PE_Package_1.1.0.zip",
     "peInstallerSha256": "A039E28FE7E39147899B0634C15E336C3B26A6F76201092EBB9732474CD43D0A",
+    "uefiShellPackageUrl": "https://github.com/tianocore/edk2/releases/download/edk2-stable202002/ShellBinPkg.zip",
+    "uefiShellPackageSha256": "d6876ef9b9a48ca612149b888d4f4e923d1b8ccf495b8f6f6c3f83defb40b56a",
     "uefiVerPi3": "v1.39",
     "uefiVerPi4": "v1.50",
     "uefiVerPi5": "v0.3",

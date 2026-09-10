@@ -69,6 +69,10 @@
           "type": "boolean",
           "description": "Whether to disable 3GB RAM limit on Pi 4 after setup"
         },
+        "pi4UefiShellUnlock": {
+          "type": "boolean",
+          "description": "Whether to use a one-time UEFI Shell handoff to persistently disable the Pi 4 RAM limit"
+        },
         "uefiUseLatest": {
           "type": "boolean",
           "description": "Whether to query GitHub for latest UEFI firmware instead of pinned version"

@@ -54,7 +54,7 @@ if ((& bcdedit /enum '{current}') -match 'truncatememory') {
     & bcdedit /deletevalue '{current}' truncatememory | Out-Null
 }
 
-Set-Content $log 'Pi 4 RAM limit disabled.'
+Set-Content $log 'Pi 4 RAM limit disabled for this boot. Note: Raspberry Pi UEFI stores variables in RPI_EFI.fd; changes made from Windows may not persist after reboot. If the limit returns, disable RamLimitTo3GB in UEFI Device Manager or pre-edit RPI_EFI.fd.'
 } catch {
     Set-Content $log ('Pi 4 RAM unlock failed: ' + $_.Exception.Message)
 }

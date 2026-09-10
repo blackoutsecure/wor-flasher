@@ -1094,10 +1094,29 @@ configure_pe_prefinalize() { #Stages the answer file and WoR-PE's prefinalize ho
   if [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ];then
     read_config_template pi4-ram-unlock.ps1 > "$scripts_dir/Pi4Disable3GB.ps1" || return 1
   fi
+  if [ "$RPI_MODEL" == 4 ] && [ "$PI4_UEFI_SHELL_UNLOCK" == 1 ];then
+    prepare_uefi_shell || return 1
+    cp "$PWD/uefi-shell/Shell.efi" "$scripts_dir/Shell.efi" || return 1
+  fi
   #batch files are parsed by cmd.exe, which needs CRLF line endings
   read_config_template prefinalize.cmd | sed 's/$/\r/' > "$scripts_dir/prefinalize.cmd" || return 1
   remark_pe_cache
   return 0
+}
+
+prepare_uefi_shell() { #Downloads and verifies the ARM64 UEFI Shell used by the one-time Pi 4 handoff.
+  local package="$PWD/uefi-shell-package.zip" extracted="$PWD/uefi-shell" temporary expected
+  expected="$WOR_DEFAULT_UEFI_SHELL_PACKAGE_SHA256"
+  mkdir -p "$extracted" || return 1
+  if [ -s "$extracted/Shell.efi" ] && [ "$(sha256_file "$extracted/Shell.efi")" == "$(cat "$extracted/Shell.efi.sha256" 2>/dev/null)" ];then
+    return 0
+  fi
+  temporary="$(mktemp)" || return 1
+  wget -qO "$temporary" "$WOR_DEFAULT_UEFI_SHELL_PACKAGE_URL" || { rm -f "$temporary"; return 1; }
+  [ "$(sha256_file "$temporary")" == "$expected" ] || { rm -f "$temporary"; return 1; }
+  unzip -p "$temporary" 'ShellBinPkg/UefiShell/AArch64/Shell.efi' > "$extracted/Shell.efi" || { rm -f "$temporary"; return 1; }
+  rm -f "$temporary"
+  sha256_file "$extracted/Shell.efi" > "$extracted/Shell.efi.sha256"
 }
 
 sha256_file() { #Input: file. Output: SHA256 hash
@@ -2146,7 +2165,7 @@ settings_summary_markup() { #Output: one pango-markup line per setting, for a ya
 #the macOS and Linux front-ends can never drift into exporting different subsets of the same run.
 WOR_INSTALLER_SETTINGS=(DIRECTORY DL_DIR RPI_MODEL BID WIN_LANG DEVICE CAN_INSTALL_ON_SAME_DRIVE SOURCE_FILE
   CONFIG_TXT APPLY_CUSTOM_CONFIG_TXT PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS WINDOWS_ACCOUNT_SETUP WINDOWS_ACCOUNT_USERNAME WINDOWS_ACCOUNT_PASSWORD WINDOWS_LOCALE_SETUP WINDOWS_LOCALE UEFI_USE_LATEST DRIVERS_USE_LATEST
-  SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE DRY_RUN WOR_APP_TITLE WOR_RUN_ID)
+  PI4_UEFI_SHELL_UNLOCK SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE DRY_RUN WOR_APP_TITLE WOR_RUN_ID)
 
 export_installer_settings() { #Exports every collected setting, so the installer subprocess runs exactly what was confirmed.
   export "${WOR_INSTALLER_SETTINGS[@]}"
@@ -2306,6 +2325,7 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   set_if_unset "CONFIG_TXT" '.customization.configTxt // .configTxt // .CONFIG_TXT // empty'
   set_bool_if_unset "OOBE_NETWORK_BYPASS" '.customization.oobeNetworkBypass // .oobeNetworkBypass // .OOBE_NETWORK_BYPASS // empty'
   set_bool_if_unset "PI4_AUTO_DISABLE_3GB" '.customization.pi4AutoDisable3Gb // .pi4AutoDisable3Gb // .PI4_AUTO_DISABLE_3GB // empty'
+  set_bool_if_unset "PI4_UEFI_SHELL_UNLOCK" '.customization.pi4UefiShellUnlock // .pi4UefiShellUnlock // .PI4_UEFI_SHELL_UNLOCK // empty'
   set_bool_if_unset "UEFI_USE_LATEST" '.customization.uefiUseLatest // .uefiUseLatest // .UEFI_USE_LATEST // empty'
   set_bool_if_unset "DRIVERS_USE_LATEST" '.customization.driversUseLatest // .driversUseLatest // .DRIVERS_USE_LATEST // empty'
   set_bool_if_unset "HIDE_EMPTY_DRIVES" '.customization.hideEmptyDrives // .hideEmptyDrives // .HIDE_EMPTY_DRIVES // empty'
@@ -2370,6 +2390,14 @@ load_config_json
 case "$PI4_AUTO_DISABLE_3GB" in
   0 | 1) ;;
   *) error "Unknown value for PI4_AUTO_DISABLE_3GB. Expected '0' or '1'.";;
+esac
+
+#Set to 1 to perform a one-time UEFI Shell handoff after Windows Setup, persistently disabling the Pi 4 RAM limit.
+#Off by default because it temporarily replaces the EFI fallback loader and requires a tested ARM64 Shell binary.
+[ -z "$PI4_UEFI_SHELL_UNLOCK" ] && PI4_UEFI_SHELL_UNLOCK=0
+case "$PI4_UEFI_SHELL_UNLOCK" in
+  0 | 1) ;;
+  *) error "Unknown value for PI4_UEFI_SHELL_UNLOCK. Expected '0' or '1'.";;
 esac
 
 #Set to 1 to hide the Windows OOBE network and online-account screens, or 0 to require the standard flow. Adjustable in the GUI's Advanced Options window.

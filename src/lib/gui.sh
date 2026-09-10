@@ -236,7 +236,7 @@ wor_init_yad_flags() { #Sets the shared yadflags array. Assigns rather than echo
 wor_yad_label() { #Input: label, caution flag. Output: label with the shared not-recommended marker.
 	#yad cannot colour a checkbox label, so the macOS red badge becomes plain text here
 	if [ "$2" == 1 ];then
-		printf '%s - not recommended' "$1"
+		printf '%s  <span foreground="red">Not recommended</span>' "$1"
 	else
 		printf '%s' "$1"
 	fi

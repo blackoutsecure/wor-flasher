@@ -272,36 +272,37 @@ Windows packaging is intentionally only a placeholder today. A Windows UI should
 
 Every prompt has a matching environment variable.
 
-| Variable                    | Default                                    | Function                                                                                    |
-| --------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `DL_DIR`                    | `~/wor-flasher-files`                      | Where components are downloaded and Windows images are extracted                            |
-| `RPI_MODEL`                 | _ask_                                      | Target Raspberry Pi: `3`, `4` or `5`                                                        |
-| `BID`                       | _ask_                                      | Exact Windows build ID, e.g. `22631.2861`                                                   |
-| `WIN_LANG`                  | _ask_                                      | Windows language code, e.g. `en-us`                                                         |
-| `DEVICE`                    | _ask_                                      | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                               |
-| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                                      | `1` to install Windows onto the target itself, `0` to make recovery media for another drive |
-| `SOURCE_FILE`               | unset                                      | Path to an existing Windows ARM64 ISO, instead of downloading                               |
-| `CONFIG_TXT`                | shipped template                           | Body of `config.txt` written to the boot partition                                          |
-| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                                        | `0` leaves the UEFI firmware package's own `config.txt` in place                            |
-| `OOBE_NETWORK_BYPASS`       | `1`                                        | `0` requires the standard network-connected Windows setup flow                              |
-| `WINDOWS_ACCOUNT_SETUP`     | `0`                                        | `1` creates the optional local Windows administrator configured in Advanced Options         |
-| `WINDOWS_ACCOUNT_USERNAME`  | unset                                      | Username for the optional local Windows account                                             |
-| `WINDOWS_ACCOUNT_PASSWORD`  | unset                                      | Password for the optional account; written to unattended setup only when enabled            |
-| `WINDOWS_LOCALE_SETUP`      | `0`                                        | `1` applies `WINDOWS_LOCALE` to Windows keyboard and regional settings                      |
-| `WINDOWS_LOCALE`            | `en-US`                                    | Locale such as `en-US` or `en-GB` used when locale setup is enabled                         |
-| `PI4_AUTO_DISABLE_3GB`      | `1`                                        | Pi 4 only. `0` keeps the 3 GB RAM limit                                                     |
-| `UEFI_USE_LATEST`           | `0`                                        | `1` queries GitHub for the newest UEFI firmware instead of the pinned version               |
-| `DRIVERS_USE_LATEST`        | `1`                                        | `0` uses the pinned driver package version                                                  |
-| `SKIP_IMAGE_VERIFICATION`   | `0`                                        | `1` skips post-flash verification. Not recommended                                          |
-| `CHECK_FOR_UPDATES`         | `1`                                        | `0` disables the read-only release check                                                    |
-| `NO_UPDATE`                 | `0`                                        | Legacy inverse of `CHECK_FOR_UPDATES`; `1` disables update checks                           |
-| `HIDE_EMPTY_DRIVES`         | `1`                                        | `0` shows empty card-reader slots as selectable drives in WoR-PE                            |
-| `USE_CACHE`                 | `1`                                        | See [Download cache](#download-cache)                                                       |
-| `DRY_RUN`                   | `0`                                        | `1` runs every step except writing to the drive                                             |
-| `WOR_LOG_FILE`              | `$DL_DIR/logs/wor-flasher-<timestamp>.log` | Where a failed run's primary log is kept; `last-run.log` is refreshed for support           |
-| `VERIFY_TLS`                | `1`                                        | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                |
-| `RUN_MODE`                  | `cli`                                      | `gui` makes the engine show graphical error dialogs                                         |
-| `SKIP_PACKAGE_INSTALL`      | unset                                      | `1` assumes dependencies are already present                                                |
+| Variable                    | Default                                    | Function                                                                                                                |
+| --------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `DL_DIR`                    | `~/wor-flasher-files`                      | Where components are downloaded and Windows images are extracted                                                        |
+| `RPI_MODEL`                 | _ask_                                      | Target Raspberry Pi: `3`, `4` or `5`                                                                                    |
+| `BID`                       | _ask_                                      | Exact Windows build ID, e.g. `22631.2861`                                                                               |
+| `WIN_LANG`                  | _ask_                                      | Windows language code, e.g. `en-us`                                                                                     |
+| `DEVICE`                    | _ask_                                      | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                                                           |
+| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                                      | `1` to install Windows onto the target itself, `0` to make recovery media for another drive                             |
+| `SOURCE_FILE`               | unset                                      | Path to an existing Windows ARM64 ISO, instead of downloading                                                           |
+| `CONFIG_TXT`                | shipped template                           | Body of `config.txt` written to the boot partition                                                                      |
+| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                                        | `0` leaves the UEFI firmware package's own `config.txt` in place                                                        |
+| `OOBE_NETWORK_BYPASS`       | `1`                                        | `0` requires the standard network-connected Windows setup flow                                                          |
+| `WINDOWS_ACCOUNT_SETUP`     | `0`                                        | `1` creates the optional local Windows administrator configured in Advanced Options                                     |
+| `WINDOWS_ACCOUNT_USERNAME`  | unset                                      | Username for the optional local Windows account                                                                         |
+| `WINDOWS_ACCOUNT_PASSWORD`  | unset                                      | Password for the optional account; written to unattended setup only when enabled                                        |
+| `WINDOWS_LOCALE_SETUP`      | `0`                                        | `1` applies `WINDOWS_LOCALE` to Windows keyboard and regional settings                                                  |
+| `WINDOWS_LOCALE`            | `en-US`                                    | Locale such as `en-US` or `en-GB` used when locale setup is enabled                                                     |
+| `PI4_AUTO_DISABLE_3GB`      | `1`                                        | Pi 4 only. `0` keeps the 3 GB RAM limit                                                                                 |
+| `PI4_UEFI_SHELL_UNLOCK`     | `0`                                        | Pi 4 only. `1` stages a one-time verified UEFI Shell handoff and restores the EFI loader after setting the RAM variable |
+| `UEFI_USE_LATEST`           | `0`                                        | `1` queries GitHub for the newest UEFI firmware instead of the pinned version                                           |
+| `DRIVERS_USE_LATEST`        | `1`                                        | `0` uses the pinned driver package version                                                                              |
+| `SKIP_IMAGE_VERIFICATION`   | `0`                                        | `1` skips post-flash verification. Not recommended                                                                      |
+| `CHECK_FOR_UPDATES`         | `1`                                        | `0` disables the read-only release check                                                                                |
+| `NO_UPDATE`                 | `0`                                        | Legacy inverse of `CHECK_FOR_UPDATES`; `1` disables update checks                                                       |
+| `HIDE_EMPTY_DRIVES`         | `1`                                        | `0` shows empty card-reader slots as selectable drives in WoR-PE                                                        |
+| `USE_CACHE`                 | `1`                                        | See [Download cache](#download-cache)                                                                                   |
+| `DRY_RUN`                   | `0`                                        | `1` runs every step except writing to the drive                                                                         |
+| `WOR_LOG_FILE`              | `$DL_DIR/logs/wor-flasher-<timestamp>.log` | Where a failed run's primary log is kept; `last-run.log` is refreshed for support                                       |
+| `VERIFY_TLS`                | `1`                                        | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                                            |
+| `RUN_MODE`                  | `cli`                                      | `gui` makes the engine show graphical error dialogs                                                                     |
+| `SKIP_PACKAGE_INSTALL`      | unset                                      | `1` assumes dependencies are already present                                                                            |
 
 Example:
 
@@ -329,7 +330,7 @@ On Raspberry Pi 4 only, the 3 GB RAM limit is disabled automatically after WoR-P
 PI4_AUTO_DISABLE_3GB=0 ./install-wor.sh
 ```
 
-Windows Setup changes the pftf `RamLimitTo3GB` firmware variable during the `specialize` pass, after the injected drivers are installed, and reboots once before OOBE so the new memory map takes effect. It also clears any BCD-level `truncatememory` cap, a separate Windows Boot Manager memory limit noted in worproject's [imager customization guide](https://worproject.com/guides/wor-imager-customization#configuration-file).
+Windows Setup attempts to change the pftf `RamLimitTo3GB` firmware variable during the `specialize` pass, after the injected drivers are installed, and reboots once before OOBE. It also clears any BCD-level `truncatememory` cap, a separate Windows Boot Manager memory limit noted in worproject's [imager customization guide](https://worproject.com/guides/wor-imager-customization#configuration-file). The Windows log can report that the runtime variable was changed successfully, but Raspberry Pi UEFI emulates NVRAM in `RPI_EFI.fd` and changes made from an operating system may not persist after reboot. If the limit returns, disable `RamLimitTo3GB` from UEFI Device Manager -> Raspberry Pi Configuration -> Advanced Configuration, or pre-edit the UEFI variable in `RPI_EFI.fd` before flashing.
 
 The `specialize` answer-file command invokes the staged `Pi4Disable3GB.ps1` file instead of embedding the PowerShell program. Windows limits `RunSynchronousCommand/Path` to 259 characters and rejects the entire answer file when that limit is exceeded. The script logs its result to `%WINDIR%\Temp\Pi4Disable3GB.log` and always returns success so a firmware-setting failure cannot abort Windows Setup.
 

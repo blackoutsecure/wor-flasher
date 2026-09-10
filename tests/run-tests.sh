@@ -384,9 +384,12 @@ static_checks() {
     && pass "the shared macos_choose dialog returns its result on stdout and honours the countdown" \
     || fail "the macos_choose dialog contract, its countdown, or its stdout result protocol is broken"
 
-  grep -qF 'Choose Windows version' "$REPO_DIR/install-wor-gui.sh" \
+  grep -qF 'Choose Windows and Raspberry Pi target' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "'Windows 11'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'Choose Raspberry Pi model' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Raspberry Pi model:' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'macos_choose_target()' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Choose Windows and Raspberry Pi target' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "selectedValue = windowsPopup.titleOfSelectedItem + '\\t' + piPopup.titleOfSelectedItem" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'windowWillClose:' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "NSButton.buttonWithTitleTargetAction(cancelLabel, controller, 'cancelClicked:')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows language' "$REPO_DIR/install-wor-gui.sh" \
@@ -571,6 +574,11 @@ disk5 Second drive"
     && [ -f "$REPO_DIR/config-templates/pi5.config.txt" ] \
     && [ -f "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" ] \
     && [ -f "$REPO_DIR/config-templates/pi4-ram-unlock-specialize.xml" ] \
+    && grep -qF 'PI4_UEFI_SHELL_UNLOCK' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'ShellBinPkg/UefiShell/AArch64/Shell.efi' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'BOOTAA64.WOR' "$REPO_DIR/config-templates/prefinalize.cmd" \
+    && grep -qF 'setvar RamLimitTo3GB' "$REPO_DIR/config-templates/prefinalize.cmd" \
+    && grep -qF 'rm \EFI\BOOT\BOOTAA64.EFI' "$REPO_DIR/config-templates/prefinalize.cmd" \
     && [ -f "$REPO_DIR/config-templates/oobe-network-bypass.xml" ] \
     && [ -f "$REPO_DIR/config-templates/prefinalize.cmd" ] \
     && [ -f "$REPO_DIR/config-templates/config.json" ] \
@@ -632,8 +640,9 @@ disk5 Second drive"
     || fail "Advanced Options window is missing or incomplete"
 
   grep -qF 'linux_choose_one() {' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "WINDOWS_VER=\"\$(linux_choose_one \$'Windows 11\\nWindows 10\\nMore options'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "rpi_choice=\"\$(linux_choose_one \$'Raspberry Pi 5\\nRaspberry Pi 4 / Pi 400" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--field='Windows version:CB' 'Windows 11!Windows 10!More options'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--field='Raspberry Pi model:CB' 'Raspberry Pi 5!Raspberry Pi 4 / Pi 400!Raspberry Pi 3 / Pi 2 v1.2'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "RPI_MODEL=''" "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF -- '--form --columns=2' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- "--button='<b>View / Edit config.txt...</b>':3" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--field="<b>View / Edit config.txt</b>' "$REPO_DIR/install-wor-gui.sh" \
@@ -684,12 +693,12 @@ disk5 Second drive"
 
   #a modal session never services default-mode run loop sources, so the Dock's quit Apple Event
   #is only delivered because each window registers a handler and pumps default mode from a timer
-  [ "$(grep -cF "'handleQuitEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 5 ] \
-    && [ "$(grep -cF "'pumpEvents:': {" "$REPO_DIR/install-wor-gui.sh")" == 5 ] \
-    && [ "$(grep -cF 'worInstallWindowHandlers(controller)' "$REPO_DIR/install-wor-gui.sh")" == 5 ] \
+  [ "$(grep -cF "'handleQuitEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
+    && [ "$(grep -cF "'pumpEvents:': {" "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
+    && [ "$(grep -cF 'worInstallWindowHandlers(controller)' "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
     && grep -qF '0x61657674, 0x71756974' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'addTimerForMode(pumpTimer' "$REPO_DIR/src/lib/gui.sh" \
-    && [ "$(grep -cF 'app.runModalForWindow(window)' "$REPO_DIR/install-wor-gui.sh")" == 5 ] \
+    && [ "$(grep -cF 'app.runModalForWindow(window)' "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
     && pass "every macOS window responds to the Dock's Quit menu item" \
     || fail "a macOS window cannot receive the Dock's quit Apple Event"
 
@@ -814,7 +823,7 @@ disk5 Second drive"
   [ -n "$gui_auth_wait_line" ] && [ -n "$macos_progress_line" ] \
     && [ -n "$preauth_line" ] && [ -n "$setup_line" ] && [ "$preauth_line" -lt "$setup_line" ] \
     && grep -aqF 'export WOR_GUI_AUTH_MARKER="$auth_marker"' "$REPO_DIR/install-wor-gui.sh" \
-    && ! grep -aqF 'GUI_PROGRESS_EARLY=1 gui_start_installer' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -aqF 'export GUI_PROGRESS_EARLY=1' "$REPO_DIR/install-wor-gui.sh" \
     && grep -aqF 'gui_preauthenticate() {' "$REPO_DIR/install-wor.sh" \
     && grep -aqF 'deferred until Step 5' "$REPO_DIR/install-wor.sh" \
     && ! grep -aqF 'WOR_GUI_SUDO_PREAUTH_DONE=1' "$REPO_DIR/install-wor.sh" \
@@ -1220,7 +1229,7 @@ SH
     || fail "a minimised window cannot be restored from the Dock"
 
   #every screen must build its window through the one shared helper, or their title bars drift apart again
-  [ "$gui_windows" == 5 ] \
+  [ "$gui_windows" == 6 ] \
     && grep -qF 'window = worMakeWindow({' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'NSWindow.alloc.initWithContentRectStyleMaskBackingDefer' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'NSWindow.alloc.initWithContentRectStyleMaskBackingDefer' "$REPO_DIR/install-wor.sh" \
@@ -1869,6 +1878,7 @@ rc=1" ] \
     && [ "${#ram_command}" -le 259 ] \
     && grep -qF '} catch {' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
     && grep -qF "Set-Content \$log ('Pi 4 RAM unlock failed: ' + \$_.Exception.Message)" "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
+    && grep -qF 'runtime variable was changed successfully' "$REPO_DIR/README.md" \
     && grep -qF 'exit 0' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
     && ! grep -qF 'exit 1' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
     && pass "the Pi 4 RAM unlock reaches the installed OS and cannot fail Windows setup" \

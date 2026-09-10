@@ -59,6 +59,8 @@
       "required": [
         "peInstallerUrl",
         "peInstallerSha256",
+        "uefiShellPackageUrl",
+        "uefiShellPackageSha256",
         "uefiVerPi3",
         "uefiVerPi4",
         "uefiVerPi5",
@@ -78,6 +80,11 @@
       "properties": {
         "peInstallerUrl": { "type": "string", "pattern": "^https://" },
         "peInstallerSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "uefiShellPackageUrl": { "type": "string", "pattern": "^https://" },
+        "uefiShellPackageSha256": {
           "type": "string",
           "pattern": "^[A-Fa-f0-9]{64}$"
         },

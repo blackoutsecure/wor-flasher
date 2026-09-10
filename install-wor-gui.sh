@@ -449,6 +449,7 @@ if (isMessageMode) {
     const imageView = $.NSImageView.alloc.initWithFrame(imageFrame)
     imageView.image = $.NSImage.alloc.initWithContentsOfFile($(imagePath))
     imageView.imageScaling = $.NSImageScaleProportionallyUpOrDown
+    imageView.imageAlignment = $.NSImageAlignCenter
     imageView.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
     content.addSubview(imageView)
   } else if (isPartnershipAnnouncement) {
@@ -461,7 +462,7 @@ if (isMessageMode) {
     attributedPrompt.mutableString.appendString($(promptText))
     const fullPromptRange = $.NSMakeRange(0, promptText.length)
     const paragraphStyle = $.NSMutableParagraphStyle.alloc.init
-    paragraphStyle.alignment = $.NSTextAlignmentCenter
+    paragraphStyle.alignment = $.NSTextAlignmentRight
     paragraphStyle.lineBreakMode = $.NSLineBreakByWordWrapping
     paragraphStyle.lineSpacing = 1
     paragraphStyle.paragraphSpacing = 4
@@ -1433,26 +1434,155 @@ JXA
   CONFIG_TXT="$(printf '%s\n' "$result" | sed -n '/^---CONFIG_TXT---$/,$p' | tail -n +2)"
 }
 
-macos_start_cli() {
-  local completion_jxa confirm_summary confirmation default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice password_retry_reason pi_choices progress_file progress_jxa resume_at_flash saved_log step windows_choices
+macos_choose_target() { #Output: selected Windows version and Raspberry Pi model separated by a tab.
+  local target_jxa result
+  target_jxa="$(wor_jxa_window_lib; cat <<'JXA'
+ObjC.import('AppKit')
+ObjC.import('Foundation')
+ObjC.import('stdlib')
 
-  windows_choices=$'Windows 11\nWindows 10'
-  pi_choices=$'5\n4\n3'
-  step=windows
+const args = $.NSProcessInfo.processInfo.arguments
+const iconPath = ObjC.unwrap(args.objectAtIndex(4))
+const windowTitle = ObjC.unwrap(args.objectAtIndex(5))
+const appTitle = ObjC.unwrap(args.objectAtIndex(6))
+const app = $.NSApplication.sharedApplication
+const windows = ['Windows 11', 'Windows 10']
+const piModels = ['Raspberry Pi 5', 'Raspberry Pi 4 / Pi 400', 'Raspberry Pi 3 / Pi 2 v1.2']
+let window
+let selectedValue = null
+
+function writeResult(value) {
+  const data = $(value + '\n').dataUsingEncoding($.NSUTF8StringEncoding)
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData(data)
+}
+
+function cancelAndExit() {
+  writeResult('__WOR_CANCEL__')
+  $.exit(0)
+}
+
+const Controller = ObjC.registerSubclass({
+  name: 'WorTargetController',
+  superclass: 'NSObject',
+  methods: {
+    'nextClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        selectedValue = windowsPopup.titleOfSelectedItem + '\t' + piPopup.titleOfSelectedItem
+        app.stopModalWithCode($.NSOKButton)
+        window.orderOut(null)
+      }
+    },
+    'cancelClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        cancelAndExit()
+      }
+    },
+    'windowWillClose:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        cancelAndExit()
+      }
+    },
+    'handleQuitEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        cancelAndExit()
+      }
+    },
+    'pumpEvents:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.dateWithTimeIntervalSinceNow(0.01))
+      }
+    },
+    'handleReopenEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        if (window.isMiniaturized) window.deminiaturize(null)
+        window.makeKeyAndOrderFront(null)
+        app.activateIgnoringOtherApps(true)
+      }
+    }
+  }
+})
+
+const controller = $.WorTargetController.alloc.init
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+worInstallAppMenu(app, appTitle, windowTitle, iconPath)
+worSetAppIcon(app, iconPath)
+app.setDelegate(controller)
+const screenFrame = $.NSScreen.mainScreen.visibleFrame
+const width = Math.min(640, screenFrame.size.width - 40)
+const height = Math.min(250, screenFrame.size.height - 60)
+window = worMakeWindow({ width: width, height: height, title: windowTitle, delegate: controller })
+const content = window.contentView
+content.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
+
+const heading = $.NSTextField.labelWithString('Choose Windows and Raspberry Pi target')
+heading.font = $.NSFont.systemFontOfSizeWeight(18, $.NSFontWeightSemibold)
+heading.frame = $.NSMakeRect(24, height - 58, width - 48, 28)
+content.addSubview(heading)
+
+const windowsLabel = $.NSTextField.labelWithString('Windows version:')
+windowsLabel.frame = $.NSMakeRect(24, height - 112, 170, 24)
+content.addSubview(windowsLabel)
+const windowsPopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(190, height - 116, width - 214, 30))
+for (let i = 0; i < windows.length; i++) windowsPopup.addItemWithTitle($(windows[i]))
+content.addSubview(windowsPopup)
+
+const piLabel = $.NSTextField.labelWithString('Raspberry Pi model:')
+piLabel.frame = $.NSMakeRect(24, height - 158, 170, 24)
+content.addSubview(piLabel)
+const piPopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(190, height - 162, width - 214, 30))
+for (let i = 0; i < piModels.length; i++) piPopup.addItemWithTitle($(piModels[i]))
+content.addSubview(piPopup)
+
+const cancelButton = $.NSButton.buttonWithTitle('Cancel')
+cancelButton.bezelStyle = $.NSBezelStyleRounded
+cancelButton.frame = $.NSMakeRect(width - 220, 20, 92, 32)
+cancelButton.target = controller
+cancelButton.action = 'cancelClicked:'
+content.addSubview(cancelButton)
+const nextButton = $.NSButton.buttonWithTitle('Next')
+nextButton.bezelStyle = $.NSBezelStyleRounded
+nextButton.frame = $.NSMakeRect(width - 116, 20, 92, 32)
+nextButton.keyEquivalent = '\\r'
+nextButton.target = controller
+nextButton.action = 'nextClicked:'
+content.addSubview(nextButton)
+
+worInstallWindowHandlers(controller)
+window.makeKeyAndOrderFront(null)
+app.activateIgnoringOtherApps(true)
+app.runModalForWindow(window)
+
+if (selectedValue === null) cancelAndExit()
+writeResult(selectedValue)
+app.terminate(null)
+JXA
+)"
+  result="$(wor_osascript -l JavaScript - "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" "$WOR_APP_TITLE" <<<"$target_jxa")"
+  [ "$result" != __WOR_CANCEL__ ] || return 1
+  printf '%s\n' "$result"
+}
+
+macos_start_cli() {
+  local completion_jxa confirm_summary confirmation default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice password_retry_reason progress_file progress_jxa resume_at_flash saved_log step target_choice
+
+  step=target
   while true; do
     case "$step" in
-      windows)
-        WINDOWS_VER="$(macos_choose "$windows_choices" 'Choose Windows version' 'Windows 11')" || exit 0
-        step=pi
-        ;;
-      pi)
-        #cancelValue Back makes clicking Back succeed with a literal value instead of failing like
-        #Quit does, so a real Quit exits the wizard instead of just stepping back to the previous screen
-        RPI_MODEL="$(macos_choose "$pi_choices" 'Choose Raspberry Pi model' '5' Back '' '' '' '' '' '' Back)" || exit 0
-        if [ "$RPI_MODEL" == Back ];then
-          step=windows
-          continue
-        fi
+      target)
+        target_choice="$(macos_choose_target)" || exit 0
+        WINDOWS_VER="${target_choice%%$'\t'*}"
+        case "${target_choice#*$'\t'}" in
+          'Raspberry Pi 5') RPI_MODEL=5 ;;
+          'Raspberry Pi 4 / Pi 400') RPI_MODEL=4 ;;
+          'Raspberry Pi 3 / Pi 2 v1.2') RPI_MODEL=3 ;;
+          *) error "Unrecognized Raspberry Pi selection '${target_choice#*$'\t'}'" ;;
+        esac
         list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
         [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
         [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
@@ -2178,28 +2308,36 @@ announcement_image="$(wor_yad_image_for_screen "$WOR_ASSETS_DIR/partnership.png"
 #than consuming almost the whole width and squeezing the text into a one-word column beside it.
 #--image must precede --form (as it does for the overview.png dialog below) or yad packs the image
 #beside the field column instead of above it, regardless of --image-on-top.
+announcement_status=0
 yad "${yadflags[@]}" --width="$(wor_yad_width 840)" --height="$(wor_yad_height 720)" --center \
   --image="$announcement_image" --image-on-top --text-align=center \
   --form --align=center --buttons-layout=center --timeout="$WOR_ANNOUNCEMENT_TIMEOUT" --timeout-indicator=bottom \
   --field=$'<a href="https://blackoutsecure.app/">Blackout Secure</a> is proud to partner with <a href="https://github.com/Botspot">Botspot</a> and the <a href="https://worproject.com/">Windows on R</a> community, carrying WoR-Flasher forward while preserving Botspot\'s original authorship and project direction.\n\nReport issues, share feedback, or contribute at <a href="https://github.com/Botspot/wor-flasher">Botspot/wor-flasher</a>.\n\nSupport continued development by <a href="https://github.com/sponsors/Botspot">sponsoring Botspot</a> or <a href="https://github.com/sponsors/blackoutsecure?frequency=one-time&amp;amount=8">buying Blackout Secure a coffee</a> on GitHub.':LBL '' \
-  --button='<b>Proceed with WoR-Flasher</b>':0 >/dev/null || exit 0
+  --button='<b>Proceed with WoR-Flasher</b>':0 >/dev/null || announcement_status=$?
+#yad returns 70 when its timeout expires; that is the automatic Proceed action, not a quit.
+[ "$announcement_status" == 0 ] || [ "$announcement_status" == 70 ] || exit 0
 
 { #choose destination RPi model and windows build ID
-if [ -z "$RPI_MODEL" ] || [ -z "$BID" ];then
-  while true;do
-    WINDOWS_VER="$(linux_choose_one $'Windows 11\nWindows 10\nMore options' 'Choose Windows version' 'Windows 11')" || exit 0
-    rpi_choice="$(linux_choose_one $'Raspberry Pi 5\nRaspberry Pi 4 / Pi 400\nRaspberry Pi 3 / Pi 2 v1.2' 'Choose Raspberry Pi model' 'Raspberry Pi 5' Back)" || exit 0
-    [ "$rpi_choice" == Back ] && continue
-    case "$rpi_choice" in
-      'Raspberry Pi 5') RPI_MODEL=5 ;;
-      'Raspberry Pi 4 / Pi 400') RPI_MODEL=4 ;;
-      'Raspberry Pi 3 / Pi 2 v1.2') RPI_MODEL=3 ;;
-      *) continue ;;
-    esac
-    break
-  done
+RPI_MODEL=''
+BID=''
+target_choice="$(yad "${yadflags[@]}" --width="$(wor_yad_width 620)" --height="$(wor_yad_height 260)" \
+  --text='<big><b>Choose Windows and Raspberry Pi target</b></big>' \
+  --form --align=center --buttons-layout=center \
+  --field='Windows version:CB' 'Windows 11!Windows 10!More options' \
+  --field='Raspberry Pi model:CB' 'Raspberry Pi 5!Raspberry Pi 4 / Pi 400!Raspberry Pi 3 / Pi 2 v1.2' \
+  --button='<b>Cancel</b>':1 --button='<b>Next</b>':0)"
+button=$?
+[ "$button" == 0 ] || exit 0
+WINDOWS_VER="$(printf '%s\n' "$target_choice" | sed -n '1p')"
+rpi_choice="$(printf '%s\n' "$target_choice" | sed -n '2p')"
+case "$rpi_choice" in
+  'Raspberry Pi 5') RPI_MODEL=5 ;;
+  'Raspberry Pi 4 / Pi 400') RPI_MODEL=4 ;;
+  'Raspberry Pi 3 / Pi 2 v1.2') RPI_MODEL=3 ;;
+  *) error "Unrecognized Raspberry Pi selection '$rpi_choice'" ;;
+esac
 
-  case "$WINDOWS_VER" in
+case "$WINDOWS_VER" in
     'Windows 11' | 'Windows 10')
       loading_dialog "Finding best $WINDOWS_VER image version..." &
       loader_pid=$!
@@ -2342,7 +2480,6 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
       error "Unrecognized user-selected WINDOWS_VER '$WINDOWS_VER'"
       ;;
   esac
-fi
 echo "BID: $BID
 RPI_MODEL: $RPI_MODEL"
 }
@@ -2566,6 +2703,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
 
     while true;do #repeat the advanced options window until the DL_DIR is not changed, or until Cancel is clicked
       fields=()
+      fields+=("--field=<b>Downloads</b>:LBL" '')
       uefi_pinned="$(uefi_pinned_version)"
       #make entry to change DL_DIR
       if [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
@@ -2618,23 +2756,23 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         fields+=("--field=            <small><u>${DL_DIR}/winfiles_${BID}_${WIN_LANG}</u></small>":LBL '')
       fi
 
-      #make entry for dry run
-      fields+=("--field=$(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")":CHK "$(wor_yad_bool "$DRY_RUN")")
-
       #make entries for the customization toggles
       #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4; yad can't disable one field, so mark it and drop the value below
       [ "$RPI_MODEL" == 4 ] && pi4_applicable=1 || pi4_applicable=0
       #yad renders markup, so an inapplicable row is italicised rather than greyed out
       pi4_label="$(wor_pi4_label "$RPI_MODEL")"
       [ "$pi4_applicable" == 1 ] || pi4_label="<i>$pi4_label</i>"
+      fields+=("--field=<b>Windows setup</b>:LBL" '')
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label oobe "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution oobe)")":CHK "$(wor_yad_bool "$OOBE_NETWORK_BYPASS")")
       fields+=("--field=$pi4_label":CHK "$(wor_yad_bool "$([ "$pi4_applicable" == 1 ] && echo "$PI4_AUTO_DISABLE_3GB" || echo 0)")")
+      fields+=("--field=<b>Firmware and drivers</b>:LBL" '')
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label uefi "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution uefi)")":CHK "$(wor_yad_bool "$UEFI_USE_LATEST")")
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label drivers "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution drivers)")":CHK "$(wor_yad_bool "$DRIVERS_USE_LATEST")")
+      fields+=("--field=<b>Validation</b>:LBL" '')
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label verify "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution verify)")":CHK "$(wor_yad_bool "$SKIP_IMAGE_VERIFICATION")")
+      fields+=("--field=$(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL"):CHK" "$(wor_yad_bool "$DRY_RUN")")
       #in recovery mode this config.txt boots the installer media; WoR-PE writes the target drive's own copy
       config_scope="$(wor_config_scope "$CAN_INSTALL_ON_SAME_DRIVE")"
-      fields+=("--field=$(wor_config_txt_label "$config_scope") - recommended":CHK "$(wor_yad_bool "$APPLY_CUSTOM_CONFIG_TXT")")
       #USE_CACHE has three values, so it needs a combo rather than a check box; the selected item comes first
       case "$USE_CACHE" in
         0) cache_items='Re-download everything, ignoring the cache!Reuse cached files when they still match (recommended)!Trust the cache without checking it' ;;
@@ -2642,9 +2780,11 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         *) cache_items='Reuse cached files when they still match (recommended)!Re-download everything, ignoring the cache!Trust the cache without checking it' ;;
       esac
       fields+=("--field=Downloaded files":CB "$cache_items")
+      fields+=("--field=<b>Windows account</b>:LBL" '')
       fields+=("--field=Create an optional local Windows administrator account":CHK "$(wor_yad_bool "$WINDOWS_ACCOUNT_SETUP")")
       fields+=("--field=Windows username":TXT "$WINDOWS_ACCOUNT_USERNAME")
       fields+=("--field=Windows password":H "$WINDOWS_ACCOUNT_PASSWORD")
+      fields+=("--field=<b>Regional settings</b>:LBL" '')
       fields+=("--field=Configure Windows keyboard and regional settings":CHK "$(wor_yad_bool "$WINDOWS_LOCALE_SETUP")")
       locale_items=""
       curr_locale_item=""
@@ -2674,7 +2814,9 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       done < <(list_langs_preferred)
       [ -n "$curr_item" ] && lang_items="${curr_item}!${other_items}" || lang_items="${other_items}"
       fields+=("--field=Choose Windows language":CB "$lang_items")
-      #appended last so every sed -n Np above keeps its position
+      fields+=("--field=<b>Raspberry Pi boot config</b>:LBL" '')
+      fields+=("--field=$(wor_config_txt_label "$config_scope")  <span foreground=\"green\">Recommended</span>:CHK" "$(wor_yad_bool "$APPLY_CUSTOM_CONFIG_TXT")")
+      fields+=("--field=<b>Notifications</b>:LBL" '')
       sound_items=""
       curr_sound_item=""
       other_sound_items=""
@@ -2698,9 +2840,19 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         "${refresh_prompt[@]}" \
         --form --scroll \
         "${fields[@]}" \
-        --button="<b>Back</b>":1 --button="<b>OK</b>":0
+        --button="<b>View / Edit config.txt...</b>":3 --button="<b>Back</b>":1 --button="<b>OK</b>":0
       )"
       button=$?
+
+      if [ "$button" == 3 ];then
+        config_output="$(yad "${yadflags[@]}" --width="$(wor_yad_width 640)" --height="$(wor_yad_height 600)" \
+          --form --scroll \
+          --field="<b>View / Edit config.txt</b>     <small><a href=\"https://www.raspberrypi.com/documentation/computers/config_txt.html\">Configuration reference</a></small>":TXT "$CONFIG_TXT" \
+          --button="<b>Back</b>":1 --button="<b>Save</b>":0)"
+        config_button=$?
+        [ "$config_button" == 0 ] && CONFIG_TXT="$config_output"
+        continue
+      fi
 
       if [ "$button" == 0 ];then #everything in this if statement is skipped if Cancel is clicked
         if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ "$DL_DIR" != "$(echo "$output" | sed -n 1p)" ];then
@@ -2715,66 +2867,66 @@ while true;do #repeat the Installation Overview window until Flash button clicke
 
         else #if DL_DIR was not changed, then review the subsequent check-box values
           #peinstaller
-          if [ "$(echo "$output" | sed -n 2p)" == TRUE ];then
+          if [ "$(echo "$output" | sed -n 3p)" == TRUE ];then
             echo "User checked the box to delete $DL_DIR/peinstaller"
             rm -rf "$DL_DIR/peinstaller"
           fi
           #driverpackage
-          if [ "$(echo "$output" | sed -n 4p)" == TRUE ];then
+          if [ "$(echo "$output" | sed -n 5p)" == TRUE ];then
             echo "User checked the box to delete $DL_DIR/driverpackage"
             rm -rf "$DL_DIR/driverpackage"
           fi
           #uefipackage
-          if [ "$(echo "$output" | sed -n 6p)" == TRUE ];then
+          if [ "$(echo "$output" | sed -n 7p)" == TRUE ];then
             echo "User checked the box to delete $DL_DIR/pi${RPI_MODEL}-uefipackage"
             rm -rf "$DL_DIR/pi${RPI_MODEL}-uefipackage"
           fi
           #windows image
-          if [ "$(echo "$output" | sed -n 8p)" == TRUE ];then
+          if [ "$(echo "$output" | sed -n 9p)" == TRUE ];then
             echo "User checked the box to delete $(echo "$DL_DIR"/uupdump/*ARM64*.ISO)"
             rm -f "$DL_DIR"/uupdump/*ARM64*.ISO
             rm_img=FALSE #This "Advanced..." dialog just deleted the windows image, so no need for the var to remain 'TRUE' - remove unnecessary output when removing twice
           fi
           #DRY_RUN
-          if [ "$(echo "$output" | sed -n 10p)" == TRUE ] && [ "$DRY_RUN" == 0 ];then
+          if [ "$(echo "$output" | sed -n 19p)" == TRUE ] && [ "$DRY_RUN" == 0 ];then
             echo "User checked the box to set DRY_RUN=1"
             DRY_RUN=1
-          elif [ "$(echo "$output" | sed -n 10p)" == FALSE ] && [ "$DRY_RUN" == 1 ];then
+          elif [ "$(echo "$output" | sed -n 19p)" == FALSE ] && [ "$DRY_RUN" == 1 ];then
             echo "User checked the box to set DRY_RUN=0"
             DRY_RUN=0
           fi
           #customization toggles
-          [ "$(echo "$output" | sed -n 11p)" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
+          [ "$(echo "$output" | sed -n 12p)" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
           #keep the existing preference when the toggle wasn't applicable, so switching back to a Pi 4 doesn't lose it
           if [ "$pi4_applicable" == 1 ];then
-            [ "$(echo "$output" | sed -n 12p)" == TRUE ] && PI4_AUTO_DISABLE_3GB=1 || PI4_AUTO_DISABLE_3GB=0
+            [ "$(echo "$output" | sed -n 13p)" == TRUE ] && PI4_AUTO_DISABLE_3GB=1 || PI4_AUTO_DISABLE_3GB=0
           fi
-          [ "$(echo "$output" | sed -n 13p)" == TRUE ] && UEFI_USE_LATEST=1 || UEFI_USE_LATEST=0
-          [ "$(echo "$output" | sed -n 14p)" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
-          [ "$(echo "$output" | sed -n 15p)" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
-          [ "$(echo "$output" | sed -n 16p)" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
-          case "$(echo "$output" | sed -n 17p)" in
+          [ "$(echo "$output" | sed -n 15p)" == TRUE ] && UEFI_USE_LATEST=1 || UEFI_USE_LATEST=0
+          [ "$(echo "$output" | sed -n 16p)" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
+          [ "$(echo "$output" | sed -n 18p)" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
+          [ "$(echo "$output" | sed -n 30p)" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
+          case "$(echo "$output" | sed -n 20p)" in
             'Re-download everything'*) USE_CACHE=0 ;;
             'Trust the cache'*) USE_CACHE=2 ;;
             'Reuse cached files'*) USE_CACHE=1 ;;
           esac
-          [ "$(echo "$output" | sed -n 18p)" == TRUE ] && WINDOWS_ACCOUNT_SETUP=1 || WINDOWS_ACCOUNT_SETUP=0
-          WINDOWS_ACCOUNT_USERNAME="$(echo "$output" | sed -n 19p)"
-          WINDOWS_ACCOUNT_PASSWORD="$(echo "$output" | sed -n 20p)"
-          [ "$(echo "$output" | sed -n 21p)" == TRUE ] && WINDOWS_LOCALE_SETUP=1 || WINDOWS_LOCALE_SETUP=0
-          WINDOWS_LOCALE="$(echo "$output" | sed -n 22p | awk -F': ' '{print $1}')"
-          sel_lang="$(echo "$output" | sed -n 23p)"
+          [ "$(echo "$output" | sed -n 22p)" == TRUE ] && WINDOWS_ACCOUNT_SETUP=1 || WINDOWS_ACCOUNT_SETUP=0
+          WINDOWS_ACCOUNT_USERNAME="$(echo "$output" | sed -n 23p)"
+          WINDOWS_ACCOUNT_PASSWORD="$(echo "$output" | sed -n 24p)"
+          [ "$(echo "$output" | sed -n 26p)" == TRUE ] && WINDOWS_LOCALE_SETUP=1 || WINDOWS_LOCALE_SETUP=0
+          WINDOWS_LOCALE="$(echo "$output" | sed -n 27p | awk -F': ' '{print $1}')"
+          sel_lang="$(echo "$output" | sed -n 28p)"
           sel_code="${sel_lang%%:*}"
           if is_known_win_lang "$sel_code" ;then
             WIN_LANG="$sel_code"
           fi
           if [ -n "$sound_items" ];then
-            [ "$(echo "$output" | sed -n 24p)" == TRUE ] && PLAY_SOUND=1 || PLAY_SOUND=0
+            [ "$(echo "$output" | sed -n 32p)" == TRUE ] && PLAY_SOUND=1 || PLAY_SOUND=0
             #the combo shows labels, so map the chosen one back to the value the player needs
-            sel_sound_label="$(echo "$output" | sed -n 25p)"
+            sel_sound_label="$(echo "$output" | sed -n 33p)"
             sel_sound="$(wor_sound_options | awk -F'\t' -v l="$sel_sound_label" '$2 == l {print $1; exit}')"
             [ -n "$sel_sound" ] && COMPLETION_SOUND="$sel_sound"
-            [ "$(echo "$output" | sed -n 26p)" == TRUE ] && SHOW_NOTIFICATION=1 || SHOW_NOTIFICATION=0
+            [ "$(echo "$output" | sed -n 34p)" == TRUE ] && SHOW_NOTIFICATION=1 || SHOW_NOTIFICATION=0
           fi
           #end of parsing check-box values for advanced options window
 
@@ -2815,6 +2967,11 @@ echo -e "CONFIG_TXT: ⤵\n$(echo "$CONFIG_TXT" | sed 's/^/  > /g')\nCONFIG_TXT: 
 echo "Running install-wor.sh"
 
 abort_marker="$(mktemp -u)"
+#Ubuntu must show progress immediately: package-manager and host preflight work can occur before
+#the child reaches its authentication marker, and waiting there makes the GUI look hung at 0%.
+if ! is_macos;then
+  export GUI_PROGRESS_EARLY=1
+fi
 gui_start_installer
 
 progress_fifo="$(mktemp -u)"

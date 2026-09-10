@@ -44,6 +44,8 @@ wor_metadata_required product iconFilename WOR_ICON_FILENAME || return 1
 wor_metadata_required product iconName WOR_ICON_NAME || return 1
 wor_metadata_required systemDefaults peInstallerUrl WOR_DEFAULT_PE_INSTALLER_URL || return 1
 wor_metadata_required systemDefaults peInstallerSha256 WOR_DEFAULT_PE_INSTALLER_SHA256 || return 1
+wor_metadata_required systemDefaults uefiShellPackageUrl WOR_DEFAULT_UEFI_SHELL_PACKAGE_URL || return 1
+wor_metadata_required systemDefaults uefiShellPackageSha256 WOR_DEFAULT_UEFI_SHELL_PACKAGE_SHA256 || return 1
 wor_metadata_required systemDefaults uefiVerPi3 WOR_DEFAULT_UEFI_VER_PI3 || return 1
 wor_metadata_required systemDefaults uefiVerPi4 WOR_DEFAULT_UEFI_VER_PI4 || return 1
 wor_metadata_required systemDefaults uefiVerPi5 WOR_DEFAULT_UEFI_VER_PI5 || return 1
