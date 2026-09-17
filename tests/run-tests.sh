@@ -389,7 +389,9 @@ static_checks() {
     && grep -qF 'Raspberry Pi model:' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'macos_choose_target()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows and Raspberry Pi target' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "selectedValue = windowsPopup.titleOfSelectedItem + '\\t' + piPopup.titleOfSelectedItem" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'selectedValue = windows[windowsIdx] + '\''\t'\'' + piModels[piIdx]' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'current_windows_ver='\''Windows 11'\''' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'target_choice="$(macos_choose_target "$current_windows_ver" "$current_rpi_model")"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'windowWillClose:' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "NSButton.buttonWithTitleTargetAction(cancelLabel, controller, 'cancelClicked:')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows language' "$REPO_DIR/install-wor-gui.sh" \
@@ -597,6 +599,12 @@ disk5 Second drive"
     && grep -qF '"repoSlug"' "$REPO_DIR/src/config/metadata.json" \
     && pass "default config omits project pins; runtime metadata supplies PE, firmware, driver and update defaults" \
     || fail "default config still carries project pins, or metadata defaults are missing"
+
+  [ "$(jq -r '.userAccount.localeSetup' "$REPO_DIR/config-templates/config.json")" == true ] \
+    && [ "$(jq -r '.userAccount.locale' "$REPO_DIR/config-templates/config.json")" == '' ] \
+    && grep -qF 'leave empty to use the host locale or en-US' "$REPO_DIR/config-templates/config.schema.json" \
+    && pass "default config enables host-detected Windows regional settings" \
+    || fail "default config does not enable host-detected Windows regional settings"
 
   #these must be committed: a fresh clone without them silently writes a blank config.txt and the Pi will not boot
   if command -v git >/dev/null && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
@@ -892,15 +900,17 @@ SH
     || fail "GUI sudo can hang when first used inside command substitution"
   rm -rf "$keepalive_hang_dir"
 
-  #exactly one place may prompt: the first destructive sudo call in the installer subprocess
+  #exactly one place may prompt: the main installer shell authenticates immediately before disk preparation.
   [ "$(grep -cE '(^|[^n]) *sudo -v' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
-    && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 0 ] \
+    && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 1 ] \
+    && grep -qF 'sudo -v || error "Administrator authentication failed or was canceled.' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sudo -v || error "Administrator authentication failed or was canceled.'$'\n''  darwin_prepare_disk_or_die' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Administrator access: requesting macOS password with the native WoR-Flasher dialog.' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'if command sudo -n -v >/dev/null 2>&1;then' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'export WOR_GUI_SUDO_PROMPTED=1' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'command sudo -n "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'refusing to prompt in the console.' "$REPO_DIR/install-wor.sh" \
-    && pass "the flash asks for the password once, in the process that uses it" \
+    && pass "the flash asks for the password once before captured disk helpers run" \
     || fail "a credential is collected in more than one place, so the user is asked twice"
 
   #a frozen "Creating WOR_BOOT..." line while the password dialog is up reads as a hang; say what it's waiting on
@@ -1345,6 +1355,19 @@ SH
     && pass "completion dialog can copy the log path to the clipboard" \
     || fail "completion dialog cannot copy the log path"
 
+  #macOS privacy denials should let the user jump straight to the relevant Settings pane from the failure dialog.
+  printf '%s' "$completion_block" | grep -qF "'openSettingsClicked:': {" \
+    && printf '%s' "$completion_block" | grep -qF "settingsButton = $.NSButton.buttonWithTitleTargetAction('Open Settings'" \
+    && printf '%s' "$completion_block" | grep -qF '$.NSWorkspace.sharedWorkspace.openURL' \
+    && grep -qF "privacy_settings_url='x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "privacy_settings_url='x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Click Open Settings, then in Files and Folders enable Removable Volumes for bash' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'click +, press Shift-Command-G, enter /bin/bash, click Open' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Click Open Settings, then enable Full Disk Access' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Then quit WoR-Flasher completely and try again.' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "completion dialog can open macOS privacy settings after access denials" \
+    || fail "completion dialog cannot open macOS privacy settings after access denials"
+
   #The banner carries alpha; do not put a full white panel behind it, and never bridge Core Animation CGColor through JXA.
   printf '%s' "$completion_block" | grep -qF 'const imageView = $.NSImageView.alloc.initWithFrame' \
     && ! printf '%s' "$completion_block" | grep -qF 'imageBacking' \
@@ -1436,7 +1459,7 @@ shared_function_checks() {
     || fail "settings_summary is missing settings or emits malformed lines: $summary_labels"
 
   #every toggle the Advanced Options windows offer has to be visible on the confirmation screen
-    [ "$(run_in_engine 'WOR_RUN_ID=summary-test DRY_RUN=1 SKIP_IMAGE_VERIFICATION=1 USE_CACHE=2 APPLY_CUSTOM_CONFIG_TXT=0 UEFI_USE_LATEST=1 DRIVERS_USE_LATEST=0 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 HIDE_EMPTY_DRIVES=0 settings_summary | tail -n +2 | cut -f2 | tr "\n" "|"')" \
+    [ "$(run_in_engine 'WOR_RUN_ID=summary-test DRY_RUN=1 SKIP_IMAGE_VERIFICATION=1 USE_CACHE=2 APPLY_CUSTOM_CONFIG_TXT=0 UEFI_USE_LATEST=1 DRIVERS_USE_LATEST=0 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 HIDE_EMPTY_DRIVES=0 WINDOWS_LOCALE_SETUP=0 settings_summary | tail -n +2 | cut -f2 | tr "\n" "|"')" \
       == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-us) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Windows setup will ask|Windows setup defaults|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|/tmp/wor-test-dl/logs/wor-flasher-summary-test.log|" ] \
     && pass "every Advanced Options toggle changes what the confirmation screens show" \
     || fail "a setting is not reflected in settings_summary"
@@ -1656,12 +1679,18 @@ JSON
     || fail "cached WIM locale discovery cannot parse wiminfo XML: '$wim_locale_out'"
   rm -rf "$wim_locale_dir"
 
+  cached_locale_count="$(run_in_engine 'locale_test_dir="$(mktemp -d)"; DL_DIR="$locale_test_dir"; mkdir -p "$DL_DIR/winfiles_22631.2861_en-us"; : > "$DL_DIR/winfiles_22631.2861_en-us/install.wim"; list_wim_locale_codes() { printf "en-us\\n"; }; list_windows_locale_options | awk -F "\t" "\$1 == \"en-US\" { count++ } END { print count }"; rm -rf "$locale_test_dir"')"
   [ "$(run_in_engine 'windows_locale_from_language_code sr-latn-rs')" == 'sr-Latn-RS' ] \
+    && [ "$(run_in_engine 'HOST_OS=Darwin; defaults() { printf "en_GB@currency=GBP\\n"; }; default_windows_locale')" == 'en-GB' ] \
+    && [ "$(run_in_engine 'HOST_OS=Darwin; defaults() { printf "xx_YY\\n"; }; default_windows_locale')" == 'en-US' ] \
+    && [ "$cached_locale_count" == 1 ] \
+    && grep -qF '[ -z "$WINDOWS_LOCALE_SETUP" ] && WINDOWS_LOCALE_SETUP=1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF '[ -z "$WINDOWS_LOCALE" ] && WINDOWS_LOCALE="$(default_windows_locale)"' "$REPO_DIR/install-wor.sh" \
     && [ "$(run_in_engine 'list_windows_locale_options | head -n1')" == $'en-US\tEnglish (United States) (en-US)' ] \
     && run_in_engine 'WINDOWS_LOCALE_SETUP=1 WINDOWS_LOCALE=sr-Latn-RS true' \
     && grep -qF 'localeCheckbox = $.NSButton.checkboxWithTitleTargetAction' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'localePopup.enabled = enabled' "$REPO_DIR/install-wor-gui.sh" \
-    && pass "Windows regional settings use dropdown locale options and accept multi-part locales" \
+    && pass "Windows regional settings default to the host locale, deduplicate cached entries, and accept multi-part locales" \
     || fail "Windows regional settings still depend on a freeform or incomplete locale field"
 
   rm -rf "$iso_dir" "$winfiles_dir"
@@ -1817,7 +1846,7 @@ rc=1" ] \
     grep -qU $'"'"'\r'"'"' peinstaller/winpe/2/scripts/prefinalize.cmd && echo crlf
     cache_is_current "$PWD/peinstaller" token-v1 && echo cache-intact
     #turning both customizations off must not leave a stale hook behind in the cache
-    OOBE_NETWORK_BYPASS=0; RPI_MODEL=5
+    OOBE_NETWORK_BYPASS=0; WINDOWS_LOCALE_SETUP=0; RPI_MODEL=5
     configure_pe_prefinalize
     [ -e peinstaller/winpe/2/scripts ] || echo stale-hook-removed
   ')"
@@ -1832,7 +1861,7 @@ rc=1" ] \
 
   #both the media copies and the hook copy have to come from one builder, or they can disagree
   [ "$(run_in_engine 'OOBE_NETWORK_BYPASS=1; RPI_MODEL=5; unattend_xml | grep -c "HideWirelessSetupInOOBE"')" == 1 ] \
-    && [ "$(run_in_engine 'OOBE_NETWORK_BYPASS=0; PI4_AUTO_DISABLE_3GB=0; RPI_MODEL=5; unattend_xml >/dev/null 2>&1; echo $?')" == 1 ] \
+    && [ "$(run_in_engine 'OOBE_NETWORK_BYPASS=0; PI4_AUTO_DISABLE_3GB=0; WINDOWS_LOCALE_SETUP=0; RPI_MODEL=5; unattend_xml >/dev/null 2>&1; echo $?')" == 1 ] \
     && grep -qF 'unattend_xml | sudo tee "$destination"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'unattend_xml > "$scripts_dir/unattend.xml"' "$REPO_DIR/install-wor.sh" \
     && pass "the media copies and the prefinalize copy of the answer file share one builder" \
@@ -1910,7 +1939,7 @@ rc=1" ] \
   #the answer file is concatenated from fragments, and Windows silently ignores one that is not
   #well-formed - so a bad escape or a missing newline between fragments would fail invisibly
   if command -v python3 >/dev/null ;then
-    answer_passes="$(run_in_engine 'RPI_MODEL=4; PI4_AUTO_DISABLE_3GB=1; OOBE_NETWORK_BYPASS=1; unattend_xml' \
+    answer_passes="$(run_in_engine 'RPI_MODEL=4; PI4_AUTO_DISABLE_3GB=1; OOBE_NETWORK_BYPASS=1; WINDOWS_LOCALE_SETUP=0; unattend_xml' \
       | python3 -c 'import sys,xml.dom.minidom
 d = xml.dom.minidom.parseString(sys.stdin.read())
 print(",".join(s.getAttribute("pass") for s in d.getElementsByTagName("settings")))' 2>/dev/null)"
@@ -2294,6 +2323,9 @@ if command -v jq >/dev/null ;then
     && grep -qF 'Final media verification failed: partition 1 is' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'for attempt in 1 2 3 4 5 6 7 8 9 10 ;do' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'sudo bash -s -- "$device" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$part1" "$part2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'if sudo bash -s -- "$device" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$part1" "$part2" > "$output_file" 2>&1' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'if sudo bash -s -- "$device" "$sgdisk_bin" "$raw_device" > "$output_file" 2>&1' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'if output="$(sudo bash -s -- "$device" "$sgdisk_bin"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'darwin_report_copy_failure "$boot_mount"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'sudo -n touch "$probe"' "$REPO_DIR/install-wor.sh" \
     && grep -qF '/usr/sbin/diskutil eraseVolume MS-DOS WOR_BOOT "$1"' "$REPO_DIR/install-wor.sh" \
@@ -2326,7 +2358,9 @@ if command -v jq >/dev/null ;then
   removable_message="$(run_in_engine 'HOST_OS=Darwin; open() { :; }; touch() { echo "touch: /Volumes/WOR_BOOT/.wor-flasher-write-probe: Operation not permitted" >&2; return 1; }; darwin_require_mounted_volume_access /Volumes/WOR_BOOT "write to /Volumes/WOR_BOOT"' 2>&1)"
   echo "$removable_message" | grep -qF 'Removable Volumes' \
     && echo "$removable_message" | grep -qF 'Full Disk Access' \
-    && echo "$removable_message" | grep -qF 'Visual Studio Code.app, Terminal.app, or iTerm.app' \
+    && echo "$removable_message" | grep -qF 'Shift-Command-G' \
+    && echo "$removable_message" | grep -qF '/bin/bash' \
+    && grep -qF 'Privacy_FilesAndFolders' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'darwin_require_mounted_volume_access "$boot_mount" "write to $boot_mount"' "$REPO_DIR/install-wor.sh" \
     && pass "macOS preflights removable-volume privacy before copying mounted media" \
     || fail "macOS mounted-media TCC guidance or preflight is missing"

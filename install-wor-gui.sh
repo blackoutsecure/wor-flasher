@@ -1434,8 +1434,15 @@ JXA
   CONFIG_TXT="$(printf '%s\n' "$result" | sed -n '/^---CONFIG_TXT---$/,$p' | tail -n +2)"
 }
 
-macos_choose_target() { #Output: selected Windows version and Raspberry Pi model separated by a tab.
-  local target_jxa result
+macos_choose_target() { #Input: current-run Windows/Pi defaults. Output: selected Windows version and Raspberry Pi model separated by a tab.
+  local default_pi_label default_windows_label target_jxa result
+  default_windows_label="${1:-Windows 11}"
+  case "${2:-}" in
+    5) default_pi_label='Raspberry Pi 5' ;;
+    4) default_pi_label='Raspberry Pi 4 / Pi 400' ;;
+    3) default_pi_label='Raspberry Pi 3 / Pi 2 v1.2' ;;
+    *) default_pi_label='Raspberry Pi 5' ;;
+  esac
   target_jxa="$(wor_jxa_window_lib; cat <<'JXA'
 ObjC.import('AppKit')
 ObjC.import('Foundation')
@@ -1445,11 +1452,16 @@ const args = $.NSProcessInfo.processInfo.arguments
 const iconPath = ObjC.unwrap(args.objectAtIndex(4))
 const windowTitle = ObjC.unwrap(args.objectAtIndex(5))
 const appTitle = ObjC.unwrap(args.objectAtIndex(6))
+const defaultWindows = ObjC.unwrap(args.objectAtIndex(7) || 'Windows 11')
+const defaultPiModel = ObjC.unwrap(args.objectAtIndex(8) || 'Raspberry Pi 5')
 const app = $.NSApplication.sharedApplication
 const windows = ['Windows 11', 'Windows 10']
 const piModels = ['Raspberry Pi 5', 'Raspberry Pi 4 / Pi 400', 'Raspberry Pi 3 / Pi 2 v1.2']
+const defaultWindowsIdx = Math.max(0, windows.indexOf(defaultWindows))
+const defaultPiIdx = Math.max(0, piModels.indexOf(defaultPiModel))
 let window
-let selectedValue = null
+let selectedValue = windows[defaultWindowsIdx] + '\t' + piModels[defaultPiIdx]
+let allowTermination = false
 
 function writeResult(value) {
   const data = $(value + '\n').dataUsingEncoding($.NSUTF8StringEncoding)
@@ -1468,7 +1480,9 @@ const Controller = ObjC.registerSubclass({
     'nextClicked:': {
       types: ['void', ['id']],
       implementation: function() {
-        selectedValue = windowsPopup.titleOfSelectedItem + '\t' + piPopup.titleOfSelectedItem
+        const windowsIdx = windowsPopup.indexOfSelectedItem
+        const piIdx = piPopup.indexOfSelectedItem
+        selectedValue = windows[windowsIdx] + '\t' + piModels[piIdx]
         app.stopModalWithCode($.NSOKButton)
         window.orderOut(null)
       }
@@ -1504,6 +1518,13 @@ const Controller = ObjC.registerSubclass({
         window.makeKeyAndOrderFront(null)
         app.activateIgnoringOtherApps(true)
       }
+    },
+    'applicationShouldTerminate:': {
+      types: ['NSUInteger', ['id']],
+      implementation: function() {
+        if (allowTermination) return $.NSTerminateNow
+        cancelAndExit()
+      }
     }
   }
 })
@@ -1530,6 +1551,7 @@ windowsLabel.frame = $.NSMakeRect(24, height - 112, 170, 24)
 content.addSubview(windowsLabel)
 const windowsPopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(190, height - 116, width - 214, 30))
 for (let i = 0; i < windows.length; i++) windowsPopup.addItemWithTitle($(windows[i]))
+windowsPopup.selectItemAtIndex(defaultWindowsIdx)
 content.addSubview(windowsPopup)
 
 const piLabel = $.NSTextField.labelWithString('Raspberry Pi model:')
@@ -1537,45 +1559,48 @@ piLabel.frame = $.NSMakeRect(24, height - 158, 170, 24)
 content.addSubview(piLabel)
 const piPopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(190, height - 162, width - 214, 30))
 for (let i = 0; i < piModels.length; i++) piPopup.addItemWithTitle($(piModels[i]))
+piPopup.selectItemAtIndex(defaultPiIdx)
 content.addSubview(piPopup)
 
-const cancelButton = $.NSButton.buttonWithTitle('Cancel')
+const cancelButton = $.NSButton.buttonWithTitleTargetAction('Cancel', controller, 'cancelClicked:')
 cancelButton.bezelStyle = $.NSBezelStyleRounded
 cancelButton.frame = $.NSMakeRect(width - 220, 20, 92, 32)
-cancelButton.target = controller
-cancelButton.action = 'cancelClicked:'
 content.addSubview(cancelButton)
-const nextButton = $.NSButton.buttonWithTitle('Next')
+const nextButton = $.NSButton.buttonWithTitleTargetAction('Next', controller, 'nextClicked:')
 nextButton.bezelStyle = $.NSBezelStyleRounded
 nextButton.frame = $.NSMakeRect(width - 116, 20, 92, 32)
 nextButton.keyEquivalent = '\\r'
-nextButton.target = controller
-nextButton.action = 'nextClicked:'
 content.addSubview(nextButton)
 
 worInstallWindowHandlers(controller)
 window.makeKeyAndOrderFront(null)
 app.activateIgnoringOtherApps(true)
 app.runModalForWindow(window)
-
-if (selectedValue === null) cancelAndExit()
+if (selectedValue === null || selectedValue.length === 0) cancelAndExit()
 writeResult(selectedValue)
-app.terminate(null)
+allowTermination = true
+$.exit(0)
 JXA
 )"
-  result="$(wor_osascript -l JavaScript - "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" "$WOR_APP_TITLE" <<<"$target_jxa")"
+  result="$(wor_osascript -l JavaScript - "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" "$WOR_APP_TITLE" "$default_windows_label" "$default_pi_label" <<<"$target_jxa")"
+  result="$(printf '%s\n' "$result" | awk 'index($0, "\t") { print; exit }')"
+  result="${result%%__WOR_CANCEL__*}"
+  result="$(printf '%s' "$result" | tr -d '\r')"
   [ "$result" != __WOR_CANCEL__ ] || return 1
+  [ -n "$result" ] || return 1
   printf '%s\n' "$result"
 }
 
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice password_retry_reason progress_file progress_jxa resume_at_flash saved_log step target_choice
+  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice password_retry_reason privacy_guidance privacy_settings_url progress_file progress_jxa resume_at_flash saved_log step target_choice
 
+  current_windows_ver='Windows 11'
+  current_rpi_model=''
   step=target
   while true; do
     case "$step" in
       target)
-        target_choice="$(macos_choose_target)" || exit 0
+        target_choice="$(macos_choose_target "$current_windows_ver" "$current_rpi_model")" || exit 0
         WINDOWS_VER="${target_choice%%$'\t'*}"
         case "${target_choice#*$'\t'}" in
           'Raspberry Pi 5') RPI_MODEL=5 ;;
@@ -1583,6 +1608,8 @@ macos_start_cli() {
           'Raspberry Pi 3 / Pi 2 v1.2') RPI_MODEL=3 ;;
           *) error "Unrecognized Raspberry Pi selection '${target_choice#*$'\t'}'" ;;
         esac
+        current_windows_ver="$WINDOWS_VER"
+        current_rpi_model="$RPI_MODEL"
         list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
         [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
         [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
@@ -1598,7 +1625,7 @@ macos_start_cli() {
         device_choices="$(darwin_list_device_choices)"
         device_choice="$(macos_choose_device "$device_choices")" || exit 0
         if [ "$device_choice" == Back ];then
-          step=pi
+          step=target
           continue
         fi
         [ "$device_choice" == __REFRESH__ ] && continue
@@ -1645,6 +1672,7 @@ const appTitle = ObjC.unwrap(args.objectAtIndex(6))
 const imagePath = ObjC.unwrap(args.objectAtIndex(7) || '')
 const windowTitle = ObjC.unwrap(args.objectAtIndex(8) || appTitle)
 const successSound = ObjC.unwrap(args.objectAtIndex(9) || '')
+const settingsUrl = ObjC.unwrap(args.objectAtIndex(10) || '')
 
 $.NSProcessInfo.processInfo.processName = appTitle
 const app = $.NSApplication.sharedApplication
@@ -1672,6 +1700,14 @@ const Controller = ObjC.registerSubclass({
           const pb = $.NSPasteboard.generalPasteboard
           pb.clearContents
           pb.setStringForType($(logPath), $.NSPasteboardTypeString)
+        }
+      }
+    },
+    'openSettingsClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        if (settingsUrl.length > 0) {
+          $.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($(settingsUrl)))
         }
       }
     },
@@ -1791,8 +1827,9 @@ if (logMatch) {
   logPath = logMatch[1].trim()
 }
 
-let okButton, openButton, copyButton
+let okButton, openButton, copyButton, settingsButton
 const buttonGap = 8
+let nextButtonX = 20
 //"Complete" only on the success screen; a failure dialog reached through Open Log/Copy is not a completion
 const primaryLabel = imagePath.length > 0 ? 'Complete' : 'OK'
 if (logPath.length > 0) {
@@ -1800,15 +1837,26 @@ if (logPath.length > 0) {
   openButton.bezelStyle = $.NSBezelStyleRounded
   openButton.sizeToFit
   const openWidth = Math.max(96, openButton.frame.size.width)
-  openButton.frame = $.NSMakeRect(20, buttonY, openWidth, buttonHeight)
+  openButton.frame = $.NSMakeRect(nextButtonX, buttonY, openWidth, buttonHeight)
   content.addSubview(openButton)
+  nextButtonX += openWidth + buttonGap
 
   copyButton = $.NSButton.buttonWithTitleTargetAction('Copy', controller, 'copyLogClicked:')
   copyButton.bezelStyle = $.NSBezelStyleRounded
   copyButton.sizeToFit
   const copyWidth = Math.max(80, copyButton.frame.size.width)
-  copyButton.frame = $.NSMakeRect(20 + openWidth + buttonGap, buttonY, copyWidth, buttonHeight)
+  copyButton.frame = $.NSMakeRect(nextButtonX, buttonY, copyWidth, buttonHeight)
   content.addSubview(copyButton)
+  nextButtonX += copyWidth + buttonGap
+
+  if (settingsUrl.length > 0) {
+    settingsButton = $.NSButton.buttonWithTitleTargetAction('Open Settings', controller, 'openSettingsClicked:')
+    settingsButton.bezelStyle = $.NSBezelStyleRounded
+    settingsButton.sizeToFit
+    const settingsWidth = Math.max(120, settingsButton.frame.size.width)
+    settingsButton.frame = $.NSMakeRect(nextButtonX, buttonY, settingsWidth, buttonHeight)
+    content.addSubview(settingsButton)
+  }
 
   okButton = $.NSButton.buttonWithTitleTargetAction(primaryLabel, controller, 'okClicked:')
   okButton.bezelStyle = $.NSBezelStyleRounded
@@ -2156,6 +2204,8 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
     [ -z "$installer_status" ] && installer_status=1
     rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker"
 
+    privacy_guidance=''
+    privacy_settings_url=''
     if [ "$installer_status" == 0 ];then
       rm -f "$output_log" "$error_marker"
       completion_text="Process completed successfully.
@@ -2191,9 +2241,19 @@ No changes have been made to $DEVICE yet. Trying again picks up at the password 
         fi
         exit "$installer_status"
       fi
+      if grep -qF 'macOS denied removable-volume access' "$saved_log" 2>/dev/null ;then
+        privacy_settings_url='x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
+        privacy_guidance="Click Open Settings, then in Files and Folders enable Removable Volumes for bash when it is listed. If macOS does not offer that narrower permission, open Full Disk Access, click +, press Shift-Command-G, enter /bin/bash, click Open, and enable its toggle. Then quit WoR-Flasher completely and try again."
+      elif grep -qF 'Full Disk Access' "$saved_log" 2>/dev/null || grep -qF 'Operation not permitted' "$saved_log" 2>/dev/null ;then
+        privacy_settings_url='x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'
+        privacy_guidance="Click Open Settings, then enable Full Disk Access for the exact WoR-Flasher.app copy you launched. If it is not listed, click + and add that app. If this still fails, also enable the launcher app you used, such as Visual Studio Code.app, Terminal.app, or iTerm.app. Then quit WoR-Flasher completely and try again."
+      fi
+      [ -z "$privacy_guidance" ] || privacy_guidance="$privacy_guidance
+
+    "
       completion_text="The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).
 
-$(gui_log_tail "$saved_log")
+    $privacy_guidance$(gui_log_tail "$saved_log")
 
 Full log: $saved_log"
     fi
@@ -2201,7 +2261,7 @@ Full log: $saved_log"
     [ "$installer_status" == 0 ] && completion_image="$WOR_ASSETS_DIR/next-steps.png"
     #posted before the window opens, so it lands while the app is still in the background
     [ "$installer_status" == 0 ] && wor_show_result_notification success || wor_show_result_notification failure
-    wor_osascript -l JavaScript - "$completion_text" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$completion_image" "$WOR_WINDOW_TITLE" "$([ "${PLAY_SOUND:-1}" == 1 ] && wor_completion_sound)" <<<"$completion_jxa" >/dev/null 2>&1
+    wor_osascript -l JavaScript - "$completion_text" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$completion_image" "$WOR_WINDOW_TITLE" "$([ "${PLAY_SOUND:-1}" == 1 ] && wor_completion_sound)" "$privacy_settings_url" <<<"$completion_jxa" >/dev/null 2>&1
     exit "$installer_status"
   done
 }

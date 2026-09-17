@@ -251,7 +251,7 @@ The flashing engine remains `install-wor.sh`. Node.js is used only for release p
 npm run check          # shell syntax, macOS runtime freshness and release-plan validation
 npm run build          # stage fresh macOS, Linux and Windows-placeholder release folders
 npm run build:macos    # stage release/macos/WoR-Flasher.app and SHA256SUMS
-npm run build:linux    # stage release/linux/wor-flasher and SHA256SUMS
+npm run build:linux    # stage release/linux/wor-flasher, WoR-Flasher-<version>-linux.tar.gz and SHA256SUMS
 npm run package:all    # refresh the embedded .app runtime, then stage every release folder
 npm run pe:check       # download the pinned WoR-PE package and verify the recorded SHA-256
 npm run pe:update      # resolve the latest WoR-PE package, hash it and update project metadata
@@ -260,7 +260,7 @@ npm run metadata:write # rewrite package.json to match src/config/metadata.json
 npm run clean          # remove generated release output
 ```
 
-Generated release output is written under `release/` and is intentionally ignored by Git. It is rebuilt from the source checkout and the embedded macOS runtime each time, so the release folder is not another maintained copy of the project. Review the staged app or Linux payload and the matching `SHA256SUMS` before publishing.
+Generated release output is written under `release/` and is intentionally ignored by Git. It is rebuilt from the source checkout and the embedded macOS runtime each time, so the release folder is not another maintained copy of the project. Publish `release/linux/WoR-Flasher-<version>-linux.tar.gz` for Linux users; it contains the `wor-flasher/` payload including `install-wor.sh`, `install-wor-gui.sh`, and `install-wor-hook.sh`. Review the staged app or Linux payload and the matching `SHA256SUMS` before publishing.
 
 `pe:check` and `pe:update` are maintainer commands because they download release assets. Keep `pe:check` out of routine CI unless network access is expected; use `pe:update` only when deliberately refreshing the pinned WoR-PE package URL and digest in [`src/config/metadata.json`](src/config/metadata.json).
 
@@ -287,7 +287,7 @@ Every prompt has a matching environment variable.
 | `WINDOWS_ACCOUNT_SETUP`     | `0`                                        | `1` creates the optional local Windows administrator configured in Advanced Options                                     |
 | `WINDOWS_ACCOUNT_USERNAME`  | unset                                      | Username for the optional local Windows account                                                                         |
 | `WINDOWS_ACCOUNT_PASSWORD`  | unset                                      | Password for the optional account; written to unattended setup only when enabled                                        |
-| `WINDOWS_LOCALE_SETUP`      | `0`                                        | `1` applies `WINDOWS_LOCALE` to Windows keyboard and regional settings                                                  |
+| `WINDOWS_LOCALE_SETUP`      | `1`                                        | `1` applies `WINDOWS_LOCALE` to Windows keyboard and regional settings                                                  |
 | `WINDOWS_LOCALE`            | `en-US`                                    | Locale such as `en-US` or `en-GB` used when locale setup is enabled                                                     |
 | `PI4_AUTO_DISABLE_3GB`      | `1`                                        | Pi 4 only. `0` keeps the 3 GB RAM limit                                                                                 |
 | `PI4_UEFI_SHELL_UNLOCK`     | `0`                                        | Pi 4 only. `1` stages a one-time verified UEFI Shell handoff and restores the EFI loader after setting the RAM variable |
@@ -341,7 +341,7 @@ The `specialize` answer-file command invokes the staged `Pi4Disable3GB.ps1` file
 
 Enabled by default. WoR-Flasher writes a minimal Microsoft unattended-setup answer file that hides the OOBE network and online-account screens, so setup can continue with a local account when Pi networking is not ready yet. It does not automate accounts, licenses, partitions or privacy choices by default.
 
-Advanced Options can optionally configure a Windows local administrator account and a locale profile before the first boot. The account username and password are written to `Autounattend.xml` only when explicitly enabled; the password is never shown in summaries or logs, but Windows setup necessarily stores it in plaintext on the prepared media temporarily. Remove `Autounattend.xml` after setup completes. The locale profile applies one value such as `en-US` or `en-GB` to the Windows keyboard/input, system, user and UI locale settings.
+Advanced Options can optionally configure a Windows local administrator account and a locale profile before the first boot. The account username and password are written to `Autounattend.xml` only when explicitly enabled; the password is never shown in summaries or logs, but Windows setup necessarily stores it in plaintext on the prepared media temporarily. Remove `Autounattend.xml` after setup completes. Regional settings are enabled by default and initially use the current host locale when it matches a Windows locale, otherwise `en-US`; a selection made during the current GUI run is retained when returning to Advanced Options. The locale profile applies one value such as `en-US` or `en-GB` to the Windows keyboard/input, system, user and UI locale settings.
 
 ```bash
 OOBE_NETWORK_BYPASS=0 ./install-wor.sh  # require network
@@ -463,7 +463,7 @@ An older WoR-Flasher runtime may report `newfs_msdos`, `newfs_exfat`, or `sgdisk
 
 If it worked before and fails now with no other change, the most likely cause is that `WoR-Flasher.app` was rebuilt or reinstalled since it was last granted access — see below.
 
-WoR-Flasher detects this specific failure and opens `System Settings > Privacy & Security > Full Disk Access` for you automatically, naming the exact app that needs the toggle: `WoR-Flasher.app` and its bundle path for the packaged app, or `Terminal.app`/`iTerm.app` for a CLI run. That app is often not in the list yet, so click the `+` button at the bottom-left of the list, add that exact app, turn its toggle on, then quit the app completely (not just the window) and try again. If an older WoR-Flasher entry is already listed, remove it and add the current copy again.
+WoR-Flasher detects this specific failure and opens `System Settings > Privacy & Security > Full Disk Access` for you automatically, naming the exact app that needs the toggle: `WoR-Flasher.app` and its bundle path for the packaged app, or `Terminal.app`/`iTerm.app` for a CLI run. In GUI mode, the failure dialog also shows an **Open Settings** button. For a mounted removable-volume denial, it opens **Files and Folders** first: enable the narrower **Removable Volumes** permission for `bash` when macOS lists it. If that permission is unavailable or still denied, open **Full Disk Access**, click `+`, press `Shift`+`Command`+`G`, enter `/bin/bash`, click **Open**, and enable its toggle. Quit the app completely (not just the window) and try again.
 
 If the exact `WoR-Flasher.app` is already enabled and macOS still blocks the write, also grant Full Disk Access to the app you launched it from, such as `Visual Studio Code.app`, `Terminal.app`, or `iTerm.app`. WoR-Flasher is a shell-script app bundle, and macOS can attribute protected disk access to the launcher or interpreter chain instead of the displayed app bundle.
 

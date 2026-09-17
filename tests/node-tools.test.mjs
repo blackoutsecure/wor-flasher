@@ -6,6 +6,7 @@ import {
   writeFileSync,
   mkdirSync,
   readFileSync,
+  existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -591,6 +592,34 @@ describe("Node.js Tooling - Runtime Paths & Manifests", () => {
 });
 
 describe("Node.js Tooling - macOS Packaging & Version CLI", () => {
+  it("should package Linux entry scripts in a versioned tar.gz release", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+    const archiveName = `WoR-Flasher-${pkg.version}-linux.tar.gz`;
+    const archivePath = join("release", "linux", archiveName);
+    const buildRes = spawnSync(
+      "node",
+      ["src/build-release.mjs", "--platform=linux"],
+      { encoding: "utf8" },
+    );
+    assert.equal(buildRes.status, 0, buildRes.stderr);
+    assert.equal(existsSync(archivePath), true);
+
+    const archiveRes = spawnSync("tar", ["-tzf", archivePath], {
+      encoding: "utf8",
+    });
+    assert.equal(archiveRes.status, 0, archiveRes.stderr);
+    for (const script of [
+      "wor-flasher/install-wor.sh",
+      "wor-flasher/install-wor-gui.sh",
+      "wor-flasher/install-wor-hook.sh",
+    ]) {
+      assert.match(archiveRes.stdout, new RegExp(`^${script}$`, "m"));
+    }
+
+    const sums = readFileSync(join("release", "linux", "SHA256SUMS"), "utf8");
+    assert.match(sums, new RegExp(`^[a-f0-9]{64}  ${archiveName}$`, "m"));
+  });
+
   it("should pass packaging validation for staged macOS app", () => {
     const buildRes = spawnSync(
       "node",

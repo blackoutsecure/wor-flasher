@@ -44,6 +44,14 @@
 #2.0.0 - Modernized the cross-platform flashing workflow, release tooling and configuration.
 #        Added a native standalone macOS runtime, resilient disk handling, configurable completion
 #          sounds and notifications, password-retry resume, and a compact config.txt editor.
+#        macOS privacy-denial failures now expose an Open Settings action for Removable Volumes
+#          or Full Disk Access from the native completion dialog.
+#        macOS GUI authentication is established in the main installer shell before disk helpers
+#          capture output, preventing a duplicate administrator-password prompt during verification.
+#        Windows keyboard and regional settings now default on using the host locale, fall back to
+#          en-US, and preserve a selection made during the current GUI run.
+#        Deduplicated cached-image and built-in locale choices so the macOS picker selects the
+#          detected host locale instead of an adjacent duplicate entry.
 #1.0.2 - WoR-Flasher.app now carries a validated immutable runtime for standalone use, stages
 #          detached updates under Application Support, rejects downgrades, and falls back through
 #          active, previous, and embedded runtimes without modifying its own bundle.
@@ -722,8 +730,9 @@ ROOT_SCRIPT
 }
 
 darwin_prepare_disk_or_die() { #Input: device, sgdisk path, partition sizes, and partition paths. Performs all privileged disk preparation in one sudo session.
-  local device="$1" sgdisk_bin="$2" boot_size_mb="$3" install_size_mb="$4" part1="$5" part2="$6" output output_status
-  if output="$(sudo bash -s -- "$device" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$part1" "$part2" <<'ROOT_SCRIPT' 2>&1
+  local device="$1" sgdisk_bin="$2" boot_size_mb="$3" install_size_mb="$4" part1="$5" part2="$6" output output_file output_status
+  output_file="$(mktemp)" || error "Failed to create a disk-preparation log."
+  if sudo bash -s -- "$device" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$part1" "$part2" > "$output_file" 2>&1 <<'ROOT_SCRIPT'
 set -e
 device="$1"
 sgdisk_bin="$2"
@@ -758,11 +767,15 @@ done
 /usr/sbin/diskutil eraseVolume MS-DOS WOR_BOOT "$part1"
 /usr/sbin/diskutil eraseVolume ExFAT WOR_INSTALL "$part2"
 ROOT_SCRIPT
-  )";then
+  then
+    output="$(cat "$output_file")"
+    rm -f "$output_file"
     [ -z "$output" ] || printf '%s\n' "$output" >&2
     return 0
   fi
   output_status=$?
+  output="$(cat "$output_file")"
+  rm -f "$output_file"
   [ -z "$output" ] || printf '%s\n' "$output" >&2
   if printf '%s' "$output" | grep -Eqi 'no password was provided|user canceled|password is required' ;then
     error "Administrator authentication was canceled or unavailable while preparing $device. Enter the macOS administrator password in the WoR-Flasher dialog and try again."
@@ -787,8 +800,9 @@ darwin_mount_partition_or_die() { #Input: partition device. Waits for macOS to s
 }
 
 darwin_finalize_partition_types_or_die() { #Input: device and sgdisk path. Retags the finished media after all file copies are complete.
-  local device="$1" sgdisk_bin="$2" output raw_device="/dev/r${1#/dev/}"
-  if output="$(sudo bash -s -- "$device" "$sgdisk_bin" "$raw_device" <<'ROOT_SCRIPT' 2>&1
+  local device="$1" sgdisk_bin="$2" output output_file raw_device="/dev/r${1#/dev/}"
+  output_file="$(mktemp)" || error "Failed to create a partition-finalization log."
+  if sudo bash -s -- "$device" "$sgdisk_bin" "$raw_device" > "$output_file" 2>&1 <<'ROOT_SCRIPT'
 set -e
 device="$1"
 sgdisk_bin="$2"
@@ -797,10 +811,14 @@ raw_device="$3"
 "$sgdisk_bin" -t 1:ef00 -c 1:WOR_BOOT -t 2:0700 -c 2:WOR_INSTALL "$raw_device"
 "$sgdisk_bin" -A 1:clear:63 -A 2:clear:63 "$raw_device"
 ROOT_SCRIPT
-  )";then
+  then
+    output="$(cat "$output_file")"
+    rm -f "$output_file"
     [ -z "$output" ] || printf '%s\n' "$output" >&2
     return 0
   fi
+  output="$(cat "$output_file")"
+  rm -f "$output_file"
   [ -z "$output" ] || printf '%s\n' "$output" >&2
   error "Failed to finalize partition types on $device.${output:+ ($output)}"
 }
@@ -815,10 +833,10 @@ darwin_verify_final_partition_types_or_die() { #Input: boot and install partitio
 
 darwin_removable_volume_error() { #Input: description and optional command output. Explain macOS removable-volume privacy denial.
   local description="$1" user_output="${2:-}"
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_RemovableVolumes" >/dev/null 2>&1 \
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders" >/dev/null 2>&1 \
     || open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" >/dev/null 2>&1 \
     || true
-  error "Failed to $description: macOS denied removable-volume access. In System Settings > Privacy & Security, allow Removable Volumes for WoR-Flasher.app and for the launcher app, such as Visual Studio Code.app, Terminal.app, or iTerm.app. If Removable Volumes is not listed, grant Full Disk Access to those apps instead, then quit WoR-Flasher completely and try again.${user_output:+ ($user_output)}"
+  error "Failed to $description: macOS denied removable-volume access to the /bin/bash process that writes the target. In System Settings > Privacy & Security > Files and Folders, allow Removable Volumes for bash when it is listed. If macOS does not offer that narrower permission, open Full Disk Access, click +, press Shift-Command-G, enter /bin/bash, click Open, and enable its toggle. Then quit WoR-Flasher completely and try again.${user_output:+ ($user_output)}"
 }
 
 darwin_require_mounted_volume_access() { #Input: mounted target and description. Fail before copying if macOS TCC blocks removable media.
@@ -945,6 +963,9 @@ darwin_flash_device() {
   status "  Creating WOR_BOOT (${boot_size_mb} MB) and WOR_INSTALL (${install_size_mb} MB)"
   PART1="${DEVICE}s1"
   PART2="${DEVICE}s2"
+  #Authenticate in this shell before helpers capture their output in subshells; otherwise the
+  #GUI prompt state does not survive to the final privileged disk operation.
+  sudo -v || error "Administrator authentication failed or was canceled. Enter the macOS password in the WoR-Flasher dialog and try again."
   darwin_prepare_disk_or_die "$DEVICE" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$PART1" "$PART2"
   gui_start_sudo_keepalive
 
@@ -2078,6 +2099,10 @@ windows_locale_from_language_code() { #Input: Windows language code. Output: Win
   }' <<<"$1"
 }
 
+default_windows_locale() { #Output: the current host locale in Windows casing, or en-US.
+  windows_locale_from_language_code "$(default_win_lang)"
+}
+
 list_wim_locale_codes() { #Input: install.wim. Output: locale codes declared by the image, when wimlib exposes them.
   local image="$1"
   [ -f "$image" ] && command -v wiminfo >/dev/null 2>&1 && command -v iconv >/dev/null 2>&1 || return 1
@@ -2093,22 +2118,24 @@ list_wim_locale_codes() { #Input: install.wim. Output: locale codes declared by 
 
 list_windows_locale_options() { #Output: tab-separated locale and label choices for Windows regional settings.
   local image code name locale
-  for image in \
-    "$DL_DIR/winfiles_from_iso_${BID}_${WIN_LANG}/install.wim" \
-    "$DL_DIR/winfiles_${BID}_${WIN_LANG}/install.wim" ;do
-    [ -f "$image" ] || continue
-    while IFS= read -r code ;do
-      [ -n "$code" ] || continue
+  {
+    for image in \
+      "$DL_DIR/winfiles_from_iso_${BID}_${WIN_LANG}/install.wim" \
+      "$DL_DIR/winfiles_${BID}_${WIN_LANG}/install.wim" ;do
+      [ -f "$image" ] || continue
+      while IFS= read -r code ;do
+        [ -n "$code" ] || continue
+        locale="$(windows_locale_from_language_code "$code")"
+        name="$(list_langs | awk -F: -v wanted="$code" '$1 == wanted {print $2; exit}')"
+        [ -n "$name" ] || name="$locale"
+        printf '%s\t%s\n' "$locale" "$name ($locale)"
+      done < <(list_wim_locale_codes "$image")
+    done
+    list_langs_preferred | while IFS=: read -r code name ;do
       locale="$(windows_locale_from_language_code "$code")"
-      name="$(list_langs | awk -F: -v wanted="$code" '$1 == wanted {print $2; exit}')"
-      [ -n "$name" ] || name="$locale"
-      printf '%s\t%s\n' "$locale" "$name ($locale)"
-    done < <(list_wim_locale_codes "$image")
-  done
-  list_langs_preferred | while IFS=: read -r code name ;do
-    locale="$(windows_locale_from_language_code "$code")"
-    printf '%s\t%s (%s)\n' "$locale" "$name" "$locale"
-  done | awk -F'\t' '!seen[$1]++'
+      printf '%s\t%s (%s)\n' "$locale" "$name" "$locale"
+    done
+  } | awk -F'\t' '!seen[$1]++'
 }
 
 list_cached_winfiles() { #Input: optional directory, default DL_DIR. Output: names of winfiles folders that finished extracting.
@@ -2410,8 +2437,8 @@ fi
 [ -z "$WINDOWS_ACCOUNT_SETUP" ] && WINDOWS_ACCOUNT_SETUP=0
 [ -z "$WINDOWS_ACCOUNT_USERNAME" ] && WINDOWS_ACCOUNT_USERNAME=''
 [ -z "$WINDOWS_ACCOUNT_PASSWORD" ] && WINDOWS_ACCOUNT_PASSWORD=''
-[ -z "$WINDOWS_LOCALE_SETUP" ] && WINDOWS_LOCALE_SETUP=0
-[ -z "$WINDOWS_LOCALE" ] && WINDOWS_LOCALE='en-US'
+[ -z "$WINDOWS_LOCALE_SETUP" ] && WINDOWS_LOCALE_SETUP=1
+[ -z "$WINDOWS_LOCALE" ] && WINDOWS_LOCALE="$(default_windows_locale)"
 case "$WINDOWS_ACCOUNT_SETUP" in
   0) ;;
   1) [ -n "$WINDOWS_ACCOUNT_USERNAME" ] && [ -n "$WINDOWS_ACCOUNT_PASSWORD" ] || error "Windows account setup requires a username and password." ;;

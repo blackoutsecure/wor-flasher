@@ -24,8 +24,8 @@
     "setupAccount": false,
     "username": "",
     "password": "",
-    "localeSetup": false,
-    "locale": "en-US"
+    "localeSetup": true,
+    "locale": ""
   },
   "execution": {
     "dryRun": false,
