@@ -2500,8 +2500,8 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
 
               folder="$(echo -ne "$list" | yad "${yadflags[@]}" --height="$(wor_yad_height 320)" \
                 --list --radiolist --column=chk:CHK --column=human --column=script:HD --no-headers --print-column=3 --no-selection \
-                --text=$'<big><b>Choose cached version</b></big>\nIf the list is empty, please use the same working directory (DL_DIR) you used last time.\nDL_DIR: <b><u>'"$DL_DIR"'</u></b>' \
-                --button='<b>Change DL<u>  </u>DIR</b>':2 \
+                --text=$'<big><b>Choose Cached Windows Files</b></big>\nIf the list is empty, choose the download folder used by the previous run.\nCurrent download folder: <b><u>'"$DL_DIR"'</u></b>' \
+                --button='<b>Change Download Folder</b>':2 \
                 --button='<b>Next</b>':0)"
               button=$?
 
@@ -2521,8 +2521,8 @@ FALSE\nUse a cached version of Windows from a previous run\nuse cached" | yad "$
                   ;;
                 2) #change DL_DIR
                   DL_DIR="$(yad "${yadflags[@]}" --file --directory --mime-filter="Directories | inode/directory" \
-                    --width="$(wor_yad_width 500)" --height="$(wor_yad_height 400)" --title="Choose DL_DIR" \
-                    --text=$'Choose directory for everything to be downloaded.\nIn this case you should select the directory where everything <i>was</i> downloaded the last time you ran WoR-Flasher.' \
+                    --width="$(wor_yad_width 500)" --height="$(wor_yad_height 400)" --title="Choose Download Folder" \
+                    --text=$'Choose where WoR-Flasher stores downloaded and extracted Windows files.\nFor cached Windows files, select the folder used by the previous run.' \
                     --button="<b>Cancel</b>":1 --button="<b>OK</b>":0 \
                     || echo "$DL_DIR")"
                     #This ^^^^^^^^^^^ preserves the current value of DL_DIR if anything other than OK is clicked
@@ -2634,11 +2634,11 @@ if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ ! -f "
     if [ -d "/lib/modules/$(uname -r)" ];then
       #tooltip text of 'Use RAM' button will explain that More RAM app from Pi-Apps will be installed, assuming it is not already installed.
       if [ -f /usr/bin/zram.sh ] && [ -d /zram ];then
-        tooltip='Will set DL_DIR to the /zram folder - this folder was set up when you installed <b>More RAM</b> from Pi-Apps.'
+        tooltip='Will use the /zram folder that was set up when you installed <b>More RAM</b> from Pi-Apps.'
       elif [ -f /usr/local/bin/pi-apps ];then
-        tooltip='Will install <b>More RAM</b> from Pi-Apps and then set DL_DIR to the new ramdisk at <u>/zram</u>.'
+        tooltip='Will install <b>More RAM</b> from Pi-Apps and then use the new ramdisk at <u>/zram</u>.'
       else
-        tooltip='Will setup a RAM-compression tool from Pi-Apps and then set DL_DIR to the new ramdisk at <u>/zram</u>. Please note that Pi-Apps itself will not be installed.'
+        tooltip='Will set up a RAM-compression tool from Pi-Apps and then use the new ramdisk at <u>/zram</u>. Please note that Pi-Apps itself will not be installed.'
       fi
 
       yad "${yadflags[@]}" --width="$(wor_yad_width 500)" --form --field="About 4.2GB of files need to be downloaded to system storage before flashing can begin.
@@ -2648,7 +2648,7 @@ Choose this if:
 - You want your system storage to last as long as possible
 - You don't plan to use WoR-Flasher often:LBL" \
         --image="$WOR_ASSETS_DIR/ram.png" --image-on-top \
-        --button="Use ${DL_DIR}":2 \
+        --button="<b>Use download folder</b>!!${DL_DIR}":2 \
         --button="<b>Use RAM</b>!!${tooltip}":0
       button=$?
 
@@ -2744,7 +2744,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
     deletion_warning_2="$deletion_warning Backup any files before it's too late!"
   fi
 
-  yad "${yadflags[@]}" --width="$(wor_yad_width 640)" --height="$(wor_yad_height 700)" --image="$WOR_ASSETS_DIR/overview.png" --image-on-top \
+  yad "${yadflags[@]}" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 700)" --image="$WOR_ASSETS_DIR/overview.png" --image-on-top \
     --form --scroll --field="$window_text":LBL '' \
     "${existing_img_chk[@]}" \
     --field="$deletion_warning":LBL '' \
@@ -2764,7 +2764,8 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       fields=()
       config_edit_file="$(mktemp)"
       printf '%s' "$CONFIG_TXT" > "$config_edit_file"
-      config_editor_action="@yad --center --no-markup --text-info --editable --in-place --confirm-save='Save config.txt changes?' --filename=$(printf '%q' "$config_edit_file") --button=Close:0 >/dev/null"
+      config_editor_title="$WOR_WINDOW_TITLE | config.txt"
+      config_editor_action="@yad --center --no-markup --width=$(wor_yad_width 700) --height=$(wor_yad_height 520) --title=$(printf '%q' "$config_editor_title") --window-icon=$(printf '%q' "$WOR_LOGO_PATH") --class=$(printf '%q' "$WOR_ICON_NAME") --text-info --editable --in-place --confirm-save='Save config.txt changes?' --filename=$(printf '%q' "$config_edit_file") --button=Close:0 >/dev/null"
       uefi_pinned="$(uefi_pinned_version)"
       #make entries for the customization toggles
       #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4; yad can't disable one field, so mark it and drop the value below
@@ -2793,10 +2794,10 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       #make entry to change DL_DIR
       if [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
         working_dir_field=$((${#fields[@]} / 2 + 1))
-        fields+=("--field=Working directory: (DL<u>  </u>DIR):RO" 'Cannot be changed')
+        fields+=("--field=Download folder:RO" 'Cannot be changed')
       else
         working_dir_field=$((${#fields[@]} / 2 + 1))
-        fields+=("--field=Working directory: (DL<u>  </u>DIR):DIR" "$DL_DIR")
+        fields+=("--field=Download folder:DIR" "$DL_DIR")
       fi
       if [ -f "${DL_DIR}/winfiles_${BID}_${WIN_LANG}/alldone" ];then
         windows_files_status='Already extracted and ready to use'
@@ -2808,7 +2809,7 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         windows_files_status='Will download and extract the Windows image'
       fi
       windows_files_field=$((${#fields[@]} / 2 + 1))
-      fields+=("--field=Windows files:LBL" "$windows_files_status")
+      fields+=("--field=Windows files:RO" "$windows_files_status")
       #USE_CACHE has three values, so it needs a combo rather than a check box; the selected item comes first
       case "$USE_CACHE" in
         0) cache_items='Re-download everything, ignoring the cache!Reuse cached files when they still match (recommended)!Trust the cache without checking it' ;;
@@ -2897,8 +2898,9 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         ${config_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' \"${config_button_field}:${config_editor_action}\"; else printf '${config_button_field}:@disabled@\\n'; fi;;
       esac"
 
-      output="$(yad "${yadflags[@]}" --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 640)" --height="$(wor_yad_height 700)" --image-on-top \
+      output="$(yad "${yadflags[@]}" --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 720)" --image-on-top \
         "${refresh_prompt[@]}" \
+        --text=$'<big><b>Advanced Options</b></big>\nChanges apply to this flash only.' \
         --form --scroll \
         "${fields[@]}" \
         --button="<b>Back</b>":1 --button="<b>OK</b>":0
@@ -3031,7 +3033,7 @@ awk -F'\t' '
 # LINUX_PROGRESS_AWK_END
 ' < "$progress_fifo" |
   yad "${yadflags[@]}" --width="$(wor_yad_width 680)" --height="$(wor_yad_height 330)" \
-  --progress --image="$WOR_LOGO_PATH" --text="Starting..." --bar="Overall:NORM" --bar="Sub-progress:NORM" --button='<b>Abort</b>':1 &
+  --progress --image="$WOR_LOGO_PATH" --text=$'<big><b>Preparing flash...</b></big>\nRunning setup and preflight checks. The bars will move when WoR-Flasher reaches a measured step.' --bar="Overall:NORM" --bar="Sub-progress:NORM" --button='<b>Abort</b>':1 &
 yad_pid=$!
 
 progress_aborted=0

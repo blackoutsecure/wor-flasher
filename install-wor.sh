@@ -2029,10 +2029,12 @@ wor_last_log_file() { #Output: stable support path pointing at the most recent s
 }
 
 settings_summary() { #Output: tab-separated "label<TAB>value" lines describing this run. One source of truth for the CLI banner and both GUI confirmation screens.
+  local display_win_lang
+  display_win_lang="$(windows_locale_from_language_code "$WIN_LANG")"
   printf '%s version\t%s\n' "$WOR_FLASHER_NAME" "$WOR_FLASHER_VERSION"
   printf 'Target drive\t%s\n' "$(describe_device "$DEVICE")"
   printf 'Target hardware\tRaspberry Pi %s\n' "$RPI_MODEL"
-  printf 'Operating system\t%s\n' "$(get_os_name "$BID" | sed "s/ build / ($WIN_LANG) arm64 build /g")"
+  printf 'Operating system	%s\n' "$(get_os_name "$BID" | sed "s/ build / ($display_win_lang) arm64 build /g")"
   printf 'Installation mode\t%s\n' "$(install_mode_label "$CAN_INSTALL_ON_SAME_DRIVE")"
   [ -n "$SOURCE_FILE" ] && printf 'Windows source\t%s\n' "$SOURCE_FILE"
   printf 'Offline OOBE\t%s\n' "$([ "$OOBE_NETWORK_BYPASS" == 1 ] && echo 'Allowed' || echo 'Disabled')"

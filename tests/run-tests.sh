@@ -342,6 +342,19 @@ static_checks() {
     && grep -qF 'command -v xrandr' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'command -v xdpyinfo' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'command -v xwininfo' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'yad "${yadflags[@]}" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 700)" --image="$WOR_ASSETS_DIR/overview.png"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'output="$(yad "${yadflags[@]}" --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 720)"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--text=\$'<big><b>Advanced Options</b></big>" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'config_editor_title="$WOR_WINDOW_TITLE | config.txt"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--text-info --editable --in-place' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Choose Cached Windows Files' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Current download folder:' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '<b>Change Download Folder</b>' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF '<b>Use download folder</b>' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--field=Download folder:DIR' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--field=Windows files:RO' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'Working directory: (DL' "$REPO_DIR/install-wor-gui.sh" \
+    && ! grep -qF 'Choose DL_DIR' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(grep -cE -- '--(width|height)=[0-9]+' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
     && pass "Linux dialogs clamp to the detected screen and use smaller artwork when needed" \
     || fail "Linux dialog sizing is fixed or can place content outside the screen: '$responsive_yad'"
@@ -827,7 +840,7 @@ disk5 Second drive"
     && grep -qF 'LINUX_ASKPASS="$(mktemp)"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'WOR_FLASH_TARGET="$DEVICE" WOR_ICON_PATH="$WOR_LOGO_PATH" SUDO_ASKPASS="$LINUX_ASKPASS" command sudo -A "$@"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'sudo parted -ms "$device" unit B print' "$REPO_DIR/install-wor.sh" \
-    && grep -qF -- '--progress --image="$WOR_LOGO_PATH" --text="Starting..."' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--progress --image=\"\$WOR_LOGO_PATH\" --text=\$'<big><b>Preparing flash...</b></big>" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--bar="Overall:NORM" --bar="Sub-progress:NORM"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '1:# Overall' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '2:# Sub-progress' "$REPO_DIR/install-wor-gui.sh" \
@@ -1460,7 +1473,7 @@ shared_function_checks() {
 
   #every toggle the Advanced Options windows offer has to be visible on the confirmation screen
     [ "$(run_in_engine 'WOR_RUN_ID=summary-test DRY_RUN=1 SKIP_IMAGE_VERIFICATION=1 USE_CACHE=2 APPLY_CUSTOM_CONFIG_TXT=0 UEFI_USE_LATEST=1 DRIVERS_USE_LATEST=0 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 HIDE_EMPTY_DRIVES=0 WINDOWS_LOCALE_SETUP=0 settings_summary | tail -n +2 | cut -f2 | tr "\n" "|"')" \
-      == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-us) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Windows setup will ask|Windows setup defaults|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|/tmp/wor-test-dl/logs/wor-flasher-summary-test.log|" ] \
+      == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-US) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Windows setup will ask|Windows setup defaults|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|/tmp/wor-test-dl/logs/wor-flasher-summary-test.log|" ] \
     && pass "every Advanced Options toggle changes what the confirmation screens show" \
     || fail "a setting is not reflected in settings_summary"
 
@@ -1511,7 +1524,7 @@ JSON
   rm -rf "$cfg_test_dir"
   [ "$cfg_test_out" == "5|de-de|22631.2861|/dev/sdz|1" ] \
     && [ "$cfg_override_out" == "4|en-us|22631.2861|/dev/sdz|1" ] \
-    && [ "$cfg_hook_out" == "Target hardware	Raspberry Pi 5|Operating system	Windows 11 (de-de) arm64 build 22631.2861|" ] \
+    && [ "$cfg_hook_out" == "Target hardware	Raspberry Pi 5|Operating system	Windows 11 (de-DE) arm64 build 22631.2861|" ] \
     && pass "config.json populates unset variables while preserving environment overrides" \
     || fail "config.json loading failed: got '$cfg_test_out' / '$cfg_override_out' / '$cfg_hook_out'"
 
@@ -1752,7 +1765,7 @@ rc=1" ] \
   hook_progress_out="$(cd "$REPO_DIR" && ./install-wor-hook.sh --progress-file "$hook_progress_file" run --version 2>&1)"
   hook_bad_progress_out="$(cd "$REPO_DIR" && ./install-wor-hook.sh --progress-file 2>&1; echo "rc=$?")"
   hook_set_summary="$(cd "$REPO_DIR" && ./install-wor-hook.sh --set RPI_MODEL=5 --set BID=26200.6899 --set WIN_LANG=de-de --set DEVICE=/dev/does-not-exist --set CAN_INSTALL_ON_SAME_DRIVE=1 summary | grep -E '^Target hardware|Operating system' | tr '\n' '|')"
-  hook_set_expected=$'Target hardware	Raspberry Pi 5|Operating system	Windows 11 (de-de) arm64 build 26200.6899|'
+  hook_set_expected=$'Target hardware	Raspberry Pi 5|Operating system	Windows 11 (de-DE) arm64 build 26200.6899|'
   hook_bad_set_out="$(cd "$REPO_DIR" && ./install-wor-hook.sh --set NOT-VALID=1 summary 2>&1; echo "rc=$?")"
   hook_bootstrap_dir="$(mktemp -d)"
   mkdir -p "$hook_bootstrap_dir/source/config-templates" "$hook_bootstrap_dir/source/src/lib" "$hook_bootstrap_dir/source/src/config"
