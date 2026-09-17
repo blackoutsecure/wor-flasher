@@ -342,6 +342,7 @@ static_checks() {
     && grep -qF 'command -v xrandr' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'command -v xdpyinfo' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'command -v xwininfo' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'export GIO_USE_VOLUME_MONITOR=unix' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'yad "${yadflags[@]}" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 700)" --image="$WOR_ASSETS_DIR/overview.png"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'output="$(yad "${yadflags[@]}" --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 720)"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- "--text=\$'<big><b>Advanced Options</b></big>" "$REPO_DIR/install-wor-gui.sh" \
@@ -1657,6 +1658,8 @@ JSON
     && grep -qF 'linux_no_device_message()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'No external writable target drive was found.' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'WoR-Flasher hides loop/snap devices' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'device_buttons=(--button="<b>Refresh</b>' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "device_buttons=(--button='<b>Cancel</b>':1 --button=\"<b>Refresh</b>" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'list_dev_paths() {' "$REPO_DIR/install-wor.sh" \
     && [ "$(grep -cF 'lsblk -I 8,179,259' "$REPO_DIR/install-wor.sh")" == 1 ] \
     && pass "both front-ends enumerate candidate drives through one function" \

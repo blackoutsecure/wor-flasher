@@ -2556,6 +2556,7 @@ if [ -z "$DEVICE" ];then
   while [ -z "$DEVICE" ] || [ ! -b "$DEVICE" ];do
     IFS=$'\n'
     DEV_LIST=''
+    device_buttons=(--button="<b>Refresh</b>!!Reload the list of connected drives to detect new ones":2 --button='<b>Next</b>':0)
     for device in $(list_dev_paths) ;do
       [ "$(get_size_raw "$device")" -le 0 ] && continue
       DEV_LIST="FALSE
@@ -2568,6 +2569,7 @@ $DEV_LIST"
 
     if [ -z "$DEV_LIST" ];then
       device_prompt="$(linux_no_device_message)"
+      device_buttons=(--button='<b>Cancel</b>':1 --button="<b>Refresh</b>!!Reload the list of connected drives to detect new ones":2)
     else
       device_prompt='Choose device to flash:'
     fi
@@ -2575,7 +2577,7 @@ $DEV_LIST"
     DEVICE="$(echo -n "$DEV_LIST" | sed -e '0,/FALSE/ s/FALSE/TRUE/' | yad "${yadflags[@]}" --text="$device_prompt" --width="$(wor_yad_width 520)" \
       --list --radiolist --no-selection --no-headers --column=chk:CHK --column=echoname:HD --column=name --column=size --column=pretty-name \
       --print-column=2 --tooltip-column=3 \
-      --button="<b>Refresh</b>!!Reload the list of connected drives to detect new ones":2 --button='<b>Next</b>':0)"
+      "${device_buttons[@]}")"
     button=$?
     if [ $button == 0 ];then
       #OK

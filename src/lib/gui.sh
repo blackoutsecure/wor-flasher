@@ -230,6 +230,7 @@ wor_yad_image_for_screen() { #Input: preferred image, fallback image, minimum wi
 
 wor_init_yad_flags() { #Sets the shared yadflags array. Assigns rather than echoes, because it is an array.
 	wor_detect_yad_screen
+	export GIO_USE_VOLUME_MONITOR=unix
 	yadflags=(--center --fixed --buttons-layout=center --width="$(wor_yad_width 400)" --height="$(wor_yad_height 250)" --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" --separator='\n')
 }
 
