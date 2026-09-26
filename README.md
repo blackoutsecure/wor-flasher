@@ -456,6 +456,18 @@ Source-file repair requires a complete Git checkout. A detached app instead vali
 
 If a flash fails from the GUI, the full log is kept under `$DL_DIR/logs/` with a UTC timestamp in the filename, or wherever `WOR_LOG_FILE` points. `$DL_DIR/last-run.log` is also refreshed as a stable support shortcut. The primary path is shown in the error dialog and listed on the confirmation screen before you start. Attach that log to any bug report.
 
+On macOS, `Written image verified successfully` confirms the copied data, but partition finalization must still finish. If the finalizer fails, the media is not confirmed ready to boot. The installer requires worker readiness before disk preparation and pre-creates user-owned result files.
+
+GUI launches normally have no terminal, so the default `sudo` policy scopes cached authorization to the parent process. The finalizer launches the external `sudo` command directly from the authenticated shell, rather than running the GUI wrapper inside another background shell. This avoids the immediate `Administrator authentication is no longer reusable` startup failure without allowing a second password prompt. The worker script is passed as a fixed command argument instead of relying on detached stdin. Parent-scoped authorization and startup failures are covered by mock-only regression tests; an end-to-end flash with the correction still needs confirmation. Keep the diagnostic log rather than repeatedly reflashing after a startup error.
+
+The same worker applies the Pi 3 GPT patch at its original point before written-image verification, then waits for the final retag request. These late writes do not depend on a cached `sudo` timestamp remaining valid during long copies. macOS therefore does not start the ineffective background timestamp refresher. ISO images attached by the current user are also detached without `sudo`, so ISO cleanup does not consume the disk-write password prompt.
+
+The disk can temporarily appear unformatted immediately after administrator authentication. During an active macOS GUI flash, WoR-Flasher automatically chooses **Ignore** for the exact **The disk you attached was not readable by this computer** system alert. It never chooses **Initialize** or **Eject**, never dismisses other alert types, and does not disable Disk Arbitration or change global disk settings. The alert may appear briefly before dismissal. Automation starts only after authentication and finalizer readiness, and stops when the flash completes, fails, or is aborted.
+
+This requires macOS **Accessibility** permission for WoR-Flasher and permission to control **System Events** under **Privacy & Security > Automation**. WoR-Flasher does not grant these permissions itself. If access is denied, the progress window shows a warning and flashing continues normally; choose **Ignore** manually in that case. Because the system alert does not identify its disk, automatic dismissal is limited to the active-write window and a single matching system alert; multiple matching alerts are left for manual handling.
+
+The developer-only `src/macos-disk-claim.c` prototype explores a per-disk claim held by a control pipe. It is not packaged or invoked by the app: compilation succeeded, but claim acquisition timed out on a disposable disk image on the development host. Prompt suppression and formatter compatibility remain unverified. Do not use this prototype on physical media until its lifecycle and formatting interactions have been validated on disposable images.
+
 <details>
 <summary><b>macOS: "Operation not permitted" formatting the drive</b></summary>
 
@@ -539,9 +551,11 @@ This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unloc
 
 ```bash
 ./tests/run-tests.sh                # static checks, plus Linux integration where available
+./tests/run-tests.sh --macos-auth   # mocked finalizer authorization; no sudo or disks
 ./tests/run-tests.sh --gui          # walk the GUI in DRY_RUN mode
 ./tests/run-tests.sh --walkthrough  # fake drives, then the CLI interactively
 ./tests/run-linux-integration.sh    # force the Dockerised Linux suite
+LINUX_TEST_IMAGE=node:22-bookworm-slim ./tests/run-linux-integration.sh  # include Node-based Linux checks
 npm run check                       # shell syntax, package-plan checks, and release-tool syntax
 npm run build:macos                 # generate release/macos/WoR-Flasher.app
 node src/package-macos-app.mjs --check  # verify generated macOS runtime matches canonical sources
@@ -549,6 +563,8 @@ shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh insta
 ```
 
 The suite creates loopback devices as stand-in drives, so nothing can be written to physical storage. Tests call the real functions out of `install-wor.sh` rather than restating their logic, which means a test cannot pass against behaviour the shipped script no longer has.
+
+The Linux wrapper installs its test dependencies, including Python for answer-file XML validation, only inside its disposable container. Its default Ubuntu image does not include Node.js; use the Node image above to exercise the Node-based checks on Linux as well. Platform-specific macOS tests still run on the macOS host.
 
 On a non-Linux host the run prints three summaries — the Docker container's nested run, the integration wrapper, then the host's own run. All three must report `failed 0`.
 

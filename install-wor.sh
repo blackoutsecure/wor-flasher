@@ -42,6 +42,12 @@
 #Version history
 #---------------
 #2.0.0 - Modernized the cross-platform flashing workflow, release tooling and configuration.
+#        Report the macOS partition finalizer's exit status when its result file is unavailable.
+#        Require finalizer readiness before disk preparation and pre-create user-owned results.
+#        Launch the macOS finalizer from the authenticated parent for no-terminal sudo sessions.
+#        Reuse that worker for the late Pi3 GPT patch; macOS does not depend on sudo keepalive.
+#        Detach user-mounted macOS ISO images without requesting administrator access.
+#        Automatically choose Ignore for the exact macOS unreadable-disk alert during active GUI writes.
 #        Added a native standalone macOS runtime, resilient disk handling, configurable completion
 #          sounds and notifications, password-retry resume, and a compact config.txt editor.
 #        macOS privacy-denial failures now expose an Open Settings action for Removable Volumes
@@ -118,6 +124,8 @@ is_macos() {
 
 gui_start_sudo_keepalive() { #Keeps the GUI sudo timestamp fresh after the one allowed password prompt.
   [ "$RUN_MODE" == gui ] || return 0
+  #The macOS worker retains authorization; a background shell cannot refresh its parent's ticket.
+  is_macos && return 0
   [ "${BASH_SUBSHELL:-0}" -eq 0 ] || return 0
   [ -z "${WOR_GUI_SUDO_KEEPALIVE_PID:-}" ] || return 0
   ( while kill -0 "$$" 2>/dev/null ;do command sudo -n -v >/dev/null 2>&1 || true; sleep 30; done ) >/dev/null 2>&1 </dev/null &
@@ -789,7 +797,7 @@ ROOT_SCRIPT
 
 darwin_mount_partition_or_die() { #Input: partition device. Waits for macOS to settle after formatting, then mounts it.
   local partition="$1" attempt output='' info=''
-  for attempt in 1 2 3 4 5 6 7 8 9 10 ;do
+  for attempt in $(seq 1 30) ;do
     if output="$(/usr/sbin/diskutil mount "$partition" 2>&1)";then
       return 0
     fi
@@ -799,28 +807,114 @@ darwin_mount_partition_or_die() { #Input: partition device. Waits for macOS to s
   error "Failed to mount $partition after formatting. macOS may still be settling the partition table or may have refused to mount the new volume.${output:+ Last mount output: $output}${info:+ diskutil info: $info}"
 }
 
-darwin_finalize_partition_types_or_die() { #Input: device and sgdisk path. Retags the finished media after all file copies are complete.
-  local device="$1" sgdisk_bin="$2" output output_file raw_device="/dev/r${1#/dev/}"
-  output_file="$(mktemp)" || error "Failed to create a partition-finalization log."
-  if sudo bash -s -- "$device" "$sgdisk_bin" "$raw_device" > "$output_file" 2>&1 <<'ROOT_SCRIPT'
-set -e
+darwin_start_partition_finalizer_or_die() { #Input: device, sgdisk path, optional Pi3 patch. Starts a root helper for late disk writes.
+  #Without a terminal, sudo caches credentials by parent PID. Launch the external command
+  #directly so a background shell running the GUI sudo wrapper cannot change that parent.
+  local device="$1" sgdisk_bin="$2" raw_device="/dev/r${1#/dev/}" pi3_patch="${3:-}" finalizer_dir finalizer_script attempt output worker_status=0
+  [ -z "$pi3_patch" ] || { [ -s "$pi3_patch" ] && [ -r "$pi3_patch" ]; } \
+    || error "The Pi3 GPT patch is missing or unreadable: $pi3_patch"
+  finalizer_dir="$(mktemp -d)" || error "Failed to create a partition-finalization workspace."
+  DARWIN_FINALIZE_GO="$finalizer_dir/go"
+  DARWIN_FINALIZE_DONE="$finalizer_dir/done"
+  DARWIN_FINALIZE_LOG="$finalizer_dir/log"
+  DARWIN_FINALIZE_READY="$finalizer_dir/ready"
+  DARWIN_PI3_PATCH_GO="$finalizer_dir/patch-go"
+  DARWIN_PI3_PATCH_DONE="$finalizer_dir/patch-done"
+  : > "$DARWIN_FINALIZE_DONE" || error "Failed to create the partition-finalization result file."
+  : > "$DARWIN_FINALIZE_READY" || error "Failed to create the partition-finalization readiness file."
+  : > "$DARWIN_PI3_PATCH_DONE" || error "Failed to create the Pi3 patch result file."
+  register_file_cleanup "$DARWIN_FINALIZE_GO"
+  register_file_cleanup "$DARWIN_FINALIZE_DONE"
+  register_file_cleanup "$DARWIN_FINALIZE_LOG"
+  register_file_cleanup "$DARWIN_FINALIZE_READY"
+  register_file_cleanup "$DARWIN_PI3_PATCH_GO"
+  register_file_cleanup "$DARWIN_PI3_PATCH_DONE"
+  #the helper exits when this shell does, so an aborted flash never retags a half-written drive
+  finalizer_script="$(cat <<'ROOT_SCRIPT'
 device="$1"
 sgdisk_bin="$2"
 raw_device="$3"
-/usr/sbin/diskutil unmountDisk force "$device" >/dev/null 2>&1 || true
-"$sgdisk_bin" -t 1:ef00 -c 1:WOR_BOOT -t 2:0700 -c 2:WOR_INSTALL "$raw_device"
-"$sgdisk_bin" -A 1:clear:63 -A 2:clear:63 "$raw_device"
-ROOT_SCRIPT
-  then
-    output="$(cat "$output_file")"
-    rm -f "$output_file"
-    [ -z "$output" ] || printf '%s\n' "$output" >&2
-    return 0
+go_file="$4"
+done_file="$5"
+parent_pid="$6"
+ready_file="$7"
+pi3_patch="$8"
+patch_go_file="$9"
+patch_done_file="${10}"
+patch_completed=0
+printf 'ready\n' > "$ready_file" || exit 1
+while [ ! -e "$go_file" ];do
+  if ! kill -0 "$parent_pid" 2>/dev/null;then
+    printf 'Partition finalizer stopped because installer process %s is unavailable.\n' "$parent_pid" >&2
+    exit 1
   fi
-  output="$(cat "$output_file")"
-  rm -f "$output_file"
+  if [ -n "$pi3_patch" ] && [ "$patch_completed" == 0 ] && [ -e "$patch_go_file" ];then
+    patch_status=0
+    dd if="$pi3_patch" of="$raw_device" conv=fsync || patch_status=$?
+    printf '%s\n' "$patch_status" > "$patch_done_file" || exit 1
+    [ "$patch_status" == 0 ] || exit "$patch_status"
+    patch_completed=1
+  fi
+  sleep 1
+done
+if [ -n "$pi3_patch" ] && [ "$patch_completed" != 1 ];then
+  printf 'Partition finalizer refused to retag before the Pi3 GPT patch completed.\n' >&2
+  exit 1
+fi
+finalize_status=0
+/usr/sbin/diskutil unmountDisk force "$device" >/dev/null 2>&1 || true
+"$sgdisk_bin" -t 1:ef00 -c 1:WOR_BOOT -t 2:0700 -c 2:WOR_INSTALL "$raw_device" || finalize_status=$?
+[ "$finalize_status" != 0 ] || "$sgdisk_bin" -A 1:clear:63 -A 2:clear:63 "$raw_device" || finalize_status=$?
+printf '%s\n' "$finalize_status" > "$done_file"
+ROOT_SCRIPT
+  )"
+  command sudo -n bash -c "$finalizer_script" wor-partition-finalizer "$device" "$sgdisk_bin" "$raw_device" "$DARWIN_FINALIZE_GO" "$DARWIN_FINALIZE_DONE" "$$" "$DARWIN_FINALIZE_READY" "$pi3_patch" "$DARWIN_PI3_PATCH_GO" "$DARWIN_PI3_PATCH_DONE" \
+    > "$DARWIN_FINALIZE_LOG" 2>&1 < /dev/null &
+  DARWIN_FINALIZE_PID=$!
+  for attempt in $(seq 1 10) ;do
+    if [ -s "$DARWIN_FINALIZE_READY" ] && kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
+      return 0
+    fi
+    kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null || break
+    sleep 1
+  done
+  if kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
+    error "Partition finalizer did not become ready after $attempt readiness checks for $device."
+  fi
+  wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?
+  output="$(cat "$DARWIN_FINALIZE_LOG" 2>/dev/null)"
+  error "Partition finalizer failed to start for $device (worker exit $worker_status).${output:+ ($output)}"
+}
+
+darwin_apply_pi3_gpt_patch_or_die() { #Signals the already-authorized worker before written-image verification.
+  local patch_status output worker_status=0
+  : > "$DARWIN_PI3_PATCH_GO" || error "Failed to signal the Pi3 GPT patch on $DEVICE."
+  while [ ! -s "$DARWIN_PI3_PATCH_DONE" ] && kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null ;do
+    sleep 1
+  done
+  patch_status="$(cat "$DARWIN_PI3_PATCH_DONE" 2>/dev/null)" \
+    || error "The Pi3 GPT patch did not leave a readable result on $DEVICE."
+  [ "$patch_status" == 0 ] && return 0
+  output="$(cat "$DARWIN_FINALIZE_LOG" 2>/dev/null)" || output='Partition-finalization log is unavailable.'
+  if [ -z "$patch_status" ] && ! kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
+    wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?
+    error "The Pi3 GPT patch worker exited with status $worker_status without a result on $DEVICE.${output:+ ($output)}"
+  fi
+  error "Failed to apply the Pi3 GPT partition-table fix to $DEVICE (status $patch_status).${output:+ ($output)}"
+}
+
+darwin_finalize_partition_types_or_die() { #Signals the pre-authorized root helper to retag the finished media, then waits for it.
+  local output finalize_status worker_status=0
+  : > "$DARWIN_FINALIZE_GO" || error "Failed to signal partition finalization on $DEVICE."
+  while [ ! -s "$DARWIN_FINALIZE_DONE" ] && kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null ;do
+    sleep 1
+  done
+  wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?
+  output="$(cat "$DARWIN_FINALIZE_LOG" 2>/dev/null)" || output='Partition-finalization log is unavailable.'
   [ -z "$output" ] || printf '%s\n' "$output" >&2
-  error "Failed to finalize partition types on $device.${output:+ ($output)}"
+  finalize_status="$(cat "$DARWIN_FINALIZE_DONE" 2>/dev/null)" \
+    || error "Partition finalizer exited with status $worker_status without a readable result on $DEVICE.${output:+ ($output)}"
+  [ "$finalize_status" == 0 ] || error "Failed to finalize partition types on $DEVICE.${output:+ ($output)}"
 }
 
 darwin_verify_final_partition_types_or_die() { #Input: boot and install partitions. Verifies final GPT roles after late retagging.
@@ -946,7 +1040,7 @@ darwin_mount_point_or_die() { #Input: partition. Output: its mount point now, re
 
 darwin_flash_device() {
   is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
-  local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device copy_attempt
+  local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device copy_attempt pi3_patch=''
   sgdisk_bin="$(command -v sgdisk)" || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."
   #GUI mode authenticated at startup, while a dialog could still reach the front; prompting from here
   #would put it behind the progress window, where it can never be answered
@@ -963,9 +1057,12 @@ darwin_flash_device() {
   status "  Creating WOR_BOOT (${boot_size_mb} MB) and WOR_INSTALL (${install_size_mb} MB)"
   PART1="${DEVICE}s1"
   PART2="${DEVICE}s2"
+  [ "$RPI_MODEL" != 3 ] || pi3_patch="$PWD/peinstaller/pi3/gptpatch.img"
   #Authenticate in this shell before helpers capture their output in subshells; otherwise the
   #GUI prompt state does not survive to the final privileged disk operation.
   sudo -v || error "Administrator authentication failed or was canceled. Enter the macOS password in the WoR-Flasher dialog and try again."
+  darwin_start_partition_finalizer_or_die "$DEVICE" "$sgdisk_bin" "$pi3_patch"
+  emit_gui_progress "DISK_WRITE"$'\t'"1"$'\t'"$DEVICE"
   darwin_prepare_disk_or_die "$DEVICE" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$PART1" "$PART2"
   gui_start_sudo_keepalive
 
@@ -1026,7 +1123,7 @@ darwin_flash_device() {
   report_copy_task 90 "UEFI firmware"
   cp -RX "$PWD/pi${RPI_MODEL}-uefipackage"/* "$boot_mount" || error "Failed to copy UEFI firmware to $boot_mount"
   [ -z "$CONFIG_TXT" ] || [ "$APPLY_CUSTOM_CONFIG_TXT" != 1 ] || printf '%s\n' "$CONFIG_TXT" > "$boot_mount/config.txt"
-  [ "$RPI_MODEL" != 3 ] || sudo dd if="$PWD/peinstaller/pi3/gptpatch.img" of="/dev/r${DEVICE#/dev/}" conv=fsync || error "Failed to apply the Pi3 GPT partition-table fix to $DEVICE"
+  [ "$RPI_MODEL" != 3 ] || darwin_apply_pi3_gpt_patch_or_die
 
   if [ "$SKIP_IMAGE_VERIFICATION" == 1 ];then
     echo_red "Skipping written-image verification (SKIP_IMAGE_VERIFICATION=1). This is not recommended."
@@ -1035,10 +1132,13 @@ darwin_flash_device() {
     win_mount="$(darwin_mount_point_or_die "$PART2")"
     verify_written_image "$DEVICE" "$PART1" "$PART2" "$boot_mount" "$win_mount" "$PWD/$winfiles/install.wim"
   fi
-  darwin_finalize_partition_types_or_die "$DEVICE" "$sgdisk_bin"
+  #Retag last: macOS will not remount WOR_BOOT once partition 1 is EFI, and clearing GPT attribute
+  #bit 63 is what lets WoR-PE assign drive letters to both partitions.
+  darwin_finalize_partition_types_or_die
   darwin_verify_final_partition_types_or_die "$PART1" "$PART2"
   diskutil unmountDisk "$DEVICE" || echo_red "Warning: failed to unmount $DEVICE"
   diskutil eject "$DEVICE" || echo_red "Warning: failed to eject $DEVICE"
+  emit_gui_progress "DISK_WRITE"$'\t'"0"$'\t'"$DEVICE"
   phase "$WOR_APP_TITLE script has completed."
   cli_pause
 }
@@ -3283,7 +3383,7 @@ elif [[ "$SOURCE_FILE" == *'.ISO' ]] || [[ "$SOURCE_FILE" == *'.iso' ]];then
 
   status "Unmounting ISO file"
   if is_macos ;then
-    sudo hdiutil detach "$ISO_DEVICE" || echo_red "Warning: failed to detach $ISO_DEVICE"
+    hdiutil detach "$ISO_DEVICE" || echo_red "Warning: failed to detach $ISO_DEVICE"
   else
     sudo umount "$isomount" || echo_red "Warning: failed to unmount $isomount" #failure is non-fatal
     rmdir "$isomount" #remove mountpoint

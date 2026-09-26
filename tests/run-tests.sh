@@ -5,6 +5,7 @@
 #
 #Usage:
 #  ./tests/run-tests.sh               run the automated suite; uses Docker for Linux integration on non-Linux hosts when available
+#  ./tests/run-tests.sh --macos-auth  run only mocked macOS finalizer authorization tests; no sudo or disks
 #  ./tests/run-tests.sh --walkthrough create fake drives, then run the CLI interactively
 #  ./tests/run-tests.sh --gui         launch the GUI in DRY_RUN mode (Linux creates fake drives; macOS needs a removable drive)
 #  ./tests/run-tests-gui.sh           run the GUI walkthrough with host-specific preflight
@@ -117,8 +118,8 @@ static_checks() {
     && node --check "$REPO_DIR/src/set-version.mjs" >/dev/null 2>&1 \
     && node --check "$REPO_DIR/src/lib/node-runtime.mjs" >/dev/null 2>&1 \
     && pass "src/*.mjs and shared Node library scripts parse cleanly" || fail "Node tooling scripts have syntax errors"
-    if node --test "$REPO_DIR/tests/node-tools.test.mjs" >/dev/null 2>&1 ;then
-      pass "Node.js unit test suite passed (tests/node-tools.test.mjs)"
+    if node --test "$REPO_DIR"/tests/*.test.mjs >/dev/null 2>&1 ;then
+      pass "Node.js unit test suites passed"
     else
       fail "Node.js unit test suite failed"
     fi
@@ -155,6 +156,9 @@ static_checks() {
     && grep -qF 'register_mount_cleanup "$mntpnt/winpart"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'diskutil unmount force "$mountpoint"' "$REPO_DIR/src/lib/cleanup.sh" \
     && ! grep -qF 'sudo diskutil unmount force "$mountpoint"' "$REPO_DIR/src/lib/cleanup.sh" \
+    && grep -qF 'hdiutil detach "$mountpoint"' "$REPO_DIR/src/lib/cleanup.sh" \
+    && ! grep -qF 'sudo hdiutil detach' "$REPO_DIR/src/lib/cleanup.sh" \
+    && ! grep -qF 'sudo hdiutil detach' "$REPO_DIR/install-wor.sh" \
     && pass "all temporary mounts use the shared cleanup handler" \
     || fail "a temporary mount bypasses the shared cleanup handler"
 
@@ -276,14 +280,19 @@ static_checks() {
     || fail "CLI ASCII banner does not name WoR-Flasher"
 
   erase_line="$(grep -anF '/usr/sbin/diskutil eraseVolume MS-DOS WOR_BOOT "$part1"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
-  type_line="$(grep -anF '"$sgdisk_bin" -t 1:ef00 -c 1:WOR_BOOT -t 2:0700 -c 2:WOR_INSTALL "$raw_device"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  type_line="$(grep -anF '"$sgdisk_bin" -og' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
   verify_line="$(grep -anF 'verify_written_image "$DEVICE" "$PART1" "$PART2" "$boot_mount" "$win_mount"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
-  finalize_call_line="$(grep -anF 'darwin_finalize_partition_types_or_die "$DEVICE" "$sgdisk_bin"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  finalizer_start_line="$(grep -anF 'darwin_start_partition_finalizer_or_die "$DEVICE" "$sgdisk_bin"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  prepare_call_line="$(grep -anF '  darwin_prepare_disk_or_die "$DEVICE" "$sgdisk_bin"' "$REPO_DIR/install-wor.sh" | cut -d: -f1)"
+  finalize_call_line="$(grep -anxF '  darwin_finalize_partition_types_or_die' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
   final_verify_line="$(grep -anF 'darwin_verify_final_partition_types_or_die "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
-  [ -n "$erase_line" ] && [ -n "$type_line" ] && [ -n "$verify_line" ] && [ -n "$finalize_call_line" ] && [ -n "$final_verify_line" ] \
-    && [ "$erase_line" -lt "$type_line" ] && [ "$verify_line" -lt "$finalize_call_line" ] && [ "$finalize_call_line" -lt "$final_verify_line" ] \
-    && pass "macOS restores the EFI GPT type after copying and verifying the mounted files" \
-    || fail "macOS retags WOR_BOOT too early, or leaves it as Microsoft Basic Data"
+  [ -n "$erase_line" ] && [ -n "$type_line" ] && [ -n "$verify_line" ] && [ -n "$finalizer_start_line" ] && [ -n "$finalize_call_line" ] && [ -n "$final_verify_line" ] \
+    && [ "$type_line" -lt "$erase_line" ] && [ "$finalizer_start_line" -lt "$verify_line" ] \
+    && [ "$finalizer_start_line" -lt "$prepare_call_line" ] \
+    && [ "$verify_line" -lt "$finalize_call_line" ] && [ "$finalize_call_line" -lt "$final_verify_line" ] \
+    && grep -qF -- '-A 1:clear:63 -A 2:clear:63' "$REPO_DIR/install-wor.sh" \
+    && pass "macOS verifies the mounted files, then retags the EFI partition and clears GPT bit 63" \
+    || fail "macOS retags too early, skips clearing GPT bit 63, or leaves WOR_BOOT as Microsoft Basic Data"
 
   #shellcheck disable=SC1091
   source "$TEST_SCRIPT_DIR/run-tests-macos.sh"
@@ -918,7 +927,7 @@ SH
   [ "$(grep -cE '(^|[^n]) *sudo -v' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
     && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 1 ] \
     && grep -qF 'sudo -v || error "Administrator authentication failed or was canceled.' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'sudo -v || error "Administrator authentication failed or was canceled.'$'\n''  darwin_prepare_disk_or_die' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sudo -v || error "Administrator authentication failed or was canceled.'$'\n''  darwin_start_partition_finalizer_or_die' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Administrator access: requesting macOS password with the native WoR-Flasher dialog.' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'if command sudo -n -v >/dev/null 2>&1;then' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'export WOR_GUI_SUDO_PROMPTED=1' "$REPO_DIR/install-wor.sh" \
@@ -979,6 +988,70 @@ SH
     && pass "GUI sudo refuses a second password prompt after first use" \
     || fail "GUI sudo can still ask for a second password after preauth"
   rm -rf "$reauth_dir"
+
+  macos_auth_checks
+
+  #the late GPT retag runs through a helper started while authentication is fresh; it must wait for
+  #the go signal, retag and clear bit 63, and never touch the drive if the installer dies first
+  finalizer_dir="$(mktemp -d)"
+  cat > "$finalizer_dir/sudo" <<'SH'
+#!/bin/bash
+[ "${FINALIZER_EXIT_EARLY:-0}" == 1 ] && exit 0
+while [ "$1" == -n ];do shift; done
+[ "$1" == -v ] && exit 0
+exec "$@" </dev/null
+SH
+  cat > "$finalizer_dir/sgdisk" <<'SH'
+#!/bin/bash
+printf 'sgdisk %s\n' "$*" >> "$FINALIZER_LOG"
+SH
+  chmod +x "$finalizer_dir/sudo" "$finalizer_dir/sgdisk"
+  finalizer_log="$finalizer_dir/calls"
+  finalizer_result="$(PATH="$finalizer_dir:$PATH" FINALIZER_LOG="$finalizer_log" run_in_engine '
+    HOST_OS=Darwin RUN_MODE=gui MACOS_ASKPASS=/tmp/wor-unused-askpass WOR_GUI_SUDO_KEEPALIVE_PID=mock
+    darwin_start_partition_finalizer_or_die /dev/disk99 "$(command -v sgdisk)"
+    [ -f "$DARWIN_FINALIZE_DONE" ] && [ -O "$DARWIN_FINALIZE_DONE" ] && [ -r "$DARWIN_FINALIZE_DONE" ] && printf "precreated\n"
+    sleep 2
+    [ -s "$FINALIZER_LOG" ] && echo retagged-early
+    darwin_finalize_partition_types_or_die && echo finalized' 2>/dev/null)"
+  orphan_log="$finalizer_dir/orphan"
+  ( PATH="$finalizer_dir:$PATH" FINALIZER_LOG="$orphan_log" run_in_engine '
+    HOST_OS=Darwin RUN_MODE=gui MACOS_ASKPASS=/tmp/wor-unused-askpass WOR_GUI_SUDO_KEEPALIVE_PID=mock
+    darwin_start_partition_finalizer_or_die /dev/disk99 "$(command -v sgdisk)"
+    printf "%s\n" "$DARWIN_FINALIZE_GO" > "'"$finalizer_dir"'/orphan-go"' >/dev/null 2>&1 )
+  sleep 3
+  [ -f "$finalizer_dir/orphan-go" ] && : > "$(cat "$finalizer_dir/orphan-go")"
+  sleep 2
+  [ "$finalizer_result" == $'precreated\nfinalized' ] \
+    && grep -qF 'sgdisk -t 1:ef00 -c 1:WOR_BOOT -t 2:0700 -c 2:WOR_INSTALL /dev/rdisk99' "$finalizer_log" \
+    && grep -qF 'sgdisk -A 1:clear:63 -A 2:clear:63 /dev/rdisk99' "$finalizer_log" \
+    && [ ! -s "$orphan_log" ] \
+    && pass "the GUI finalizer works without stdin, waits for its signal, and exits with the installer" \
+    || fail "the partition finalizer retags early, skips bit 63, or outlives an aborted installer: '$finalizer_result'"
+  finalizer_start_result="$(PATH="$finalizer_dir:$PATH" FINALIZER_EXIT_EARLY=1 run_in_engine '
+    error() { printf "%s\n" "$*"; exit 1; }
+    darwin_start_partition_finalizer_or_die /dev/disk99 "$(command -v sgdisk)"
+    printf "unexpected success\n"' 2>&1)"
+  [[ "$finalizer_start_result" == *'failed to start for /dev/disk99 (worker exit 0)'* ]] \
+    && [[ "$finalizer_start_result" != *'unexpected success'* ]] \
+    && pass "a worker exiting without readiness fails before disk preparation" \
+    || fail "finalizer startup accepts a worker that never became ready: '$finalizer_start_result'"
+  rm -rf "$finalizer_dir"
+
+  finalizer_failure_dir="$(mktemp -d)"
+  finalizer_failure_result="$(FINALIZER_FAILURE_DIR="$finalizer_failure_dir" run_in_engine '
+    error() { printf "%s\n" "$*"; exit 1; }
+    DARWIN_FINALIZE_GO="$FINALIZER_FAILURE_DIR/go"
+    DARWIN_FINALIZE_DONE="$FINALIZER_FAILURE_DIR/done"
+    DARWIN_FINALIZE_LOG="$FINALIZER_FAILURE_DIR/log"
+    ( printf "mock authorization failure\n" > "$DARWIN_FINALIZE_LOG"; exit 42 ) &
+    DARWIN_FINALIZE_PID=$!
+    darwin_finalize_partition_types_or_die' 2>&1)"
+  [[ "$finalizer_failure_result" == *'status 42 without a readable result'* ]] \
+    && [[ "$finalizer_failure_result" == *'mock authorization failure'* ]] \
+    && pass "a failed finalizer preserves the worker exit status and diagnostics" \
+    || fail "a failed finalizer hides its worker failure: '$finalizer_failure_result'"
+  rm -rf "$finalizer_failure_dir"
 
   #a failed flash must leave the log behind; the GUI has no terminal to fall back on
   grep -qF 'saved_log="$(wor_log_file)"' "$REPO_DIR/install-wor-gui.sh" \
@@ -1416,13 +1489,25 @@ SH
   kill_tree_dir="$(mktemp -d)"
 
   sed -n '/^kill_process_tree() {/,/^}/p' "$REPO_DIR/install-wor-gui.sh" > "$kill_tree_dir/fn.sh"
-  printf '#!/bin/bash\nsleep 60\n' > "$kill_tree_dir/child.sh"
-  printf '#!/bin/bash\n"%s/child.sh" &\nsleep 60\n' "$kill_tree_dir" > "$kill_tree_dir/parent.sh"
+  cat > "$kill_tree_dir/child.sh" <<'SH'
+#!/bin/bash
+sleep 60 &
+printf '%s\n' "$!" >> "$KILL_TREE_PID_FILE"
+wait
+SH
+  cat > "$kill_tree_dir/parent.sh" <<'SH'
+#!/bin/bash
+"$(dirname "$0")/child.sh" &
+printf '%s\n' "$!" >> "$KILL_TREE_PID_FILE"
+wait
+SH
+  : > "$kill_tree_dir/pids"
   chmod +x "$kill_tree_dir/child.sh" "$kill_tree_dir/parent.sh"
   (
     #shellcheck disable=SC1090
     . "$kill_tree_dir/fn.sh"
-    "$kill_tree_dir/parent.sh" & tree_pid=$!
+    KILL_TREE_PID_FILE="$kill_tree_dir/pids" "$kill_tree_dir/parent.sh" & tree_pid=$!
+    printf '%s\n' "$tree_pid" >> "$kill_tree_dir/pids"
     sleep 1
     kill_process_tree "$tree_pid" 2>/dev/null
     sleep 1
@@ -1432,7 +1517,12 @@ SH
   ) >/dev/null 2>&1 \
     && pass "aborting stops the installer and every process it started" \
     || fail "aborting leaves the flash running in the background"
-  pkill -f "$kill_tree_dir/child.sh" 2>/dev/null
+  while IFS= read -r owned_pid ;do
+    if kill -0 "$owned_pid" 2>/dev/null;then
+      kill -TERM "$owned_pid" 2>/dev/null || ! kill -0 "$owned_pid" 2>/dev/null \
+        || fail "could not stop test-owned process $owned_pid"
+    fi
+  done < "$kill_tree_dir/pids"
   rm -rf "$kill_tree_dir"
 
   abort_marker_dir="$(mktemp -d)"
@@ -1460,6 +1550,204 @@ run_in_engine() { #Input: shell code. Runs it with install-wor.sh sourced and a 
       RPI_MODEL=4 BID=22631.2861 WIN_LANG=en-us DEVICE=/dev/does-not-exist
       CAN_INSTALL_ON_SAME_DRIVE=1 DL_DIR=/tmp/wor-test-dl
       '"$1"
+}
+
+macos_auth_checks() {
+  info "== macOS finalizer authorization (mocked) =="
+  local auth_dir scenario case_dir result result_status prompts cleanup_result
+  auth_dir="$(mktemp -d)" || die "Could not create the authorization-test workspace."
+  cat > "$auth_dir/sudo" <<'SH'
+#!/bin/bash
+if [ "$*" == '-A -v' ];then
+  printf 'prompt\n' >> "$AUTH_TEST_DIR/calls"
+  if [ "$AUTH_TEST_SCENARIO" == canceled ];then
+    printf 'mock password dialog canceled\n' >&2
+    exit 1
+  fi
+  printf '%s\n' "$PPID" > "$AUTH_TEST_DIR/authorized-parent"
+  exit 0
+fi
+[ "${1:-}" == -n ] || { printf 'mock sudo: refusing an interactive worker invocation\n' >&2; exit 99; }
+while [ "${1:-}" == -n ];do shift; done
+if [ "$*" == -v ] && [ "$AUTH_TEST_SCENARIO" == cached ] && [ ! -f "$AUTH_TEST_DIR/authorized-parent" ];then
+  printf '%s\n' "$PPID" > "$AUTH_TEST_DIR/authorized-parent"
+fi
+authorized_parent=''
+[ ! -f "$AUTH_TEST_DIR/authorized-parent" ] || read -r authorized_parent < "$AUTH_TEST_DIR/authorized-parent"
+if [ "$authorized_parent" != "$PPID" ];then
+  printf 'mock sudo: credentials unavailable for parent %s (authenticated parent %s)\n' "$PPID" "${authorized_parent:-none}" >&2
+  exit 1
+fi
+[ "$*" == -v ] && exit 0
+if [ "$#" != 14 ] || [ "$1" != bash ] || [ "$2" != -c ] || [ "$4" != wor-partition-finalizer ] \
+  || [ "${11}" != "$AUTH_TEST_DIR/worker/ready" ];then
+  printf 'mock sudo: refusing unexpected command or readiness path\n' >&2
+  exit 99
+fi
+printf 'worker\n' >> "$AUTH_TEST_DIR/calls"
+[ "$AUTH_TEST_SCENARIO" != early-exit ] || exit 0
+case "$AUTH_TEST_SCENARIO" in
+  pi3-expired|pi3-failure)
+    [ "$(type -P dd)" == "${AUTH_TEST_DIR%/*}/dd" ] || exit 99
+    exec "$@" </dev/null ;;
+esac
+#Simulate only the process handshake; never execute the privileged script or touch a disk.
+printf 'ready\n' > "${11}"
+attempt=0
+while [ ! -e "$8" ] && [ "$attempt" -lt 200 ];do
+  kill -0 "${10}" 2>/dev/null || exit 1
+  sleep 0.1
+  attempt=$((attempt + 1))
+done
+if [ -e "$8" ];then
+  printf '0\n' > "$9"
+  exit 0
+fi
+printf 'mock finalizer timed out waiting for the test\n' >&2
+exit 124
+SH
+  cat > "$auth_dir/dd" <<'SH'
+#!/bin/bash
+if [ "$#" != 3 ] || [ "$1" != "if=$AUTH_TEST_DIR/gptpatch.img" ] \
+  || [ "$2" != of=/dev/rdoes-not-exist ] || [ "$3" != conv=fsync ];then
+  printf 'mock dd: refusing unexpected patch arguments\n' >&2
+  exit 99
+fi
+printf 'dd\n' >> "$AUTH_TEST_DIR/disk-commands"
+if [ "$AUTH_TEST_SCENARIO" == pi3-failure ];then
+  printf 'mock dd failed\n' >&2
+  exit 42
+fi
+SH
+  chmod +x "$auth_dir/sudo" "$auth_dir/dd" || die "Could not make the authorization mocks executable."
+  for scenario in fresh cached canceled unavailable early-exit expired-after-start pi3-expired pi3-failure ;do
+    case_dir="$auth_dir/$scenario"
+    mkdir -p "$case_dir/worker" || die "Could not create the authorization-test case."
+    : > "$case_dir/calls"
+    : > "$case_dir/disk-commands"
+    printf 'mock Pi3 GPT patch\n' > "$case_dir/gptpatch.img"
+    result_status=0
+    result="$(PATH="$auth_dir:$PATH" AUTH_MOCK_SUDO="$auth_dir/sudo" AUTH_TEST_DIR="$case_dir" AUTH_TEST_SCENARIO="$scenario" run_in_engine '
+      error() { printf "%s\n" "$*"; exit 1; }
+      [ "$(type -P sudo)" == "$AUTH_MOCK_SUDO" ] || error "Refusing to use real sudo in an authorization test."
+      mktemp() {
+        [ "$*" == -d ] || return 1
+        printf "%s\n" "$AUTH_TEST_DIR/worker"
+      }
+      HOST_OS=Darwin RUN_MODE=gui MACOS_ASKPASS=/tmp/wor-unused-askpass
+      unset WOR_GUI_SUDO_KEEPALIVE_PID
+      WOR_GUI_SUDO_PROMPTED=0 WOR_GUI_PROGRESS_FILE=""
+      sudo -v || error "mock authentication was canceled"
+      if [ -n "${WOR_GUI_SUDO_KEEPALIVE_PID:-}" ];then
+        kill -STOP "$WOR_GUI_SUDO_KEEPALIVE_PID"
+        for child in $(pgrep -P "$WOR_GUI_SUDO_KEEPALIVE_PID");do
+          kill -TERM "$child" 2>/dev/null || ! kill -0 "$child" 2>/dev/null
+        done
+        kill -TERM "$WOR_GUI_SUDO_KEEPALIVE_PID"
+        kill -CONT "$WOR_GUI_SUDO_KEEPALIVE_PID"
+        wait "$WOR_GUI_SUDO_KEEPALIVE_PID"
+        error "macOS unexpectedly started a timestamp keepalive"
+      fi
+      [ "$AUTH_TEST_SCENARIO" != unavailable ] || rm -f "$AUTH_TEST_DIR/authorized-parent"
+      patch=""
+      case "$AUTH_TEST_SCENARIO" in
+        pi3-*) patch="$AUTH_TEST_DIR/gptpatch.img" ;;
+      esac
+      darwin_start_partition_finalizer_or_die /dev/does-not-exist /not-executed/sgdisk "$patch"
+      [ -s "$DARWIN_FINALIZE_READY" ] && [ -O "$DARWIN_FINALIZE_DONE" ] \
+        || error "Finalizer returned without readiness or a user-owned result file."
+      if [ -n "$patch" ];then
+        [ ! -s "$AUTH_TEST_DIR/disk-commands" ] || error "Pi3 patch ran before its signal."
+        rm -f "$AUTH_TEST_DIR/authorized-parent"
+        darwin_apply_pi3_gpt_patch_or_die
+        darwin_apply_pi3_gpt_patch_or_die
+        sleep 2
+        kill -TERM "$DARWIN_FINALIZE_PID" || error "Could not stop the mock worker."
+        wait "$DARWIN_FINALIZE_PID"
+        [ "$?" == 143 ] || error "Mock worker did not stop as requested."
+        : > "$AUTH_TEST_DIR/verify-reached"
+        printf "patched\n"
+        exit 0
+      fi
+      : > "$AUTH_TEST_DIR/prepare-reached"
+      if [ "$AUTH_TEST_SCENARIO" == expired-after-start ];then
+        rm -f "$AUTH_TEST_DIR/authorized-parent"
+        darwin_finalize_partition_types_or_die
+      else
+        : > "$DARWIN_FINALIZE_GO"
+        wait "$DARWIN_FINALIZE_PID" || error "Mock worker failed."
+      fi
+      printf "ready\n"' 2>&1)" || result_status=$?
+    prompts="$(awk '/^prompt$/ { count++ } END { print count + 0 }' "$case_dir/calls")"
+    case "$scenario" in
+      fresh|cached|expired-after-start)
+        if [ "$result_status" == 0 ] && grep -qFx ready <<<"$result" \
+          && [ -f "$case_dir/prepare-reached" ] \
+          && { [ "$scenario:$prompts" == fresh:1 ] || [ "$scenario:$prompts" == cached:0 ] || [ "$scenario:$prompts" == expired-after-start:1 ]; };then
+          pass "$scenario GUI authorization remains usable by the background finalizer"
+        else
+          fail "$scenario GUI authorization did not reach finalizer readiness (exit $result_status): $result"
+        fi ;;
+      canceled)
+        if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
+          && [[ "$result" == *'mock authentication was canceled'* ]] \
+          && ! grep -qFx worker "$case_dir/calls" && [ ! -e "$case_dir/prepare-reached" ];then
+          pass "canceling authorization does not start a finalizer or prepare the disk"
+        else
+          fail "canceled authorization reached disk preparation or prompted again: $result"
+        fi ;;
+      unavailable)
+        if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
+          && [[ "$result" == *'worker exit 1'* ]] && [[ "$result" == *'mock sudo: credentials unavailable'* ]] \
+          && ! grep -qFx worker "$case_dir/calls" && [ ! -e "$case_dir/prepare-reached" ];then
+          pass "unavailable credentials fail before preparation without a second prompt"
+        else
+          fail "unavailable credentials were hidden, prompted again, or reached preparation: $result"
+        fi ;;
+      early-exit)
+        if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
+          && [[ "$result" == *'worker exit 0'* ]] && [ ! -e "$case_dir/prepare-reached" ];then
+          pass "a successful worker exit without readiness still prevents preparation"
+        else
+          fail "an unready worker was accepted or its exit status was lost: $result"
+        fi ;;
+      pi3-expired)
+        if [ "$result_status" == 0 ] && [ "$prompts" == 1 ] && grep -qFx patched <<<"$result" \
+          && [ -f "$case_dir/verify-reached" ] && [ "$(wc -l < "$case_dir/disk-commands" | tr -d ' ')" == 1 ];then
+          pass "the Pi3 patch runs once at its signal after cached authorization expires"
+        else
+          fail "the Pi3 patch repeated, ran early, or needed fresh authorization: $result"
+        fi ;;
+      pi3-failure)
+        if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
+          && [[ "$result" == *'status 42'* ]] && [[ "$result" == *'mock dd failed'* ]] \
+          && [ ! -e "$case_dir/verify-reached" ];then
+          pass "a failed Pi3 patch preserves its error and prevents verification"
+        else
+          fail "a failed Pi3 patch was hidden or prompted for authorization again: $result"
+        fi ;;
+    esac
+    rm -f "$case_dir/authorized-parent" "$case_dir/calls" "$case_dir/prepare-reached" "$case_dir/verify-reached" \
+      "$case_dir/gptpatch.img" "$case_dir/disk-commands" "$case_dir/worker/go" "$case_dir/worker/done" \
+      "$case_dir/worker/log" "$case_dir/worker/ready" "$case_dir/worker/patch-go" "$case_dir/worker/patch-done"
+    rmdir "$case_dir/worker" "$case_dir" || die "Could not clean the authorization-test case."
+  done
+  cleanup_result="$(AUTH_CLEANUP_LOG="$auth_dir/cleanup-log" run_in_engine '
+    HOST_OS=Darwin
+    CLEANUP_DEVICES=(/dev/mock-iso)
+    hdiutil() { printf "user detach: %s %s\n" "$1" "$2" >> "$AUTH_CLEANUP_LOG"; }
+    sudo() { printf "unexpected elevation\n" >> "$AUTH_CLEANUP_LOG"; return 1; }
+    cleanup_mounts
+    cat "$AUTH_CLEANUP_LOG"' 2>&1)"
+  [ "$cleanup_result" == 'user detach: detach /dev/mock-iso' ] \
+    && pass "macOS detaches user-mounted ISO images without elevation" \
+    || fail "macOS ISO cleanup requested fresh authorization: $cleanup_result"
+  grep -qF '[ "$RPI_MODEL" != 3 ] || darwin_apply_pi3_gpt_patch_or_die' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF '|| sudo dd if="$PWD/peinstaller/pi3/gptpatch.img"' "$REPO_DIR/install-wor.sh" \
+    && pass "the macOS Pi3 flash path uses the pre-authorized patch worker" \
+    || fail "the macOS Pi3 flash still depends on a late sudo timestamp"
+  rm -f "$auth_dir/sudo" "$auth_dir/dd" "$auth_dir/cleanup-log"
+  rmdir "$auth_dir" || die "Could not clean the authorization-test workspace."
 }
 
 shared_function_checks() {
@@ -1548,7 +1836,7 @@ JSON
     && pass "a CLI run and a GUI run start from the same shipped config.txt" \
     || fail "the CLI and the GUI do not agree on the default config.txt"
 
-  if [ "$HOST_OS" == Linux ];then
+  if [ "$(uname -s)" == Linux ];then
     package_arguments="$(run_in_engine 'package_installed() { return 1; }; sudo() { printf "%s\n" "$@"; }; status() { :; }; install_packages alpha beta gamma')"
     [ "$package_arguments" == $'apt\nupdate\napt\ninstall\n-yf\nalpha\nbeta\ngamma\n--no-install-recommends' ] \
       && pass "Linux dependency installation preserves individual package arguments" \
@@ -2160,15 +2448,21 @@ expect_no_output() {
 
 for arg in "$@" ;do
   case "$arg" in
+    --macos-auth) MODE=macos-auth ;;
     --walkthrough) MODE=walkthrough ;;
     --gui) MODE=gui ;;
     --clean) MODE=clean ;;
     --full) SKIP_ESD=0 ;;
     --keep) KEEP=1 ;;
-    -h|--help) sed -n '3,12p' "$0" | sed 's/^#//' ; exit 0 ;;
+    -h|--help) sed -n '3,13p' "$0" | sed 's/^#//' ; exit 0 ;;
     *) die "Unknown option: $arg" ;;
   esac
 done
+
+if [ "$MODE" == macos-auth ];then
+  macos_auth_checks
+  summary
+fi
 
 if [ "$MODE" == clean ];then
   detach_all
@@ -2333,14 +2627,15 @@ if command -v jq >/dev/null ;then
     && grep -qF 'darwin_prepare_disk_or_die "$DEVICE" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$PART1" "$PART2"'$'\n''  gui_start_sudo_keepalive' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'darwin_mount_partition_or_die "$PART1"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'darwin_mount_partition_or_die "$PART2"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'darwin_finalize_partition_types_or_die "$DEVICE" "$sgdisk_bin"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'darwin_verify_final_partition_types_or_die "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sudo -n bash -c "$finalizer_script" wor-partition-finalizer "$device" "$sgdisk_bin" "$raw_device" "$DARWIN_FINALIZE_GO"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'if ! kill -0 "$parent_pid" 2>/dev/null;then' "$REPO_DIR/install-wor.sh" \
     && grep -qF '[ "$boot_content" == EFI ] || [ "$boot_content" == "Microsoft Basic Data" ]' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Final media verification failed: partition 1 is' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'for attempt in 1 2 3 4 5 6 7 8 9 10 ;do' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'for attempt in $(seq 1 30) ;do' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'sudo bash -s -- "$device" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$part1" "$part2"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'if sudo bash -s -- "$device" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$part1" "$part2" > "$output_file" 2>&1' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'if sudo bash -s -- "$device" "$sgdisk_bin" "$raw_device" > "$output_file" 2>&1' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF 'if sudo bash -s -- "$device" "$sgdisk_bin" "$raw_device" > "$output_file" 2>&1' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'if output="$(sudo bash -s -- "$device" "$sgdisk_bin"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'darwin_report_copy_failure "$boot_mount"' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'sudo -n touch "$probe"' "$REPO_DIR/install-wor.sh" \
@@ -2653,8 +2948,11 @@ else
       rm -rf "$clone_dir"
       if ! git clone -q --branch "$branch" "$REPO_DIR" "$clone_dir" 2>/dev/null ;then
         fail "could not clone $REPO_DIR (branch $branch) to test the update check"
-      elif ! git -C "$clone_dir" reset -q --hard HEAD~1 2>/dev/null ;then
+      elif ! parent_commit="$(git -C "$clone_dir" rev-parse --verify HEAD~1 2>/dev/null)" ;then
         skip "$branch has no earlier commit to fall behind"
+      elif ! git -C "$clone_dir" checkout -q -b "wor-test-behind-$$" "$parent_commit" \
+        || ! git -C "$clone_dir" branch -q --set-upstream-to="origin/$branch" ;then
+        fail "could not prepare a non-destructive behind-remote test branch"
       else
         behind_commit="$(git -C "$clone_dir" rev-parse HEAD)"
         printf '\n' >> "$clone_dir/README.md"

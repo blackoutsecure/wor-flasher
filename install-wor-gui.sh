@@ -147,12 +147,72 @@ kill_process_tree() { #Input: pid. Stops it and everything it started; most of t
   kill -TERM "$pid" 2>/dev/null || command sudo -n kill -TERM "$pid" 2>/dev/null
 }
 
+gui_start_disk_alert_handler() { #Runs only the optional macOS alert automation, separate from the flash and progress window.
+  {
+    wor_osascript -l JavaScript "$DIRECTORY/src/lib/macos-disk-alerts.js" \
+      "$progress_file" "$done_marker" "$abort_marker" "$installer_pid" "$disk_alert_status" \
+      > "$disk_alert_log" 2>&1
+    printf '%s\n' "$?" > "$disk_alert_done"
+  } &
+  disk_alert_pid=$!
+}
+
+gui_stop_disk_alert_handler() { #Stops only this run's user-owned helper and preserves its diagnostics after the installer exits.
+  local attempt child children='' result='' wait_status=0 forced_stop=0
+  [ -n "${disk_alert_pid:-}" ] || return 0
+  for attempt in 1 2 3 4 5 6 7 8 9 10 ;do
+    if [ -s "$disk_alert_done" ] || ! kill -0 "$disk_alert_pid" 2>/dev/null;then
+      break
+    fi
+    sleep 0.1
+  done
+  if kill -0 "$disk_alert_pid" 2>/dev/null;then
+    children="$(pgrep -P "$disk_alert_pid" 2>/dev/null)"
+    for child in $children ;do
+      kill -TERM "$child" 2>/dev/null || ! kill -0 "$child" 2>/dev/null \
+        || printf 'Warning: could not stop disk-alert helper child %s.\n' "$child" >> "$output_log"
+    done
+    kill -TERM "$disk_alert_pid" 2>/dev/null || ! kill -0 "$disk_alert_pid" 2>/dev/null \
+      || printf 'Warning: could not stop disk-alert helper %s.\n' "$disk_alert_pid" >> "$output_log"
+    for attempt in 1 2 3 4 5 6 7 8 9 10 ;do
+      kill -0 "$disk_alert_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    for child in $children "$disk_alert_pid" ;do
+      if kill -0 "$child" 2>/dev/null;then
+        forced_stop=1
+        kill -KILL "$child" 2>/dev/null || ! kill -0 "$child" 2>/dev/null \
+          || printf 'Warning: could not terminate disk-alert helper process %s.\n' "$child" >> "$output_log"
+      fi
+    done
+  fi
+  wait "$disk_alert_pid" 2>/dev/null || wait_status=$?
+  if [ -s "$disk_alert_status" ];then
+    disk_alert_warning="$(jq -r 'if .state == "warning" then .message else "" end' "$disk_alert_status")" \
+      || disk_alert_warning='Automatic Ignore status could not be read. Choose Ignore manually if the unreadable-disk alert appears.'
+  fi
+  [ ! -s "$disk_alert_done" ] || result="$(cat "$disk_alert_done")"
+  if [ "$forced_stop" == 1 ] || { [ -n "$result" ] && [ "$result" != 0 ]; } || { [ -z "$result" ] && [ "$wait_status" != 0 ] && [ "$wait_status" != 143 ]; };then
+    [ -n "$disk_alert_warning" ] || disk_alert_warning='Automatic Ignore stopped unexpectedly. Choose Ignore manually if the unreadable-disk alert appears.'
+  fi
+  [ ! -s "$disk_alert_log" ] || cat "$disk_alert_log" >> "$output_log"
+  [ -z "$disk_alert_warning" ] || printf 'Warning: %s\n' "$disk_alert_warning" >> "$output_log"
+  rm -f "$disk_alert_status" "$disk_alert_done" "$disk_alert_log"
+  disk_alert_pid=''
+}
+
 gui_start_installer() { #Starts install-wor.sh in the background and waits for it to authenticate. Sets error_marker, output_log, progress_file, done_marker, auth_marker and installer_pid.
   error_marker="$(mktemp)" || error "Failed to create a GUI error marker."
   output_log="$(mktemp)" || error "Failed to create an install log."
   progress_file="$(mktemp)" || error "Failed to create a progress file."
   done_marker="$(mktemp -u)"
   auth_marker="$(mktemp -u)"
+  disk_alert_pid='' disk_alert_warning=''
+  if is_macos;then
+    disk_alert_status="$(mktemp)" || error "Failed to create disk-alert status."
+    disk_alert_log="$(mktemp)" || error "Failed to create a disk-alert log."
+    disk_alert_done="$disk_alert_status.done"
+  fi
   #start with a clean marker; the installer creates it only if an error occurs
   rm -f "$error_marker"
 
@@ -171,6 +231,9 @@ gui_start_installer() { #Starts install-wor.sh in the background and waits for i
   #the job records its own status: a subshell cannot wait on a sibling, so waiting there returned 127 at once
   { "$cli_script" > "$output_log" 2>&1; echo $? > "$done_marker"; } &
   installer_pid=$!
+  if is_macos;then
+    gui_start_disk_alert_handler
+  fi
 
   #macOS opens progress immediately; its askpass dialog activates itself when authentication is needed.
   if [ "${GUI_PROGRESS_EARLY:-0}" != 1 ];then
@@ -1592,7 +1655,7 @@ JXA
 }
 
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice password_retry_reason privacy_guidance privacy_settings_url progress_file progress_jxa resume_at_flash saved_log step target_choice
+  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice password_retry_reason privacy_guidance privacy_settings_url progress_file progress_jxa resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning
 
   current_windows_ver='Windows 11'
   current_rpi_model=''
@@ -1907,6 +1970,8 @@ const iconPath = ObjC.unwrap(args.objectAtIndex(6))
 const appTitle = ObjC.unwrap(args.objectAtIndex(7))
 const abortMarker = ObjC.unwrap(args.objectAtIndex(8))
 const windowTitle = ObjC.unwrap(args.objectAtIndex(9) || appTitle)
+const diskAlertStatus = ObjC.unwrap(args.objectAtIndex(10))
+const diskAlertDone = ObjC.unwrap(args.objectAtIndex(11))
 
 $.NSProcessInfo.processInfo.processName = appTitle
 const app = $.NSApplication.sharedApplication
@@ -1933,7 +1998,26 @@ function lastMatch(lines, prefix) {
   return ''
 }
 
-let window, bar, taskBar, phaseLabel, detailLabel, stepLabel, stepPercentLabel, taskPercentLabel
+let window, bar, taskBar, phaseLabel, detailLabel, stepLabel, stepPercentLabel, taskPercentLabel, diskAlertLabel
+
+function updateDiskAlertStatus() {
+  try {
+    const text = readFile(diskAlertStatus)
+    if (text.length > 0) {
+      const status = JSON.parse(text)
+      diskAlertLabel.stringValue = status.message
+      diskAlertLabel.textColor = status.state === 'warning' ? $.NSColor.systemOrangeColor : $.NSColor.secondaryLabelColor
+    }
+    const result = readFile(diskAlertDone).trim()
+    if (result.length > 0 && result !== '0') {
+      diskAlertLabel.stringValue = 'Automatic Ignore is unavailable. Allow WoR-Flasher in Accessibility and Automation, or choose Ignore manually.'
+      diskAlertLabel.textColor = $.NSColor.systemOrangeColor
+    }
+  } catch (error) {
+    diskAlertLabel.stringValue = 'Automatic Ignore status is unavailable. Choose Ignore manually if the unreadable-disk alert appears.'
+    diskAlertLabel.textColor = $.NSColor.systemOrangeColor
+  }
+}
 
 //stopping part-way leaves an unbootable drive, so make the user confirm and record why we stopped
 function confirmAbort() {
@@ -1960,6 +2044,7 @@ const Controller = ObjC.registerSubclass({
             app.stopModalWithCode($.NSOKButton)
             return
           }
+          updateDiskAlertStatus()
           const content = readFile(progressFile)
           if (content.length === 0) return
           const lines = content.split('\n')
@@ -2144,6 +2229,12 @@ taskBar.maxValue = 100
 taskBar.doubleValue = 0
 content.addSubview(taskBar)
 
+diskAlertLabel = $.NSTextField.wrappingLabelWithString('Automatic Ignore is waiting for disk preparation.')
+diskAlertLabel.frame = $.NSMakeRect(20, 106, width - 40, 30)
+diskAlertLabel.font = $.NSFont.systemFontOfSizeWeight(10, $.NSFontWeightRegular)
+diskAlertLabel.textColor = $.NSColor.secondaryLabelColor
+content.addSubview(diskAlertLabel)
+
 const noteLabel = $.NSTextField.labelWithString('This window will close automatically when the process finishes.')
 noteLabel.frame = $.NSMakeRect(20, 82, width - 40, 20)
 noteLabel.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightRegular)
@@ -2175,7 +2266,7 @@ JXA
 
     gui_start_installer
 
-    wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$abort_marker" "$WOR_WINDOW_TITLE" <<<"$progress_jxa" >/dev/null 2>&1
+    wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$abort_marker" "$WOR_WINDOW_TITLE" "$disk_alert_status" "$disk_alert_done" <<<"$progress_jxa" >/dev/null 2>&1
 
     #Command-Q or a crashed/killed osascript can bypass the JXA abort handler. Never leave the flash unattended.
     [ -f "$done_marker" ] || touch "$abort_marker"
@@ -2185,6 +2276,7 @@ JXA
       #most of the work runs under sudo, so the tree has to come down with the credential we already hold
       kill_process_tree "$installer_pid"
       wait "$installer_pid" 2>/dev/null
+      gui_stop_disk_alert_handler
       rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker" "$error_marker"
       saved_log="$(gui_save_failure_log)"
       wor_show_result_notification failure
@@ -2199,6 +2291,7 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
     #the window can disappear while the flash is still going; wait for the real status instead of
     #assuming failure, which would report a bogus error and leave the flash running unattended
     wait "$installer_pid" 2>/dev/null
+    gui_stop_disk_alert_handler
 
     installer_status="$(cat "$done_marker" 2>/dev/null)"
     [ -z "$installer_status" ] && installer_status=1
@@ -2211,6 +2304,7 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
       completion_text="Process completed successfully.
 
     It is now safe to remove your USB drive."
+      [ -z "$disk_alert_warning" ] || completion_text="$completion_text"$'\n\n'"$disk_alert_warning"
     else
       #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
       saved_log="$(gui_save_failure_log)"

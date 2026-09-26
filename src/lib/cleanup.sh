@@ -13,7 +13,7 @@ cleanup_mounts() {
   done
   for mountpoint in "${CLEANUP_DEVICES[@]}" ;do
     if is_macos ;then
-      sudo hdiutil detach "$mountpoint" >/dev/null 2>&1
+      hdiutil detach "$mountpoint" >/dev/null 2>&1
     fi
   done
   local file
