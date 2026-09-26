@@ -495,7 +495,7 @@ describe("Node.js Tooling - Runtime Paths & Manifests", () => {
     );
     assert.equal(config.system.uefiVerPi4, "v1.50");
     assert.equal(config.system.driverVer, "v0.17");
-    assert.equal(config.system.repoSlug, "Botspot/wor-flasher");
+    assert.equal(config.system.repoSlug, "blackoutsecure/wor-flasher");
     //the retired git self-updater pins must not come back through the config cascade
     assert.equal(config.system.updateRepoUrl, undefined);
     assert.equal(config.system.updateRef, undefined);

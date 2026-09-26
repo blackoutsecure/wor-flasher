@@ -219,7 +219,7 @@ archive_entries_are_safe() { #Input: tar.gz archive. Reject links and paths esca
 
 check_for_runtime_update() {
   #systemDefaults.repoSlug in src/config/metadata.json is the source of truth for the update source
-  local metadata_url="${WOR_UPDATE_METADATA_URL:-https://github.com/${WOR_DEFAULT_REPO_SLUG:-Botspot/wor-flasher}/releases/latest/download/macos-runtime.json}"
+  local metadata_url="${WOR_UPDATE_METADATA_URL:-https://github.com/${WOR_DEFAULT_REPO_SLUG:-blackoutsecure/wor-flasher}/releases/latest/download/macos-runtime.json}"
   local curl_bin="${WOR_CURL_BIN:-/usr/bin/curl}"
   local work_dir metadata archive version archive_url expected_digest actual_digest staged current_version
   case "$metadata_url" in
@@ -280,7 +280,7 @@ const appTitle = ObjC.unwrap(args.objectAtIndex(6))
 const iconPath = ObjC.unwrap(args.objectAtIndex(7))
 const windowTitle = ObjC.unwrap(args.objectAtIndex(8) || appTitle)
 const licenseText = ObjC.unwrap(args.objectAtIndex(9)) || 'GPL-3.0-or-later'
-const repoSlugText = ObjC.unwrap(args.objectAtIndex(10)) || 'Botspot/wor-flasher'
+const repoSlugText = ObjC.unwrap(args.objectAtIndex(10)) || 'blackoutsecure/wor-flasher'
 const fm = $.NSFileManager.defaultManager
 $.NSProcessInfo.processInfo.processName = appTitle
 const app = $.NSApplication.sharedApplication

@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writePackageMetadata } from "./sync-package-metadata.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -101,13 +101,9 @@ if (existsSync(packageFile)) {
 }
 
 // Rebuild macOS release artifacts
-try {
-  execSync(`node "${join(scriptDir, "build-release.mjs")}" --platform=macos`, {
-    cwd: repoDir,
-    stdio: "inherit",
-  });
-} catch {
-  // Ignore build errors if staging directory is busy
-}
+execFileSync(process.execPath, [join(scriptDir, "build-release.mjs"), "--platform=macos"], {
+  cwd: repoDir,
+  stdio: "inherit",
+});
 
 console.log(`Updated WoR-Flasher version surfaces to ${cleanVersion}.`);

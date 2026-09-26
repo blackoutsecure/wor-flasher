@@ -3,12 +3,13 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
-  statSync,
+  rmSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -40,6 +41,11 @@ export function readProjectMetadata(metadataFile = defaultMetadataFile) {
   return JSON.parse(readFileSync(metadataFile, "utf8"));
 }
 
+function isSafeRuntimePath(path) {
+  return typeof path === "string" && !isAbsolute(path) &&
+    path.split(/[\\/]/).every((part) => part !== "" && part !== "." && part !== "..");
+}
+
 export function readRuntimePaths(metadataFile = defaultMetadataFile) {
   const metadata = readProjectMetadata(metadataFile);
   const runtimePaths = metadata.runtimePaths;
@@ -47,12 +53,7 @@ export function readRuntimePaths(metadataFile = defaultMetadataFile) {
     throw new Error("src/config/metadata.json must define runtimePaths");
   }
   for (const relPath of runtimePaths) {
-    if (
-      typeof relPath !== "string" ||
-      relPath.length === 0 ||
-      isAbsolute(relPath) ||
-      relPath.split(/[\\/]/).includes("..")
-    ) {
+    if (!isSafeRuntimePath(relPath)) {
       throw new Error(`Invalid runtime path in package.json: ${relPath}`);
     }
   }
@@ -60,7 +61,10 @@ export function readRuntimePaths(metadataFile = defaultMetadataFile) {
 }
 
 export function copyTree(source, target) {
-  const info = statSync(source);
+  const info = lstatSync(source);
+  if (info.isSymbolicLink() || lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new Error(`Symbolic links are not allowed in runtime copies: ${source}`);
+  }
   if (info.isDirectory()) {
     mkdirSync(target, { recursive: true });
     for (const name of readdirSync(source)) {
@@ -82,18 +86,31 @@ export function generateRuntimeManifest(
   const files = [];
 
   for (const relPath of runtimePaths) {
+    if (!isSafeRuntimePath(relPath)) {
+      throw new Error(`Invalid runtime path: ${relPath}`);
+    }
     const srcPath = join(rootSource, relPath);
     if (!existsSync(srcPath)) {
       throw new Error(`Missing required runtime path: ${relPath}`);
     }
     const destPath = join(stageRoot, relPath);
-    if (srcPath !== destPath && !existsSync(destPath)) {
+    if (resolve(srcPath) !== resolve(destPath)) {
+      let ancestor = stageRoot;
+      for (const part of ["", ...relPath.split(/[\\/]/)]) {
+        ancestor = join(ancestor, part);
+        if (lstatSync(ancestor, { throwIfNoEntry: false })?.isSymbolicLink()) {
+          throw new Error(`Symbolic link in staging path: ${ancestor}`);
+        }
+      }
+      //Only replace the declared staging path; obsolete staged files must not enter a new manifest.
+      rmSync(destPath, { recursive: true, force: true });
       copyTree(srcPath, destPath);
     }
   }
 
   function processEntry(currentPath) {
-    const info = statSync(currentPath);
+    const info = lstatSync(currentPath);
+    if (info.isSymbolicLink()) throw new Error(`Symbolic link in runtime: ${currentPath}`);
     if (info.isDirectory()) {
       for (const name of readdirSync(currentPath)) {
         processEntry(join(currentPath, name));
@@ -133,7 +150,7 @@ ${files}
 `;
 }
 
-export function verifyRuntimeManifest(appRoot) {
+export function verifyRuntimeManifest(appRoot, expectedVersion) {
   const runtimeDir = join(appRoot, "Contents", "Resources", "runtime");
   const manifestFile = join(
     appRoot,
@@ -146,12 +163,23 @@ export function verifyRuntimeManifest(appRoot) {
 
   try {
     const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
-    if (!manifest || !Array.isArray(manifest.files)) return false;
+    if (!manifest || manifest.schemaVersion !== 1 || !Array.isArray(manifest.files) || manifest.files.length === 0) return false;
+    if (expectedVersion !== undefined && manifest.version !== expectedVersion) return false;
+    if (lstatSync(runtimeDir).isSymbolicLink() || lstatSync(manifestFile).isSymbolicLink()) return false;
+    const paths = new Set();
 
     for (const entry of manifest.files) {
+      if (!entry || !isSafeRuntimePath(entry.path) || entry.path.includes("\\") ||
+        paths.has(entry.path)) return false;
+      paths.add(entry.path);
       const filePath = join(runtimeDir, entry.path);
       if (!existsSync(filePath)) return false;
-      const info = statSync(filePath);
+      let currentPath = runtimeDir;
+      for (const part of entry.path.split("/")) {
+        currentPath = join(currentPath, part);
+        if (lstatSync(currentPath).isSymbolicLink()) return false;
+      }
+      const info = lstatSync(filePath);
       if (!info.isFile()) return false;
       const sha256 = createHash("sha256")
         .update(readFileSync(filePath))

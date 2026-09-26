@@ -7,7 +7,8 @@ next version; there are no long-term support branches.
 
 | Version                        | Supported                      |
 | ------------------------------ | ------------------------------ |
-| 1.0.x                          | Yes                            |
+| 2.0.x                          | Yes                            |
+| 1.0.x                          | No                             |
 | Upstream `Botspot/wor-flasher` | Report to [upstream][upstream] |
 
 Check what you are running with:

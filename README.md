@@ -93,7 +93,7 @@ Windows, WSL and non-Debian Linux distributions are **not** supported. WoR-Flash
 ## Install
 
 ```bash
-git clone https://github.com/Botspot/wor-flasher
+git clone https://github.com/blackoutsecure/wor-flasher
 cd wor-flasher
 ./install-wor-gui.sh
 ```
@@ -222,7 +222,7 @@ Standalone bootstrap requires `git`. These variables control where the hook obta
 
 | Variable               | Default                                            | Purpose                                      |
 | ---------------------- | -------------------------------------------------- | -------------------------------------------- |
-| `WOR_HOOK_REPOSITORY`  | `https://github.com/Botspot/wor-flasher.git`       | Git repository containing the complete tool  |
+| `WOR_HOOK_REPOSITORY`  | `https://github.com/blackoutsecure/wor-flasher.git` | Git repository containing the complete tool  |
 | `WOR_HOOK_REF`         | `main`                                             | Branch or tag cloned by the hook             |
 | `WOR_HOOK_INSTALL_DIR` | `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook` | Persistent checkout used by standalone hooks |
 
@@ -413,7 +413,7 @@ git pull
 ```
 
 If you installed from a release archive, download the newer archive from the
-[releases page](https://github.com/Botspot/wor-flasher/releases) and verify it against the published
+[releases page](https://github.com/blackoutsecure/wor-flasher/releases) and verify it against the published
 `SHA256SUMS` before use.
 
 To help you notice a new version, the engine performs a **read-only** release check before setup,
@@ -661,6 +661,9 @@ These additions are maintained directly by Blackout Secure in cooperation with B
   - Added password-retry resume, configurable completion sounds and desktop notifications.
   - Corrected CI progress-test prerequisites and privileged loop-device inspection, and aligned release version lookup with the canonical JSON metadata.
   - Included README, LICENSE, and NOTICE in both packaged runtime distributions.
+  - Aligned bootstrap and update discovery with the publishing repository and enforced the documented macOS 13 minimum.
+  - Refreshed staged files on package writes, rejected linked or stale runtime manifests, and propagated version-build failures.
+  - Kept the optional Pi 4 UEFI Shell handoff independent of answer-file customization.
   - Reworked Advanced Options with a compact, dedicated `config.txt` editor.
     This maintained source uses its own version line. The product name, window title, current version, runtime file list and pinned system defaults are defined in [`src/config/metadata.json`](src/config/metadata.json), loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and checked against [`package.json`](package.json) and the macOS app property list. The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion`. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
 

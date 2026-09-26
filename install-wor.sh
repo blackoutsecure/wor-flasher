@@ -11,7 +11,7 @@
 #  Upstream WoR-Flasher: https://github.com/Botspot/wor-flasher
 #This maintained fork and source repository:
 #  Blackout Secure: https://blackoutsecure.app
-#  Repository: https://github.com/Botspot/wor-flasher
+#  Repository: https://github.com/blackoutsecure/wor-flasher
 #  Maintainer contact: https://linktr.ee/billmcilhargey
 #
 #Documentation and related projects:
@@ -49,6 +49,7 @@
 #        Detach user-mounted macOS ISO images without requesting administrator access.
 #        Automatically choose Ignore for the exact macOS unreadable-disk alert during active GUI writes.
 #        Package source notices with each runtime and derive release versions from canonical JSON metadata.
+#        Validate staged runtime freshness and allow the optional Pi4 UEFI Shell without an answer file.
 #        Added a native standalone macOS runtime, resilient disk handling, configurable completion
 #          sounds and notifications, password-retry resume, and a compact config.txt editor.
 #        macOS privacy-denial failures now expose an Open Settings action for Removable Volumes
@@ -1202,21 +1203,25 @@ configure_pe_prefinalize() { #Stages the answer file and WoR-PE's prefinalize ho
   #performs the implicit answer-file search that would find Autounattend.xml at the root of the media.
   #Its documented prefinalize.cmd hook runs with the applied Windows partition still mounted, which is
   #the only point where the answer file can be put somewhere the installed OS will read it.
-  local app_dir="$PWD/peinstaller/winpe/2" scripts_dir
+  local app_dir="$PWD/peinstaller/winpe/2" scripts_dir answer_needed=0 shell_needed=0
   [ -d "$app_dir" ] || return 0
   scripts_dir="$app_dir/scripts"
 
   #a stale hook left in the cache would keep applying settings the user has since turned off
   rm -rf "$scripts_dir"
-  unattend_xml >/dev/null 2>&1 || { remark_pe_cache; return 0; }
+  if unattend_xml >/dev/null 2>&1;then answer_needed=1; fi
+  if [ "$RPI_MODEL" == 4 ] && [ "$PI4_UEFI_SHELL_UNLOCK" == 1 ];then shell_needed=1; fi
+  [ "$answer_needed" == 1 ] || [ "$shell_needed" == 1 ] || { remark_pe_cache; return 0; }
 
   mkdir -p "$scripts_dir" || return 1
-  unattend_xml > "$scripts_dir/unattend.xml" || return 1
+  if [ "$answer_needed" == 1 ];then
+    unattend_xml > "$scripts_dir/unattend.xml" || return 1
+  fi
   #the specialize action runs on the installed OS, so its script has to travel there too
   if [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ];then
     read_config_template pi4-ram-unlock.ps1 > "$scripts_dir/Pi4Disable3GB.ps1" || return 1
   fi
-  if [ "$RPI_MODEL" == 4 ] && [ "$PI4_UEFI_SHELL_UNLOCK" == 1 ];then
+  if [ "$shell_needed" == 1 ];then
     prepare_uefi_shell || return 1
     cp "$PWD/uefi-shell/Shell.efi" "$scripts_dir/Shell.efi" || return 1
   fi

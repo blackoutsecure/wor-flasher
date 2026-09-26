@@ -50,10 +50,15 @@ if (mode === "--check") {
       "Generated macOS app or runtime manifest is missing; run npm run build:macos.",
     );
   }
-  if (!verifyRuntimeManifest(appRoot)) {
+  if (!verifyRuntimeManifest(appRoot, version)) {
     fail(
       "Embedded macOS runtime manifest is invalid or stale; run npm run build:macos.",
     );
+  }
+  const staged = JSON.parse(readFileSync(manifestFile, "utf8"));
+  const canonical = generateRuntimeManifest(repoDir, version, readRuntimePaths(), repoDir);
+  if (JSON.stringify(staged.files) !== JSON.stringify(canonical.files)) {
+    fail("Embedded macOS runtime does not match canonical source; run npm run build:macos.");
   }
   console.log(`Embedded macOS runtime is current (${version}).`);
 } else if (mode === "--write") {

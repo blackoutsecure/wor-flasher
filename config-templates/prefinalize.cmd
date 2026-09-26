@@ -14,14 +14,14 @@
 set answerSource=%~dp0unattend.xml
 set pantherDir=%WOR_DISK_WINDOWSPARTITION%\Windows\Panther
 
-if not exist "%answerSource%" (
-  call :RaiseEvent LogWarn, "No answer file to install; leaving Windows setup unattended settings alone."
-  goto :end
-)
-
 if not exist "%WOR_DISK_WINDOWSPARTITION%\Windows\" (
   call :RaiseEvent LogWarn, "No Windows directory on %WOR_DISK_WINDOWSPARTITION%; skipping answer file."
   goto :end
+)
+
+if not exist "%answerSource%" (
+  call :RaiseEvent LogWarn, "No answer file to install; leaving Windows setup unattended settings alone."
+  goto :stage_shell
 )
 
 call :RaiseEvent LogInfo, "Installing offline setup answer file..."
@@ -31,7 +31,7 @@ if not exist "%pantherDir%\" mkdir "%pantherDir%"
 copy /y "%answerSource%" "%pantherDir%\unattend.xml" >nul
 if errorlevel 1 (
   call :RaiseEvent LogWarn, "Could not write the answer file; Windows setup will ask for a network."
-  goto :end
+  goto :stage_shell
 )
 
 call :RaiseEvent LogInfo, "Answer file installed to %pantherDir%\unattend.xml"
@@ -50,7 +50,7 @@ if not exist "%scriptsDir%\" mkdir "%scriptsDir%"
 copy /y "%ramUnlockSource%" "%scriptsDir%\Pi4Disable3GB.ps1" >nul
 if errorlevel 1 (
   call :RaiseEvent LogWarn, "Could not install the Pi 4 RAM unlock; the 3 GB limit will stay enabled."
-  goto :end
+  goto :stage_shell
 )
 
 call :RaiseEvent LogInfo, "Pi 4 RAM unlock installed to %scriptsDir%\Pi4Disable3GB.ps1"

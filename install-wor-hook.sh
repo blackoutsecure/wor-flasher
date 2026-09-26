@@ -36,7 +36,7 @@ hook_checkout_complete() { #Input: checkout directory. Output: success when ever
 }
 
 if ! hook_checkout_complete "$SCRIPT_DIR" ;then
-  : "${WOR_HOOK_REPOSITORY:=https://github.com/Botspot/wor-flasher.git}"
+  : "${WOR_HOOK_REPOSITORY:=https://github.com/blackoutsecure/wor-flasher.git}"
   #a released hook must clone a durable ref; working branches are deleted after merge
   : "${WOR_HOOK_REF:=main}"
   : "${WOR_HOOK_INSTALL_DIR:=${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook}"

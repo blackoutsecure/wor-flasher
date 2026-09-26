@@ -118,11 +118,11 @@ function worAppVersion(windowTitle, appTitle) {
 }
 
 //macOS does not deliver app-menu action dispatch to ANY item - custom or native, including Quit -
-//while a screen's own app.runModalForWindow session is active (every screen using this menu is one
+//while the screen-specific app.runModalForWindow session is active (every screen using this menu is one
 //of those). A clickable-looking item that silently does nothing on click is worse than a disabled,
 //informational one, so this shows the product name and version only; Quit remains reachable through
 //the Dock, Cmd-Q (handled separately via Apple Events, see worInstallWindowHandlers) and each
-//screen's own Cancel/Abort/close-box button.
+//screen-specific Cancel/Abort/close-box button.
 function worInstallAppMenu(app, appTitle, windowTitle, iconPath) {
   const mainMenu = $.NSMenu.alloc.initWithTitle(appTitle)
   const appMenuItem = $.NSMenuItem.alloc.init

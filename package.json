@@ -5,13 +5,13 @@
   "type": "module",
   "description": "Release tooling for WoR-Flasher packaging; disk flashing remains in the shell engine.",
   "license": "GPL-3.0-or-later",
-  "homepage": "https://github.com/Botspot/wor-flasher#readme",
+  "homepage": "https://github.com/blackoutsecure/wor-flasher#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Botspot/wor-flasher.git"
+    "url": "git+https://github.com/blackoutsecure/wor-flasher.git"
   },
   "bugs": {
-    "url": "https://github.com/Botspot/wor-flasher/issues"
+    "url": "https://github.com/blackoutsecure/wor-flasher/issues"
   },
   "funding": [
     {

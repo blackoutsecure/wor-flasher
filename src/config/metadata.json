@@ -19,7 +19,7 @@
       "https://github.com/sponsors/blackoutsecure"
     ],
     "bundleIdentifier": "com.botspot.wor-flasher",
-    "minimumMacosVersion": "12.0",
+    "minimumMacosVersion": "13.0",
     "iconName": "WoR-Flasher",
     "iconFilename": "WoR-Flasher.icns",
     "assetsDirname": "assets",
@@ -43,7 +43,7 @@
     "win10OldestBuild": "17134.112",
     "exampleBid": "22621.525",
     "armv80SafeBid": "22631.2861",
-    "repoSlug": "Botspot/wor-flasher",
+    "repoSlug": "blackoutsecure/wor-flasher",
     "logDirname": "logs"
   },
   "runtimePaths": [
