@@ -1,795 +1,732 @@
-# ![app icon](https://github.com/Botspot/wor-flasher/blob/main/logo.png?raw=true) WoR-flasher
+<a href="https://github.com/Botspot/pi-apps"><img src="https://github.com/Botspot/pi-apps/raw/master/icons/badge.png?raw=true" align="right" alt="Available on Pi-Apps"/></a>
 
-**Use a Linux machine to install Windows 10 or Windows 11 on a Raspberry Pi SD card.**
+# ![WoR-Flasher logo](assets/logo-full.png) WoR-Flasher
 
-> [!IMPORTANT]
-> **This repository is looking for a maintainer.**
-> I don't use wor-flasher personally, and I don't have the time to maintain it. If you use wor-flasher, and you can read and understand the script, please contact me somehow and I can grant you write privileges to the repository.
+![Maintainer partnership banner](assets/partnership.png)
 
-> [!TIP]
-> **Consider [the BVM project](https://github.com/Botspot/bvm) instead, especially on a Pi 4 or older.**
->
-> BVM runs Windows 11 ARM64 in a KVM virtual machine alongside Linux instead of replacing it. Because networking, audio, and USB are passed through from the host, Wi-Fi and sound work out of the box - neither of which bare-metal Windows on a Raspberry Pi supports today. Microsoft's Prism emulator also lets x86 and x64 applications run.
->
-> It does **not** lift the Windows version ceiling. On hardware without ARMv8.1, such as the Pi 4 and older, BVM pins Windows 11 to build `22631.2861` for exactly the same CPU reason described in [The ARMv8.1 limitation](#the-armv81-limitation). No tool can work around that, since it is a property of the processor. BVM requires an ARM64 Linux with the `kvm` kernel module.
+[![Version](https://img.shields.io/badge/version-2.0.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
+[![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=555555&logo=githubactions&logoColor=ffffff&color=0a7ea4&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
+[![License](https://img.shields.io/badge/license-GPL--3.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnu&logoColor=ffffff)](LICENSE)
+[![Platform](https://img.shields.io/badge/host-Linux%20%7C%20macOS-0a7ea4?style=for-the-badge&labelColor=555555&logo=linux&logoColor=ffffff)](#requirements)
+[![Shell](https://img.shields.io/badge/written%20in-bash-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnubash&logoColor=ffffff)](install-wor.sh)
 
-In 2020, this was flat-out impossible.  
-In 2021, this required following [a complicated tutorial](https://worproject.com/guides/how-to-install/from-other-os).  
-Now, using the new WoR-flasher, it's a _piece of cake_.
+[![Discord](https://img.shields.io/badge/Discord-Botspot%20Software-5865F2?style=for-the-badge&labelColor=555555&logo=discord&logoColor=ffffff)](https://discord.gg/RXSTvaUvuu)
+[![Sponsor](https://img.shields.io/badge/sponsor-Botspot-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/Botspot)
+[![Sponsor](https://img.shields.io/badge/sponsor-Blackout%20Secure-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/blackoutsecure)
+[![Blackout Secure](https://img.shields.io/badge/maintained%20by-Blackout%20Secure-0a7ea4?style=for-the-badge&labelColor=555555&logo=shieldsdotio&logoColor=ffffff)](https://blackoutsecure.app)
 
-**[Get started](#getting-started)** · **[Find your Pi](#supported-devices)** · **[Troubleshooting](#troubleshooting)** · **[Get help](#getting-help)**
+> [!NOTE]
+> [Blackout Secure](https://blackoutsecure.app/) is proud to partner with [Botspot](https://github.com/Botspot) and the [Windows on R](https://worproject.com/) community as part of this endeavour. Together, we are carrying WoR-Flasher forward while keeping Botspot's original authorship, project direction, and community connections visible.
+
+Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi from Linux or macOS.
+
+WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and available drivers, writes the target drive, and verifies the finished result. It automates the manual process described in worproject's [How to install from other OSes](https://worproject.com/guides/how-to-install/from-other-os) guide.
+
+> [!WARNING]
+> Flashing erases the selected drive. Check the device carefully, keep the computer powered, and do not remove the drive until verification and ejection finish.
+
+---
 
 ## Table of contents
 
-- [ WoR-flasher](#-wor-flasher)
-  - [Table of contents](#table-of-contents)
-  - [Features](#features)
+- [Table of contents](#table-of-contents)
+  - [Compatibility](#compatibility)
   - [Requirements](#requirements)
-  - [Windows compatibility](#windows-compatibility)
-    - [The ARMv8.1 limitation](#the-armv81-limitation)
-    - [End of support](#end-of-support)
-    - [Preinstalled apps](#preinstalled-apps)
-  - [Supported devices](#supported-devices)
-    - [Raspberry Pi 3 / Pi 2 v1.2](#raspberry-pi-3--pi-2-v12)
-    - [Raspberry Pi 4 / Pi 400](#raspberry-pi-4--pi-400)
-      - [The 3 GB RAM limit](#the-3-gb-ram-limit)
-    - [Raspberry Pi 5](#raspberry-pi-5)
-    - [If you need Wi-Fi or graphics acceleration](#if-you-need-wi-fi-or-graphics-acceleration)
-  - [Getting started](#getting-started)
-    - [Choosing a drive](#choosing-a-drive)
-    - [Install from Pi-Apps](#install-from-pi-apps)
-    - [Install manually](#install-manually)
-    - [Download a single script](#download-a-single-script)
+  - [Install](#install)
+  - [Pi-Apps](#pi-apps)
+  - [Usage](#usage)
     - [Graphical interface](#graphical-interface)
+      - [macOS walkthrough](#macos-walkthrough)
     - [Terminal interface](#terminal-interface)
+    - [Non-interactive use](#non-interactive-use--json-configuration)
+  - [Integration adapter](#integration-adapter)
+  - [Parameters](#parameters)
+  - [Application setup](#application-setup)
+    - [Existing Windows ISO](#existing-windows-iso)
+    - [Pi 4 RAM unlock](#pi-4-ram-unlock)
+    - [Offline Windows setup](#offline-windows-setup)
+    - [Customization templates](#customization-templates)
+    - [WoR-PE options](#wor-pe-options)
+    - [Download cache](#download-cache)
+  - [What to expect](#what-to-expect)
+  - [Updating](#updating)
   - [Troubleshooting](#troubleshooting)
-    - [The Pi is stuck on the rainbow screen](#the-pi-is-stuck-on-the-rainbow-screen)
-    - [The Pi reaches the UEFI splash screen, then freezes](#the-pi-reaches-the-uefi-splash-screen-then-freezes)
-    - [The keyboard does not work in UEFI](#the-keyboard-does-not-work-in-uefi)
-    - [The Pi boots straight to "Starting PXE over IPv4" / the Boot Manager only lists network options](#the-pi-boots-straight-to-starting-pxe-over-ipv4--the-boot-manager-only-lists-network-options)
-    - [Only 3 GB of RAM is available](#only-3-gb-of-ram-is-available)
-    - [Getting more detail](#getting-more-detail)
-  - [Scripting reference](#scripting-reference)
-    - [Environment variable options](#environment-variable-options)
-      - [Advanced tuning variables](#advanced-tuning-variables)
-    - [Functions](#functions)
-    - [Example function and variable usage](#example-function-and-variable-usage)
+  - [Development](#development)
+    - [Repository layout](#repository-layout)
+  - [Support](#support)
+  - [Maintainer partnership](#maintainer-partnership)
+  - [What this maintained source adds](#what-this-maintained-source-adds)
+  - [Related resources](#related-resources)
+  - [Versions](#versions)
   - [Contributing](#contributing)
-  - [Is this legal?](#is-this-legal)
+  - [Contributors](#contributors)
   - [License](#license)
-  - [Getting help](#getting-help)
-  - [Credits](#credits)
-  - [Sources](#sources)
 
-## Features
+---
 
-**Windows images**
+## Compatibility
 
-- Downloads Windows 10 and Windows 11 ARM64 directly from Microsoft's update servers, so no copyrighted files are redistributed. See [Is this legal?](#is-this-legal).
-- Pick the newest release automatically, or choose an exact build number.
-- Supports [37 languages](https://worproject.com/), selectable at flash time.
-- Import your own ARM64 ISO instead, via the `SOURCE_FILE` variable.
-- Extracted images are cached per build and language, so repeat flashes skip the lengthy download and image-generation step.
+| Raspberry Pi         | Newest usable Windows 11 | Limitations                                                                                                                                                                                   |
+| -------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pi 2 v1.2, Pi 3, CM3 | 23H2 (`22631.x`)         | No Wi-Fi or graphics acceleration; Windows 10 is usually faster                                                                                                                               |
+| Pi 4, Pi 400         | 23H2 (`22631.x`)         | No Wi-Fi or graphics acceleration; RAM is limited to 3 GB by default                                                                                                                          |
+| CM4                  | 23H2 (`22631.x`)         | Known to freeze at the UEFI boot screen on some units ([pftf/RPi4#146](https://github.com/pftf/RPi4/issues/146)); USB requires the RAM limit set to 1 GB, and PCIe does not work              |
+| Pi 5                 | 25H2 and newer           | Community/unofficial support only ([worproject FAQ](https://worproject.com/faq#is-raspberry-pi-5-or-newer-supported)); no native Pi hardware drivers; USB Ethernet is required for networking |
 
-**Hardware awareness**
-
-- Detects which Windows builds the target Pi can actually boot and hides the rest. See [The ARMv8.1 limitation](#the-armv81-limitation).
-- Downloads the matching [UEFI firmware](https://github.com/pftf/RPi4/releases) and [ARM64 drivers](https://github.com/worproject/RPi-Windows-Drivers/releases) for the chosen model, newest release by default with pinned fallbacks.
-- Injects the drivers into the Windows PE boot image automatically.
-- Verifies every download against an upstream SHA1 or SHA256 hash.
-
-**Flashing**
-
-- Creates either an installation drive that installs Windows onto itself, or a recovery drive that installs onto other disks. See [Choosing a drive](#choosing-a-drive).
-- Customizes `config.txt` for overclocking or display tweaks via the `CONFIG_TXT` variable.
-- Optionally downloads everything to a RAM disk to spare your SD card, using [More RAM](https://pi-apps.io/install-app/install-more-ram-on-raspberry-pi/) from Pi-Apps.
-
-**Interfaces**
-
-- Graphical wizard (`install-wor-gui.sh`) and terminal interface (`install-wor.sh`).
-- Fully scriptable through [environment variables](#environment-variable-options), including a `DRY_RUN` mode.
-- Sourceable as a library of [shell functions](#functions) for use in larger scripts.
-- Self-updates from GitHub on each run, unless `NO_UPDATE=1` is set.
+Pi 3 and Pi 4 cannot run builds newer than `25163`, because those builds require ARMv8.1 atomics. WoR-Flasher rejects incompatible builds. Windows versions that run on these models are past end of support and should be treated as experimental or offline systems.
 
 ## Requirements
 
-WoR-flasher runs on a Linux machine and flashes a drive that you then move to a Raspberry Pi. The table below is about the **computer running the flasher**, not the Pi.
+| Requirement  | Detail                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Host OS      | Raspberry Pi OS, Debian, Ubuntu, Linux Mint or another Debian-based Linux; or macOS 13+ with [Homebrew](https://brew.sh/) |
+| Privileges   | Administrator or `sudo` access                                                                                            |
+| Network      | Internet access, unless every required file is already cached                                                             |
+| Free space   | About 10 GB in the download directory                                                                                     |
+| Target drive | At least 8 GB                                                                                                             |
+| Display      | A desktop session, for the graphical interface only                                                                       |
 
-| Host operating system                                     | CLI | GUI | Notes                                                                                                                                                                                                                                          |
-| --------------------------------------------------------- | --- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Raspberry Pi OS (32 or 64-bit)                            | Yes | Yes | The only system upstream tests against                                                                                                                                                                                                         |
-| Debian, Ubuntu, Linux Mint and other Debian-based distros | Yes | Yes | ARM or x86_64. The CLI works over a terminal or SSH; the GUI works on desktop sessions with `yad` and a supported terminal emulator such as GNOME Terminal                                                                                     |
-| Fedora, Arch, openSUSE and other non-Debian Linux         | No  | No  | Dependencies are installed with `apt`, and installed packages are detected by reading the dpkg database                                                                                                                                        |
-| macOS                                                     | No  | No  | The CLI and GUI now fail early with a clear message, but the flashing backend still requires Linux block-device and filesystem tools such as `lsblk`, `findmnt`, `parted`, `mkfs.fat`, `mkfs.exfat`, `mount.exfat-fuse`, `modprobe` and `/sys` |
-| Windows                                                   | No  | No  | Requires Linux block-device and filesystem tooling                                                                                                                                                                                             |
-| Windows with WSL2                                         | No  | No  | WSL2 does not expose removable drives by default, so assume it does not work                                                                                                                                                                   |
+Dependencies are installed automatically on supported hosts.
 
-You also need:
+Windows, WSL and non-Debian Linux distributions are **not** supported. WoR-Flasher deliberately refuses to run under WSL: WSL cannot reach USB drives directly, and the drives it does list are WSL's own virtual disks, so erasing one would damage the WSL installation. On Windows, use the official [Windows on Raspberry Imager](https://worproject.com/downloads) instead.
 
-- **`sudo` access**, for partitioning and mounting the target drive
-- **About 10 GB of free space** in the download directory, for the Windows image and the files extracted from it
-- **A target drive of at least 8 GB.** See [Choosing a drive](#choosing-a-drive)
-- **A desktop session** if you want the graphical interface, since it needs `yad` and a terminal emulator. Ubuntu Desktop's default GNOME Terminal is supported. The terminal interface works over SSH
-- **A Raspberry Pi 2 v1.2, 3, 4, 400, or 5** to run Windows on
-
-> [!WARNING]
-> Flashing erases the target drive completely. Botspot (the developer of this tool) cannot be held responsible for data loss.
-
-## Windows compatibility
-
-| Pi model               | CPU        | Architecture | Newest Windows 11 that boots | End of support                                                                                    | Notes                                                 |
-| ---------------------- | ---------- | ------------ | ---------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Pi 2 v1.2 / Pi 3 / CM3 | Cortex-A53 | ARMv8.0      | 23H2 (`22631.x`)             | [November 11, 2025](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) | Windows 10 recommended                                |
-| Pi 4 / Pi 400          | Cortex-A72 | ARMv8.0      | 23H2 (`22631.x`)             | [November 11, 2025](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) | [RAM limited to 3 GB](#the-3-gb-ram-limit) by default |
-| Pi 5                   | Cortex-A76 | ARMv8.2      | 25H2 and newer               | [October 12, 2027](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro)  | No Windows drivers yet                                |
-
-CPU and architecture data from the [Raspberry Pi processor documentation](https://www.raspberrypi.com/documentation/computers/processors.html). Support dates from [Microsoft Lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro).
-
-### The ARMv8.1 limitation
-
-> [!IMPORTANT]
-> **Windows 11 builds newer than 25163 cannot run on the Pi 3 or Pi 4.** Those builds make extensive use of the atomic instructions introduced in ARMv8.1, which the Cortex-A53 and Cortex-A72 do not implement.
-
-The symptom is distinctive: the Pi reaches the UEFI splash screen normally, then hangs with no error message the moment the bootloader hands off to Windows. In practice this means 23H2 (`22631.x`) is the newest retail release that works, since 24H2 is build 26100. The Pi 5's Cortex-A76 is ARMv8.2 and is unaffected.
-
-WoR-flasher enforces this automatically. When the target is a Pi 3 or Pi 4, incompatible builds are hidden from the version menus, `get_bid` returns the newest build that will actually boot, and flashing aborts with an explanation if an incompatible build is supplied via the `BID` variable. The cutoff is controlled by the [`ARMV80_MAX_BUILD`](#advanced-tuning-variables) variable.
-
-Source: [Windows on Raspberry FAQ](https://worproject.com/faq), "Does Windows 11 work?" - build 25163 is documented there as the last one that boots on the Pi 4 and older.
-
-### End of support
-
-End-of-support dates in the table are for the newest bootable build, Home and Pro editions. Enterprise and Education editions are supported longer. If you run Windows 10 instead, its support ended [October 14, 2025](https://learn.microsoft.com/en-us/lifecycle/products/windows-10-home-and-pro).
-
-Source: [Windows 11](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro) and [Windows 10](https://learn.microsoft.com/en-us/lifecycle/products/windows-10-home-and-pro) lifecycle pages, and the [Enterprise and Education](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-enterprise-and-education-version-21h2) equivalent.
-
-> [!WARNING]
-> Every Windows version a Pi 3 or Pi 4 can run is now past end of support and no longer receives security updates. This is fine for an experimental or offline machine, but worth knowing before putting one on a network you care about.
-
-### Preinstalled apps
-
-WoR-Flasher cannot debloat the OS. Performance is about the same either way, but there will be extra preinstalled apps you must remove manually if you want them gone.
-
-## Supported devices
-
-Windows on a Raspberry Pi relies on a community driver package rather than vendor drivers, so a fair amount of hardware is unavailable or degraded. Find your model below.
-
-> [!NOTE]
-> The [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers) project was archived in February 2025 and is read-only. Version 0.17 is the final release, so these tables are final too. See the [status page](https://github.com/worproject/RPi-Windows-Drivers#status) for the full per-device breakdown.
-
-### Raspberry Pi 3 / Pi 2 v1.2
-
-**Cortex-A53, ARMv8.0.** Newest bootable Windows: 23H2 (`22631.x`), though Windows 10 is recommended on this hardware.
-
-| Hardware                  | Status      | Notes                                                                                       |
-| ------------------------- | ----------- | ------------------------------------------------------------------------------------------- |
-| Onboard Ethernet          | Working     | LAN9514 on the Pi 3 B, LAN7515 on the Pi 3 B+                                               |
-| Wi-Fi                     | Not working | No driver exists for the CYW43438 or CYW43455 chips                                         |
-| Bluetooth                 | Partial     | Bus speed is limited because hardware flow control is not exposed, and the driver may crash |
-| USB 2.0                   | Working     |                                                                                             |
-| SD card                   | Working     |                                                                                             |
-| Display                   | Working     | Basic frame buffer only, no acceleration                                                    |
-| GPU / 3D acceleration     | Not working | The driver loads but is unfinished, so 3D and WebGL do not work                             |
-| HDMI audio                | Not working | No driver available                                                                         |
-| Analog audio jack         | Working     |                                                                                             |
-| GPIO, SPI, I2C, PWM, UART | Working     |                                                                                             |
-| CSI camera module         | Not working | No driver available                                                                         |
-| 7-inch DSI touch screen   | Partial     | The display works but the resolution may be wrong, and touch input does not                 |
-| 3-pin case fan            | Partial     | The UEFI can switch it on, but it never switches off                                        |
-
-Source: [RPi-Windows-Drivers status page](https://github.com/worproject/RPi-Windows-Drivers#status), Raspberry Pi 3 (ARM64) section.
-
-### Raspberry Pi 4 / Pi 400
-
-**Cortex-A72, ARMv8.0.** Newest bootable Windows: 23H2 (`22631.x`).
-
-| Hardware                  | Status      | Notes                                                                                    |
-| ------------------------- | ----------- | ---------------------------------------------------------------------------------------- |
-| Onboard Ethernet          | Working     | Broadcom GENET gigabit controller                                                        |
-| Wi-Fi                     | Not working | No driver exists for the CYW43455 chip                                                   |
-| Bluetooth                 | Working     |                                                                                          |
-| USB 2.0                   | Partial     | The OTG controller requires RAM limited to 1 GB                                          |
-| USB 3.0                   | Partial     | UASP is disabled so USB 3.0 drives can boot, which significantly reduces transfer speeds |
-| SD card                   | Partial     | The eMMC2 controller lacks DMA, HS200/HS400 and UHS-I                                    |
-| Display                   | Working     | Basic frame buffer only, no acceleration                                                 |
-| GPU / 3D acceleration     | Not working | The driver loads but is unfinished, so 3D and WebGL do not work                          |
-| HDMI audio                | Partial     | The HDMI0 port only, which is the one next to the USB-C connector                        |
-| Analog audio jack         | Working     |                                                                                          |
-| GPIO, SPI, I2C, PWM, UART | Working     |                                                                                          |
-| CSI camera module         | Not working | No driver available                                                                      |
-| 7-inch DSI touch screen   | Partial     | The display works but the resolution may be wrong, and touch input does not              |
-| 3-pin case fan            | Partial     | The UEFI can switch it on, but it never switches off                                     |
-
-Source: [RPi-Windows-Drivers status page](https://github.com/worproject/RPi-Windows-Drivers#status), Raspberry Pi 4 / 400 (ARM64) section. Firmware from [pftf/RPi4](https://github.com/pftf/RPi4).
-
-#### The 3 GB RAM limit
-
-The UEFI firmware limits the Pi 4 to 3 GB of usable RAM by default, regardless of whether your board has 4 GB or 8 GB. This is a conservative default, not a permanent restriction.
-
-You can change it whenever you like - before installing Windows, or at any point after setup has finished. The setting lives in the UEFI firmware rather than in Windows, so it persists across reboots and changing it never requires reinstalling.
-
-To use the full amount of RAM:
-
-1. Keep pressing <kbd>ESC</kbd> after plugging in the power cord, until you see the UEFI setup screen.
-2. Go to `Device Manager` → `Raspberry Pi Configuration` → `Advanced Configuration`.
-3. Change `Limit RAM to 3 GB` to `Disabled`.
-4. Press <kbd>ESC</kbd> several times to go back, then <kbd>Y</kbd> to save when prompted, and reboot.
-
-See the [Windows on Raspberry FAQ](https://worproject.com/faq) for details, under "Only 3 GB of RAM are available. How can I fix this?".
-
-> [!NOTE]
-> On the Compute Module 4, USB support requires a RAM limit, so leave this setting enabled there.
-
-### Raspberry Pi 5
-
-**Cortex-A76, ARMv8.2.** The only model that can run Windows 11 24H2 and newer.
-
-There are **no drivers at all**. WoR-flasher injects a placeholder file purely so the installer will boot, so assume nothing in the tables above applies.
-
-| Hardware                | Status      | Notes                                    |
-| ----------------------- | ----------- | ---------------------------------------- |
-| Everything              | Not working | No driver package exists for the Pi 5    |
-| USB to Ethernet adapter | Working     | The only practical way to get networking |
-
-SD card boot seems more reliable than USB on this model. The WoR developers have [stated](https://worproject.com/faq) they no longer offer support for Raspberry Pi boards, so this is unlikely to change.
-
-Source: [worproject/rpi5-uefi](https://github.com/worproject/rpi5-uefi), which provides the Pi 5 firmware, and the [Windows on Raspberry FAQ](https://worproject.com/faq).
-
-### If you need Wi-Fi or graphics acceleration
-
-Neither works on any model and neither is coming. [BVM](https://github.com/Botspot/bvm) runs Windows in a VM where the Linux host owns the hardware, so Wi-Fi, audio and USB are passed through and work normally.
-
-Source: [BVM](https://github.com/Botspot/bvm). Note that BVM pins the Pi 4 to build `22631.2861` for the same CPU reason described above, so it does not raise the Windows version ceiling.
-
-## Getting started
-
-### Choosing a drive
-
-The size of the drive you flash determines what it can do:
-
-| Drive size      | What it can do                                                                    |
-| --------------- | --------------------------------------------------------------------------------- |
-| 25 GB or larger | Installation drive - can install Windows onto itself                              |
-| 8 GB to 25 GB   | Recovery drive - can only install Windows onto **other drives larger than 16 GB** |
-| Under 8 GB      | Too small to be usable                                                            |
-
-WoR-flasher detects this from the selected drive. If the drive is 25 GB or larger, the terminal and graphical interfaces ask whether to make a self-installing drive or a recovery drive. Smaller usable drives automatically use recovery mode.
-
-### Install from Pi-Apps
-
-The fastest way to get WoR-flasher running on a RPi is by using the [Pi-Apps app store for Raspberry Pi](https://github.com/Botspot/pi-apps):  
-[![badge](https://github.com/Botspot/pi-apps/blob/master/icons/badge.png?raw=true)](https://github.com/Botspot/pi-apps)  
-Installing WoR-flasher from Pi-Apps has several advantages: it creates a convenient button in the Start menu, uninstalling takes one click, and updates are handled seamlessly.
-
-### Install manually
+## Install
 
 ```bash
-git clone https://github.com/Botspot/wor-flasher
+git clone https://github.com/blackoutsecure/wor-flasher
+cd wor-flasher
+./install-wor-gui.sh
 ```
 
-This will download the scripts to a new directory named `wor-flasher`.  
-**Dependencies:** No need to install packages manually on supported Debian-based systems. Running the script will automatically install these: `yad` `aria2` `cabextract` `wimtools` `chntpw` `genisoimage` `exfat-fuse` `exfatprogs` or `exfat-utils`, `wget`, `udftools`, `bc`, `parted`, `dosfstools`, `unzip`, and `git`.
+On macOS, Finder users can instead double-click the generated **WoR-Flasher.app** from a release download, or run `npm run build:macos` in a checkout and open `release/macos/WoR-Flasher.app`. The app opens the same native GUI without leaving a Terminal window open. Keep the entire `.app` bundle together when moving it.
 
-### Download a single script
+WoR-Flasher runs one GUI session per signed-in user, even if more than one checkout or version is present. Opening the app again brings the current macOS window forward instead of starting another installer workflow.
 
-`install-wor.sh` is self-contained, so you can fetch just that file and run it:
+For command-line use, use the complete repository. Neither script is designed to be downloaded on its own or piped into Bash. The standalone macOS application carries a generated, integrity-checked copy of that same repository runtime rather than a second implementation.
 
-```bash
-mkdir -p ~/wor-flasher && cd ~/wor-flasher
-wget https://raw.githubusercontent.com/Botspot/wor-flasher/main/install-wor.sh
-chmod +x install-wor.sh
-./install-wor.sh
-```
+## Pi-Apps
 
-> [!IMPORTANT]
-> This only works for the terminal interface. **`install-wor-gui.sh` cannot be downloaded on its own** - it needs `install-wor.sh`, `terminal-run` and several images beside it, and exits with _"No script found named install-wor.sh"_ if they are missing. Use `git clone` for the graphical interface.
->
-> **Do not pipe either script into bash.** `curl ... | bash` fails, because the script needs to know its own directory and exits with _"Failed to determine the directory that contains this script"_. It also means nobody reads the code before it runs `parted`, `mkfs` and `dd` on a drive.
-
-When importing an ISO, use an official Windows ARM64 image. The script accepts media containing either `sources/install.wim` or `sources/install.esd`; customized Windows images are not supported.
-
-Automatic source-checkout updates are disabled by default so a run always uses the revision you reviewed. To opt in for a clean Git checkout, run it with `NO_UPDATE=0`; otherwise update deliberately with `git pull`. A single-file copy has no Git repository, so re-download it when you want a newer version.
-
-### Graphical interface
+[Pi-Apps](https://github.com/Botspot/pi-apps) provides a graphical installation and removal path for the Linux version of WoR-Flasher. Install the **Windows Flasher** app from Pi-Apps, then open **Accessories -> WoR-Flasher** or run:
 
 ```bash
 ~/wor-flasher/install-wor-gui.sh
 ```
 
-- Choose a Windows version and choose which Raspberry Pi model will be running it.  
-  ![page1](https://user-images.githubusercontent.com/54716352/131228226-5d5b8456-b273-48a5-b4c3-5e90790cf21e.png)
-- Choose a language for Windows.  
-  ![page2](https://user-images.githubusercontent.com/54716352/131228261-e7e1a989-4151-4df7-8aa2-eff95704df41.png)
-- Plug in a writable storage device to flash Windows to.  
-  ![page3](https://user-images.githubusercontent.com/54716352/131228296-fb61f216-9a12-412a-b7b5-0bcd185891a0.png)
-  - See [Choosing a drive](#choosing-a-drive) for what each size can do.
-- Double-check that everything looks correct before clicking the Flash button.  
-  ![page4](https://user-images.githubusercontent.com/54716352/131921620-7ca69a5c-13fe-4236-8e0e-27ff4cfffa10.png)
-- A terminal will launch and run the `install-wor.sh` script:  
-  ![terminal3](https://user-images.githubusercontent.com/54716352/131228381-11dc3a4e-96da-40ec-8f46-8b28ade5ee52.png)  
-  Note: this can take a lot of time to download individual files from Microsoft, compress them, and generate a Windows image. Fortunately, subsequent runs can skip the lengthy image-generating step if the ISO file exists.
-- If all goes well, the terminal will close and you will be told what to do next.  
-  ![next steps](https://user-images.githubusercontent.com/54716352/131228409-f84ede9b-a1fc-43f9-a79c-5b1853513960.png)
+Pi-Apps installs the application to `~/wor-flasher` from the maintained Blackout Secure `patch-1` branch and manages its launcher and removal. See [Maintainer partnership](#maintainer-partnership) for the project history and support links.
+
+## Usage
+
+There are two built-in front-ends over one engine:
+
+- **`install-wor.sh`** holds all of the logic — drive detection, download and cache handling, ISO validation, partitioning, flashing and verification.
+- **`install-wor-gui.sh`** sources it and adds only the windows. It collects your choices in native dialogs, then runs `install-wor.sh` and shows a native progress window (AppKit on macOS, `yad` on Linux) instead of a visible terminal.
+
+Both therefore write identical media from identical settings. The built-in GUI intentionally uses the engine directly because it needs shared functions and state while constructing its forms. The separate integration adapter below is a process-level contract for external tools, not an extra layer inside the GUI.
+
+### Graphical interface
+
+```bash
+./install-wor-gui.sh
+# or, equivalently:
+./install-wor.sh --gui
+```
+
+![WoR-Flasher shared graphical interface overview](assets/overview.png)
+
+The overview image shows the shared installation workflow. On macOS, the same choices are presented in native AppKit windows rather than Linux `yad` dialogs.
+
+Both front-ends size windows from the active screen. The Linux GUI detects its desktop geometry with `xrandr`, `xdpyinfo` or `xwininfo`, clamps every requested width and height inside fixed screen margins, and falls back to the narrow product logo when a full-size illustration cannot fit. A conservative `1024x768` fallback is used when the display server exposes no geometry command.
+
+Linux follows the same staged route as macOS: partnership announcement, Windows version, Raspberry Pi model, target drive, installation mode, overview, Advanced Options, progress, and completion. Its overview and Advanced Options scroll inside their bounded windows, and `config.txt` opens in a separate Save/Back editor. Progress-window Abort and close both stop the installer tree before reporting failure.
+
+Window chrome remains native to each desktop. On Ubuntu, GNOME/Mutter draws the title bar and its controls; WoR-Flasher marks yad dialogs fixed-size so they support native minimize, restore, and close without allowing resize or maximize. Replacing those controls with imitation macOS traffic lights would remove native accessibility and window-manager behavior.
+
+The front-end is never chosen automatically. `DISPLAY` is also set over SSH and in CI, and a tool that erases a drive should do exactly what it was asked to do.
+
+An **Advanced Options** window is reachable from the confirmation screen on both platforms. It exposes every configuration-only option as a checkbox, plus an editable `config.txt`: [offline Windows setup](#offline-windows-setup), the [Pi 4 RAM unlock](#pi-4-ram-unlock), whether to use the latest UEFI firmware or drivers instead of the tested pinned versions (the pinned version is shown in each label), whether to skip the final written-image verification, and dry run. `APPLY_CUSTOM_CONFIG_TXT` controls whether the editable `config.txt` is applied at all; unchecking it dims the editor and leaves the UEFI firmware package's own default in place. A **Downloaded files** menu selects the [cache mode](#download-cache), since it has three settings rather than two.
+
+Administrator access is requested through a native password dialog on both platforms — there is no terminal to type into.
+
+#### macOS walkthrough
+
+1. Double-click **WoR-Flasher.app**, or launch `./install-wor-gui.sh` or `./install-wor.sh --gui`, from macOS 13 or newer.
+2. Review the partnership announcement. The **Botspot** and **Blackout Secure** names open their respective websites, and the Proceed button continues automatically after the countdown.
+3. Choose the Windows version, language, Raspberry Pi model and target drive in native AppKit windows. The target drive is clearly identified before any erase operation.
+4. Review the shared Installation Overview, then use **Advanced Options** for cache mode, firmware and driver choices, Pi 4 RAM handling, offline OOBE and `config.txt` customization.
+5. Confirm the flash. A native progress window reports each shared installer phase, supports aborting, and retains a failure log when something stops unexpectedly.
+6. After successful verification, the completion dialog provides the log controls and the next-steps guidance for moving the drive to the Raspberry Pi.
+
+The repository does not currently include desktop captures of the macOS windows because the GUI requires an interactive macOS display session. The workflow and shared overview artwork are kept here so the documented behavior stays accurate across both front-ends.
 
 ### Terminal interface
 
 ```bash
-~/wor-flasher/install-wor.sh
+./install-wor.sh
 ```
 
-<details><summary>Example terminal walkthrough (click to expand)</summary>
+```text
+Usage: install-wor.sh [OPTIONS]
 
-```console
-$ ~/wor-flasher/install-wor.sh
-Choose Windows version:
-1) Windows 11
-2) Windows 10
-3) More options...
-Enter 1, 2 or 3: 1
-
-Choose language: en-us
-
-Choose Raspberry Pi model to deploy Windows on:
-1) Raspberry Pi 5
-2) Raspberry Pi 4 / 400
-3) Raspberry Pi 3 or Pi2 v1.2
-Enter 1, 2, or 3: 2
-
-Available devices:
-/dev/sdb - 59.5GB - USB Storage
-Choose a device to flash the Windows setup files to: /dev/sdb
-
-1) Create an installation drive (minimum 25 GB) capable of installing Windows to itself
-2) Create a recovery drive (minimum 8 GB) to install Windows on other >16 GB drives
-Choose the installation mode (1 or 2): 1
-
-Input configuration:
-DL_DIR: /home/pi/wor-flasher-files
-RUN_MODE: cli
-RPI_MODEL: 4
-DEVICE: /dev/sdb
-CAN_INSTALL_ON_SAME_DRIVE: 1
-BID: 22631.2861
-WIN_LANG: en-us
-
-Using UEFI firmware: https://github.com/pftf/RPi4/releases/download/v1.52/RPi4_UEFI_Firmware_v1.52.zip
-Formatting /dev/sdb
-Generating partitions
-Generating filesystems
-# script output continues... It generates a Windows image legally, downloads all necessary drivers, the BIOS, the bootloader, and the modified kernel. Once done it ejects the drive.
+  (no arguments)     run the interactive text-mode installer
+  --gui              run the graphical front-end instead
+  --config <file>    load configuration settings from a JSON file
+  --version          print the version and exit
+  --help             show this message
 ```
 
-</details>
-This script is actually what does the flashing: the GUI script is a front-end that launches dialog windows and finally runs install-wor.sh in a terminal.
+The selected drive is erased. Drives from 8 GB to under 25 GB can create recovery media for another drive. Drives of 25 GB or more can also install Windows onto themselves. The host's current boot drive is always excluded.
+
+### Non-interactive use & JSON Configuration
+
+`install-wor.sh` is designed to be driven non-interactively via environment variables or a `config.json` configuration file.
+
+Settings follow a 3-tier precedence cascade: **Environment Variables / CLI Options** > **JSON Configuration (`config.json` or `--config`)** > **Script Defaults**.
+
+```bash
+# Using environment variables
+RPI_MODEL=4 WIN_LANG=en-us BID=22631.2861 DEVICE=/dev/sda CAN_INSTALL_ON_SAME_DRIVE=1 ./install-wor.sh
+
+# Using a JSON configuration file
+./install-wor.sh --config config-templates/config.json
+```
+
+Refer to [`config-templates/config.json`](config-templates/config.json) for the default run configuration and [`config-templates/config.schema.json`](config-templates/config.schema.json) for the full JSON configuration schema. Project pins such as the WoR-PE package URL, SHA-256 digest, firmware versions, driver version, Windows build guardrails and update target live in [`src/config/metadata.json`](src/config/metadata.json), are loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and remain overrideable through environment variables or a custom config file.
+
+Sourcing with the `source` argument makes the engine's functions available without running a flash. Useful ones include `list_devs`, `list_dev_paths`, `drive_capability`, `describe_device`, `get_bid`, `get_os_name`, `list_langs`, `validate_iso_file`, `list_cached_winfiles`, `settings_summary` and `install_packages`.
+
+## Integration adapter
+
+`install-wor-hook.sh` is the stable command-line adapter for external front-ends and automation. When it is kept next to `install-wor.sh`, it uses that engine directly. When distributed by itself, it automatically obtains a shallow copy of the complete WoR-Flasher repository in `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook`; fetching the complete checkout ensures required assets such as `config-templates/` are present. It sources the selected engine for discovery and summaries, then executes it directly for a flash.
+
+| Command                  | Output or behavior                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| `list-devices`           | Safe whole-disk candidate paths, one per line, excluding the current boot drive     |
+| `describe-device DEVICE` | The supplied path with its size and model when available                            |
+| `summary`                | The current settings as tab-separated `label<TAB>value` lines                       |
+| `run [ARGS...]`          | Runs `install-wor.sh` with the caller's environment and any supplied engine options |
+
+```bash
+./install-wor-hook.sh list-devices
+./install-wor-hook.sh describe-device /dev/sda
+
+./install-wor-hook.sh --set DEVICE=/dev/sda --set RPI_MODEL=4 \
+  --set BID=22631.2861 --set WIN_LANG=en-us \
+  --set CAN_INSTALL_ON_SAME_DRIVE=1 summary
+
+./install-wor-hook.sh --progress-file /tmp/wor.progress \
+  --set DEVICE=/dev/sda --set RPI_MODEL=4 --set BID=22631.2861 \
+  --set WIN_LANG=en-us --set CAN_INSTALL_ON_SAME_DRIVE=1 run
+```
+
+Standalone bootstrap requires `git`. These variables control where the hook obtains the engine; only point them at a repository and ref you trust:
+
+| Variable               | Default                                            | Purpose                                      |
+| ---------------------- | -------------------------------------------------- | -------------------------------------------- |
+| `WOR_HOOK_REPOSITORY`  | `https://github.com/blackoutsecure/wor-flasher.git` | Git repository containing the complete tool  |
+| `WOR_HOOK_REF`         | `main`                                             | Branch or tag cloned by the hook             |
+| `WOR_HOOK_INSTALL_DIR` | `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook` | Persistent checkout used by standalone hooks |
+
+Discovery is a snapshot, not authorization to erase a path later. `list-devices` rejects unsupported hosts and excludes the current boot drive, but device state can change. `describe-device` formats any supplied path and `summary` previews settings; neither validates that a device is currently safe. Call `list-devices` again before `run`, and let `run` perform the engine's final host, device, capacity and installation-mode checks. For unattended operation, provide all required values from [Parameters](#parameters) through environment variables or repeated `--set NAME=VALUE` options; otherwise the engine can prompt for missing choices.
+
+The adapter is transport-neutral. A GUI, desktop launcher, test harness or another local imaging application can present its own choices and invoke the same engine without copying its flashing logic. Pass `--progress-file FILE` or set `WOR_GUI_PROGRESS_FILE` to a writable path to receive line-oriented, tab-separated events while `run` is active:
+
+```text
+STATUS<TAB>message
+STEP<TAB>current<TAB>total<TAB>message
+SUBSTEP<TAB>percent
+TASK<TAB>percent<TAB>label
+```
+
+`STEP` reports the major workflow stage. `SUBSTEP` reports the current stage's numeric progress. `TASK` carries the friendly current operation, such as `install.wim`, paired with the same percentage so an external progress bar can display `install.wim: 84%` without parsing terminal output.
+
+The adapter returns the underlying command's exit status. Usage errors, including an unknown command or a missing `DEVICE` for `describe-device`, return `2`.
+
+Raspberry Pi Imager supports a custom image repository through `--repo`, which is useful for publishing image metadata and downloads. It does not by itself turn an arbitrary shell flasher into an Imager write target. A future Imager integration should therefore be a deliberate adapter on the Imager side that calls this contract, rather than embedding or forking the flashing logic. See the [Raspberry Pi Imager repository](https://github.com/raspberrypi/rpi-imager) for its current repository and application integration model.
+
+## Release tooling
+
+The flashing engine remains `install-wor.sh`. Node.js is used only for release packaging and validation, where it is a better fit for deterministic file copying, checksum generation and future platform manifests. The tooling has no runtime dependencies.
+
+```bash
+npm run check          # shell syntax, macOS runtime freshness and release-plan validation
+npm run build          # stage fresh macOS, Linux and Windows-placeholder release folders
+npm run build:macos    # stage release/macos/WoR-Flasher.app and SHA256SUMS
+npm run build:linux    # stage release/linux/wor-flasher, WoR-Flasher-<version>-linux.tar.gz and SHA256SUMS
+npm run package:all    # refresh the embedded .app runtime, then stage every release folder
+npm run pe:check       # download the pinned WoR-PE package and verify the recorded SHA-256
+npm run pe:update      # resolve the latest WoR-PE package, hash it and update project metadata
+npm run metadata:check # verify package.json matches src/config/metadata.json
+npm run metadata:write # rewrite package.json to match src/config/metadata.json
+npm run clean          # remove generated release output
+```
+
+Generated release output is written under `release/` and is intentionally ignored by Git. It is rebuilt from the source checkout and the embedded macOS runtime each time, so the release folder is not another maintained copy of the project. Publish `release/linux/WoR-Flasher-<version>-linux.tar.gz` for Linux users; it contains the `wor-flasher/` payload including `install-wor.sh`, `install-wor-gui.sh`, and `install-wor-hook.sh`. Review the staged app or Linux payload and the matching `SHA256SUMS` before publishing.
+
+`pe:check` and `pe:update` are maintainer commands because they download release assets. Keep `pe:check` out of routine CI unless network access is expected; use `pe:update` only when deliberately refreshing the pinned WoR-PE package URL and digest in [`src/config/metadata.json`](src/config/metadata.json).
+
+[`src/config/metadata.json`](src/config/metadata.json) is the source of truth for `package.json`'s `version`, `description`, `license`, `homepage`, `repository`, `bugs`, `funding`, and `keywords`; edit `product.*` there, then run `npm run metadata:write` (or `npm run version:set`, which calls it automatically). `npm run build` and `npm run package:all` refuse to stage a release while `package.json` is out of sync, and `npm run check` runs `metadata:check` too.
+
+Windows packaging is intentionally only a placeholder today. A Windows UI should drive the same `install-wor-hook.sh` / engine contract only after a separate device-safety design exists for Windows disks, elevation and removable media. Until then, Windows users should use the official Windows on Raspberry Imager.
+
+## Parameters
+
+Every prompt has a matching environment variable.
+
+| Variable                    | Default                                    | Function                                                                                                                |
+| --------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `DL_DIR`                    | `~/wor-flasher-files`                      | Where components are downloaded and Windows images are extracted                                                        |
+| `RPI_MODEL`                 | _ask_                                      | Target Raspberry Pi: `3`, `4` or `5`                                                                                    |
+| `BID`                       | _ask_                                      | Exact Windows build ID, e.g. `22631.2861`                                                                               |
+| `WIN_LANG`                  | _ask_                                      | Windows language code, e.g. `en-us`                                                                                     |
+| `DEVICE`                    | _ask_                                      | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                                                           |
+| `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                                      | `1` to install Windows onto the target itself, `0` to make recovery media for another drive                             |
+| `SOURCE_FILE`               | unset                                      | Path to an existing Windows ARM64 ISO, instead of downloading                                                           |
+| `CONFIG_TXT`                | shipped template                           | Body of `config.txt` written to the boot partition                                                                      |
+| `APPLY_CUSTOM_CONFIG_TXT`   | `1`                                        | `0` leaves the UEFI firmware package's own `config.txt` in place                                                        |
+| `OOBE_NETWORK_BYPASS`       | `1`                                        | `0` requires the standard network-connected Windows setup flow                                                          |
+| `WINDOWS_ACCOUNT_SETUP`     | `0`                                        | `1` creates the optional local Windows administrator configured in Advanced Options                                     |
+| `WINDOWS_ACCOUNT_USERNAME`  | unset                                      | Username for the optional local Windows account                                                                         |
+| `WINDOWS_ACCOUNT_PASSWORD`  | unset                                      | Password for the optional account; written to unattended setup only when enabled                                        |
+| `WINDOWS_LOCALE_SETUP`      | `1`                                        | `1` applies `WINDOWS_LOCALE` to Windows keyboard and regional settings                                                  |
+| `WINDOWS_LOCALE`            | `en-US`                                    | Locale such as `en-US` or `en-GB` used when locale setup is enabled                                                     |
+| `PI4_AUTO_DISABLE_3GB`      | `1`                                        | Pi 4 only. `0` keeps the 3 GB RAM limit                                                                                 |
+| `PI4_UEFI_SHELL_UNLOCK`     | `0`                                        | Pi 4 only. `1` stages a one-time verified UEFI Shell handoff and restores the EFI loader after setting the RAM variable |
+| `UEFI_USE_LATEST`           | `0`                                        | `1` queries GitHub for the newest UEFI firmware instead of the pinned version                                           |
+| `DRIVERS_USE_LATEST`        | `1`                                        | `0` uses the pinned driver package version                                                                              |
+| `SKIP_IMAGE_VERIFICATION`   | `0`                                        | `1` skips post-flash verification. Not recommended                                                                      |
+| `CHECK_FOR_UPDATES`         | `1`                                        | `0` disables the read-only release check                                                                                |
+| `NO_UPDATE`                 | `0`                                        | Legacy inverse of `CHECK_FOR_UPDATES`; `1` disables update checks                                                       |
+| `HIDE_EMPTY_DRIVES`         | `1`                                        | `0` shows empty card-reader slots as selectable drives in WoR-PE                                                        |
+| `USE_CACHE`                 | `1`                                        | See [Download cache](#download-cache)                                                                                   |
+| `DRY_RUN`                   | `0`                                        | `1` runs every step except writing to the drive                                                                         |
+| `WOR_LOG_FILE`              | `$DL_DIR/logs/wor-flasher-<timestamp>.log` | Where a failed run's primary log is kept; `last-run.log` is refreshed for support                                       |
+| `VERIFY_TLS`                | `1`                                        | `0` skips TLS certificate verification, for hosts with an outdated CA bundle                                            |
+| `RUN_MODE`                  | `cli`                                      | `gui` makes the engine show graphical error dialogs                                                                     |
+| `SKIP_PACKAGE_INSTALL`      | unset                                      | `1` assumes dependencies are already present                                                                            |
+
+Example:
+
+```bash
+DL_DIR=/media/pi/big-drive DEVICE=/dev/sdg RPI_MODEL=4 WIN_LANG=en-us DRY_RUN=1 ./install-wor.sh
+```
+
+## Application setup
+
+### Existing Windows ISO
+
+Use an official Windows ARM64 ISO containing `sources/install.wim` or `sources/install.esd`:
+
+```bash
+SOURCE_FILE=/path/to/windows-arm64.iso ./install-wor.sh
+```
+
+The build number and language are read from the filename where possible, and you are asked for them if not. Customized Windows images are not supported.
+
+### Pi 4 RAM unlock
+
+On Raspberry Pi 4 only, the 3 GB RAM limit is disabled automatically after WoR-PE installs Windows and reboots. This setting is ignored for every other model. To keep the limit enabled:
+
+```bash
+PI4_AUTO_DISABLE_3GB=0 ./install-wor.sh
+```
+
+Windows Setup attempts to change the pftf `RamLimitTo3GB` firmware variable during the `specialize` pass, after the injected drivers are installed, and reboots once before OOBE. It also clears any BCD-level `truncatememory` cap, a separate Windows Boot Manager memory limit noted in worproject's [imager customization guide](https://worproject.com/guides/wor-imager-customization#configuration-file). The Windows log can report that the runtime variable was changed successfully, but Raspberry Pi UEFI emulates NVRAM in `RPI_EFI.fd` and changes made from an operating system may not persist after reboot. If the limit returns, disable `RamLimitTo3GB` from UEFI Device Manager -> Raspberry Pi Configuration -> Advanced Configuration, or pre-edit the UEFI variable in `RPI_EFI.fd` before flashing.
+
+The `specialize` answer-file command invokes the staged `Pi4Disable3GB.ps1` file instead of embedding the PowerShell program. Windows limits `RunSynchronousCommand/Path` to 259 characters and rejects the entire answer file when that limit is exceeded. The script logs its result to `%WINDIR%\Temp\Pi4Disable3GB.log` and always returns success so a firmware-setting failure cannot abort Windows Setup.
+
+> [!IMPORTANT]
+> **Set `PI4_AUTO_DISABLE_3GB=0` on Compute Module 4.** Per the [worproject FAQ](https://worproject.com/faq#does-it-work-on-the-compute-module-cm), CM4 requires the RAM limit set to 1 GB — not simply left at 3 GB — for USB to work at all, and PCIe does not work regardless. WoR-Flasher cannot distinguish a CM4 from a Pi 4/400, so do not rely on the automatic default for CM4 hardware.
+
+### Offline Windows setup
+
+Enabled by default. WoR-Flasher writes a minimal Microsoft unattended-setup answer file that hides the OOBE network and online-account screens, so setup can continue with a local account when Pi networking is not ready yet. It does not automate accounts, licenses, partitions or privacy choices by default.
+
+Advanced Options can optionally configure a Windows local administrator account and a locale profile before the first boot. The account username and password are written to `Autounattend.xml` only when explicitly enabled; the password is never shown in summaries or logs, but Windows setup necessarily stores it in plaintext on the prepared media temporarily. Remove `Autounattend.xml` after setup completes. Regional settings are enabled by default and initially use the current host locale when it matches a Windows locale, otherwise `en-US`; a selection made during the current GUI run is retained when returning to Advanced Options. The locale profile applies one value such as `en-US` or `en-GB` to the Windows keyboard/input, system, user and UI locale settings.
+
+```bash
+OOBE_NETWORK_BYPASS=0 ./install-wor.sh  # require network
+```
+
+### Customization templates
+
+[`config-templates/`](config-templates) holds the files injected onto the media or used for configuration validation:
+
+| File                            | Purpose                                                      |
+| ------------------------------- | ------------------------------------------------------------ |
+| `config.json`                   | Shipped default configuration parameter file                 |
+| `config.schema.json`            | JSON Schema definition for `config.json` parameters          |
+| `pi3.config.txt`                | `config.txt` body for Pi 2 v1.2 / Pi 3                       |
+| `pi4.config.txt`                | `config.txt` body for Pi 4 / Pi 400                          |
+| `pi5.config.txt`                | `config.txt` body for Pi 5                                   |
+| `pi4-ram-unlock.ps1`            | PowerShell action that clears the Pi 4 3 GB limit            |
+| `pi4-ram-unlock-specialize.xml` | Answer-file fragment that runs the above during `specialize` |
+| `oobe-network-bypass.xml`       | Answer-file fragment for offline OOBE                        |
+
+Edit these directly to customize what gets written. Both the CLI and the GUI start from the same template, so they produce identical media. Updating your checkout picks up any changes to them.
+
+### WoR-PE options
+
+`HIDE_EMPTY_DRIVES` (default `1`) writes `HideEmptyDrives=1` into the cached WoR-PE `settings.ini` before each run, matching worproject's [WoR-PE package option](https://worproject.com/guides/wor-imager-customization#configuration-file) of the same name, so empty card-reader slots do not show up as selectable drives during setup.
+
+### Download cache
+
+Downloads are stored in `~/wor-flasher-files` by default.
+
+| `USE_CACHE` | Behaviour                                                                     |
+| ----------- | ----------------------------------------------------------------------------- |
+| `0`         | Remove cached components and download them again                              |
+| `1`         | Reuse cache only when its source and SHA-256 payload manifest match (default) |
+| `2`         | Trust the existing cache without update or integrity checks                   |
+
+```bash
+USE_CACHE=0 ./install-wor-gui.sh
+```
+
+Mode `1` refreshes changed, missing, extra or outdated cached content. Delete `~/wor-flasher-files` when you no longer need the downloads or extracted Windows images.
+
+## What to expect
+
+1. Downloads and verifies the PE installer, UEFI firmware, drivers and Windows image.
+2. Extracts or imports the Windows image.
+3. Creates FAT32 `WOR_BOOT` and ExFAT `WOR_INSTALL` partitions.
+4. Copies the startup and installation files and updates `boot.wim`.
+5. Verifies the partition layout, filesystems, boot files, WIM images and the copied `install.wim` checksum.
+6. Unmounts and ejects the drive.
+
+Downloads and final verification take a long time, especially on slow SD cards. Progress is shown for long operations. **Do not remove the drive until WoR-Flasher reports success.**
+
+![Next steps after flashing](assets/next-steps.png)
+
+Move the completed drive to the Pi and connect a display, a wired keyboard and a wired mouse. Windows Setup may restart several times; do not remove power or the drive until setup completes.
+
+## Updating
+
+WoR-Flasher never rewrites its own installation. Nothing in the tool runs `git pull`, `git merge`,
+or replaces its own files on a source checkout, because a partly-updated disk flasher is far more
+dangerous than an out-of-date one. Updating is always something you choose to do.
+
+If you installed from a git checkout, update it yourself:
+
+```bash
+cd wor-flasher
+git pull
+```
+
+If you installed from a release archive, download the newer archive from the
+[releases page](https://github.com/blackoutsecure/wor-flasher/releases) and verify it against the published
+`SHA256SUMS` before use.
+
+To help you notice a new version, the engine performs a **read-only** release check before setup,
+downloads, or flashing begin, and prints a one-line notice when a newer release exists. It makes a
+single HTTPS request to the GitHub releases API, writes nothing, and changes nothing. The check
+needs Node.js; on a host without Node.js it is silently skipped and the flash proceeds normally.
+
+```bash
+CHECK_FOR_UPDATES=0 ./install-wor.sh  # skip the release check
+```
+
+Legacy callers can still set `NO_UPDATE=1` to disable update checks. You can run the same check on
+its own with `npm run update-check`.
+
+The macOS app is the one component that can install an update, and only when it has been copied away
+from a checkout. It never modifies its own bundle. On first launch it validates the embedded runtime
+and copies it to `~/Library/Application Support/WoR-Flasher/runtimes/<version>/runtime`. Detached
+updates are staged there from release metadata over HTTPS, and are accepted only after the archive
+SHA-256, every extracted file digest, and every recorded file mode match the signed package manifest.
+Unsafe archive entries, incomplete payloads, equal versions, and downgrades are rejected. Runtime
+selection falls back in this order: active, previous, then the immutable embedded copy. Launched from
+a source checkout, the combined startup update-and-repair check updates nothing remotely. It restores
+only missing tracked runtime files, with your confirmation, from the revision already in your local
+checkout.
+
+Check what you are running with `./install-wor.sh --version`.
+
+### Launch repair on macOS
+
+The app performs a bounded preflight rather than a destructive general-purpose "self-heal":
+
+- If a tracked runtime script, configuration file, template or image is absent, the app offers to restore only that missing file from the local Git `HEAD`.
+- If a required Homebrew formula is absent, the app lists the exact formulae and asks before installing only those dependencies. It never runs `brew upgrade`.
+- If Homebrew itself is absent, the app offers to open the official [Homebrew website](https://brew.sh/). It does not run a remote installer automatically.
+- Existing modified files, untracked files, downloaded Windows content and user settings are never reset or replaced. Download recovery remains controlled by the selected [cache mode](#download-cache).
+
+Source-file repair requires a complete Git checkout. A detached app instead validates its installed runtime and falls back to the previous or embedded runtime when the active copy is damaged; it does not attempt Git repair. If no runtime validates, the app stops with a native error instead of guessing or overwriting local work.
 
 ## Troubleshooting
 
-### The Pi is stuck on the rainbow screen
+If a flash fails from the GUI, the full log is kept under `$DL_DIR/logs/` with a UTC timestamp in the filename, or wherever `WOR_LOG_FILE` points. `$DL_DIR/last-run.log` is also refreshed as a stable support shortcut. The primary path is shown in the error dialog and listed on the confirmation screen before you start. Attach that log to any bug report.
 
-The GPU firmware never handed off to the UEFI firmware. Usually one of:
+On macOS, `Written image verified successfully` confirms the copied data, but partition finalization must still finish. If the finalizer fails, the media is not confirmed ready to boot. The installer requires worker readiness before disk preparation and pre-creates user-owned result files.
 
-- **Mismatched firmware files.** `RPI_EFI.fd`, `start4.elf`, `fixup4.dat`, the `.dtb` files, and the `overlays/` folder must all come from the same UEFI release. Hand-copying only some of them causes this. Re-flash rather than patching files individually.
-- **Outdated firmware.** Newer Pi 4 board revisions need a recent UEFI release. WoR-flasher downloads the latest release by default.
-- **Outdated bootloader EEPROM.** Update it with Raspberry Pi Imager (`Misc Utility Images` → `Bootloader`).
+GUI launches normally have no terminal, so the default `sudo` policy scopes cached authorization to the parent process. The finalizer launches the external `sudo` command directly from the authenticated shell, rather than running the GUI wrapper inside another background shell. This avoids the immediate `Administrator authentication is no longer reusable` startup failure without allowing a second password prompt. The worker script is passed as a fixed command argument instead of relying on detached stdin. Parent-scoped authorization and startup failures are covered by mock-only regression tests; an end-to-end flash with the correction still needs confirmation. Keep the diagnostic log rather than repeatedly reflashing after a startup error.
 
-The green ACT LED blink pattern narrows it down: 3 blinks means `start4.elf` was not found, 4 blinks means it failed to launch, and 7 blinks means `RPI_EFI.fd` was not found.
+The same worker applies the Pi 3 GPT patch at its original point before written-image verification, then waits for the final retag request. These late writes do not depend on a cached `sudo` timestamp remaining valid during long copies. macOS therefore does not start the ineffective background timestamp refresher. ISO images attached by the current user are also detached without `sudo`, so ISO cleanup does not consume the disk-write password prompt.
 
-### The Pi reaches the UEFI splash screen, then freezes
+The disk can temporarily appear unformatted immediately after administrator authentication. During an active macOS GUI flash, WoR-Flasher automatically chooses **Ignore** for the exact **The disk you attached was not readable by this computer** system alert. It never chooses **Initialize** or **Eject**, never dismisses other alert types, and does not disable Disk Arbitration or change global disk settings. The alert may appear briefly before dismissal. Automation starts only after authentication and finalizer readiness, and stops when the flash completes, fails, or is aborted.
 
-If <kbd>ESC</kbd> works at the splash but the system hangs once the countdown finishes, the firmware is healthy and the hang is in the handoff to Windows. Check in this order:
+This requires macOS **Accessibility** permission for WoR-Flasher and permission to control **System Events** under **Privacy & Security > Automation**. WoR-Flasher does not grant these permissions itself. If access is denied, the progress window shows a warning and flashing continues normally; choose **Ignore** manually in that case. Because the system alert does not identify its disk, automatic dismissal is limited to the active-write window and a single matching system alert; multiple matching alerts are left for manual handling.
 
-1. **The Windows build is too new.** This is by far the most common cause on a Pi 3 or Pi 4. See [The ARMv8.1 limitation](#the-armv81-limitation).
-2. **System Table Selection is not ACPI.** Go to `Device Manager` → `Raspberry Pi Configuration` → `Advanced Configuration` and make sure it is set to `ACPI`. Windows cannot boot from a Device Tree handoff.
-3. **Secure Boot is enabled.** Check `Device Manager` → `Secure Boot Configuration` and disable it.
+The developer-only `src/macos-disk-claim.c` prototype explores a per-disk claim held by a control pipe. It is not packaged or invoked by the app: compilation succeeded, but claim acquisition timed out on a disposable disk image on the development host. Prompt suppression and formatter compatibility remain unverified. Do not use this prototype on physical media until its lifecycle and formatting interactions have been validated on disposable images.
 
-### The keyboard does not work in UEFI
+<details>
+<summary><b>macOS: "Operation not permitted" formatting the drive</b></summary>
 
-UEFI stops accepting keystrokes once the boot countdown expires, so a keyboard that seems dead is often just a system that has already moved on. Start tapping <kbd>ESC</kbd> the instant power is applied.
+An older WoR-Flasher runtime may report `newfs_msdos`, `newfs_exfat`, or `sgdisk` failing with `Operation not permitted` even though the script already has `sudo`. Since macOS Catalina, writing directly to a raw disk device (`/dev/rdiskN`) needs **Full Disk Access**, which `sudo` does not grant on its own — and this is a deliberate macOS security boundary, so no app (including WoR-Flasher) can turn the toggle on for you; only a person clicking it in System Settings satisfies it. Current macOS formatting uses `diskutil eraseVolume` for the created partitions and retains `sgdisk` only for partition layout and EFI attributes.
 
-If it genuinely does not respond, use a wired keyboard plugged directly into a USB 2.0 port with no hub, and unplug all other USB devices. Wireless dongles and keyboards with built-in hubs frequently fail to enumerate in UEFI.
+If it worked before and fails now with no other change, the most likely cause is that `WoR-Flasher.app` was rebuilt or reinstalled since it was last granted access — see below.
 
-### The Pi boots straight to "Starting PXE over IPv4" / the Boot Manager only lists network options
+WoR-Flasher detects this specific failure and opens `System Settings > Privacy & Security > Full Disk Access` for you automatically, naming the exact app that needs the toggle: `WoR-Flasher.app` and its bundle path for the packaged app, or `Terminal.app`/`iTerm.app` for a CLI run. In GUI mode, the failure dialog also shows an **Open Settings** button. For a mounted removable-volume denial, it opens **Files and Folders** first: enable the narrower **Removable Volumes** permission for `bash` when macOS lists it. If that permission is unavailable or still denied, open **Full Disk Access**, click `+`, press `Shift`+`Command`+`G`, enter `/bin/bash`, click **Open**, and enable its toggle. Quit the app completely (not just the window) and try again.
 
-There are two independent boot-order mechanisms in play, and it's important to know which one this is:
+If the exact `WoR-Flasher.app` is already enabled and macOS still blocks the write, also grant Full Disk Access to the app you launched it from, such as `Visual Studio Code.app`, `Terminal.app`, or `iTerm.app`. WoR-Flasher is a shell-script app bundle, and macOS can attribute protected disk access to the launcher or interpreter chain instead of the displayed app bundle.
 
-1. **The Raspberry Pi bootloader's `BOOT_ORDER`** - lives in the Pi board's own SPI EEPROM, not on the SD card. It just decides which media (SD, USB, network) to search for `start4.elf`/`RPI_EFI.fd` on, and is unaffected by flashing or swapping SD cards.
-2. **The UEFI firmware's own Boot Manager `BootOrder`/`Boot####` NVRAM** - this is the "Boot Manager Menu" screen with `UEFI PXEv4`, `UEFI Shell`, etc. It is emulated by the `pftf/RPi4` (or Pi 3/5 equivalent) firmware in a variable-store file that lives **on the SD card's boot partition itself**, so it travels with the card. This is what decides whether "Windows Boot Manager" or the network options get tried first, and it's the one that matters here.
+If you rebuild or move `WoR-Flasher.app` (for example after re-running the packaging script), macOS treats it as a new app and its previously granted Full Disk Access is revoked, so you will need to re-add and re-enable it once.
 
-`install-wor.sh`/`install-wor-gui.sh` never touch either of these - they only copy files (Windows install files, drivers, and the UEFI firmware binaries) onto the drive. Neither script calls `efibootmgr`, `bcfg`, or anything else that edits NVRAM. The "Windows Boot Manager" entry is added automatically by **Windows Setup itself**, the first time it actually runs on the Pi (via `bcdboot`, during the WinPE stage), not by anything on the flashing machine.
+</details>
 
-**About ejecting the freshly-flashed card and moving it into the Pi:** that's the normal, expected flow and is safe by itself - the script already `sync`s and unmounts/ejects before it exits. The part that actually matters is what happens _after_ that, on the Pi itself:
+<details>
+<summary><b>Rainbow screen</b></summary>
 
-- First boot from the card starts the WinPE-based installer, which partitions/applies the Windows image, then **automatically reboots several times** (WinPE → Windows Setup → specialize → OOBE) before Windows is actually installed and registers its own boot entry.
-- If the SD card is removed, swapped for a different card, or the Pi is powered off partway through that automatic reboot sequence, the "Windows Boot Manager" entry never gets written to that card's variable store, and you're left with only the firmware defaults (network/shell) - exactly the symptom described here.
-- Let the whole process run to completion (watch it over HDMI, or serially per [Getting more detail](#getting-more-detail)) before assuming the card is done and swapping anything.
+The Raspberry Pi firmware did not start UEFI. Reflash the drive and wait for verification to finish. Also update the Pi EEPROM bootloader, and avoid `UEFI_USE_LATEST=1` unless you are intentionally testing firmware.
 
-If Windows is confirmed already installed on the drive (`bootmgfw.efi` exists at `EFI/Microsoft/Boot/bootmgfw.efi` on the boot partition) but the entry is still missing, check in this order:
+On Pi 4, three ACT LED blinks indicate that `start4.elf` is missing, four indicate that it failed to launch, and seven indicate that `RPI_EFI.fd` is missing.
 
-1. **The drive is not connected, or not connected at boot time.** Make sure it is plugged in and powered before applying power to the Pi, not after.
-2. **The wrong drive was flashed, or the last flash failed partway through.** Re-run `install-wor.sh` against the correct `/dev/sdX` device and let it finish completely; check its output for errors instead of assuming it succeeded.
-3. **The ESP (first partition, `bootpart`) is missing or unreadable.** It must contain `EFI/BOOT/BOOTAA64.EFI`. Mount the drive's first partition on another Linux machine and confirm the file is present - if not, re-flash.
-4. **The firmware's own `BootOrder`/`Boot####` NVRAM entries were edited or lost**, e.g. in `Boot Maintenance Manager`, or because Windows Setup was interrupted as above. Enter the UEFI setup (keep tapping <kbd>ESC</kbd> at power-on) → `Boot Maintenance Manager` → `Boot Options` → `Add Boot Option`, point it at `EFI\Microsoft\Boot\bootmgfw.efi` on the boot partition, then move it above the PXE/HTTP entries in `Change Boot Order` and save.
-5. **Outdated bootloader EEPROM**, same as the rainbow-screen cause above - update it with Raspberry Pi Imager.
+</details>
 
-### Only 3 GB of RAM is available
+<details>
+<summary><b>UEFI splash, then freeze</b></summary>
 
-Expected on a Pi 4. See [The 3 GB RAM limit](#the-3-gb-ram-limit).
+On Pi 3 or Pi 4, use Windows 11 build `22631.2861` or another compatible `22631.x` release. In UEFI, verify that `System Table Selection` is `ACPI` and that Secure Boot is disabled.
 
-### Getting more detail
+</details>
 
-The generated `config.txt` already sets `enable_uart=1` and `uart_2ndstage=1`, so serial debugging needs no changes. Connect a USB-TTL adapter to GPIO 14 (TX), GPIO 15 (RX), and GND, at **115200 baud**, to see exactly where boot stops.
+<details>
+<summary><b>PXE boot, or no local boot option</b></summary>
 
-## Scripting reference
+Reflash with the default pinned UEFI firmware and wait for `Written image verified successfully`. WoR-Flasher pins Pi 4 UEFI to v1.50, because v1.52 and v1.53 do not boot from microSD ([pftf/RPi4#285](https://github.com/pftf/RPi4/issues/285)). Avoid `UEFI_USE_LATEST=1` on a Pi 4 for the same reason.
 
-### Environment variable options
+During first boot, Windows Setup creates Windows Boot Manager. If an installed system has lost that entry, open `Boot Maintenance Manager > Boot Options > Add Boot Option`, select `EFI\Microsoft\Boot\bootmgfw.efi`, and place it above the network boot entries.
 
-The `install-wor.sh` script is designed to be used within other, larger bash scripts. For automation and customization, `install-wor.sh` will detect and obey certain environment variables.
+</details>
 
-Setting `BID`, `WIN_LANG`, `RPI_MODEL`, `DEVICE` or `CAN_INSTALL_ON_SAME_DRIVE` suppresses the matching interactive prompt, which is what makes unattended runs possible. Interactive runs auto-detect the selected drive's capacity: drives under 8 GB are refused, 8-25 GB drives use recovery mode, and 25 GB+ drives let you choose between self-install and recovery mode.
+<details>
+<summary><b>Ethernet does not work, and the MAC address is all zeros</b></summary>
 
-| Variable                    | Default               | Description                                                                                                                                                                                                                     |
-| --------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BID`                       | _prompts_             | An exact Windows version ID. Example: `22631.2861`                                                                                                                                                                              |
-| `WIN_LANG`                  | _prompts_             | Language for the Windows image. Example: `en-us`                                                                                                                                                                                |
-| `RPI_MODEL`                 | _prompts_             | Target Raspberry Pi model. Allowed values: `3`, `4`, `5`                                                                                                                                                                        |
-| `DEVICE`                    | _prompts_             | The device to flash. Example: `/dev/sda`                                                                                                                                                                                        |
-| `CAN_INSTALL_ON_SAME_DRIVE` | _prompts_             | Optional automation override. Set to `1` to install Windows onto the selected 25 GB+ drive, or `0` to make a recovery drive for another >16 GB drive                                                                            |
-| `DL_DIR`                    | `~/wor-flasher-files` | Where components and Windows images are downloaded                                                                                                                                                                              |
-| `SOURCE_FILE`               | none                  | Path to an existing Windows ARM64 ISO to use instead of downloading one. Must be at least 3 GB and end in `.iso` or `.ISO`                                                                                                      |
-| `CONFIG_TXT`                | firmware default      | Replaces `config.txt` on the resulting drive, commonly for overclocking or HDMI settings. [This is the firmware's own default.](https://github.com/pftf/RPi4/blob/master/config.txt) The GUI supplies its own per-model version |
-| `RUN_MODE`                  | `cli`                 | Set to `gui` to display graphical error messages                                                                                                                                                                                |
-| `USE_CACHE`                 | `0`                   | Controls reuse of downloaded components. `0` deletes them and downloads again every run, `1` reuses them only while they are still the newest version, `2` reuses them without checking for updates                             |
-| `DRY_RUN`                   | unset                 | Set to `1` to run the whole setup but exit after downloading, without flashing                                                                                                                                                  |
-| `SKIP_PACKAGE_INSTALL`      | `0`                   | Internal test-runner override. Set to `1` only after dependencies have already been installed by the test container                                                                                                             |
+In Windows, `ipconfig /all` shows the Broadcom GENET adapter with a physical address of `00-00-00-00-00-00` and only an APIPA address (`169.254.x.x`). The driver is fine; the UEFI firmware never gave it a MAC.
 
-### Customizing config.txt
+This affects Pi 4 UEFI **v1.51 and v1.52** ([pftf/RPi4#283](https://github.com/pftf/RPi4/issues/283)). WoR-Flasher now pins v1.50, which is unaffected, so reflashing with the default settings fixes it. Do not work around it with `UEFI_USE_LATEST=1`: v1.53 fixes the MAC but does not boot from microSD.
 
-`CONFIG_TXT` replaces the UEFI `config.txt` on the resulting drive. The GUI starts with a model-specific default, including the settings needed for UEFI and serial diagnostics. Keep those settings unless you know why they need to change. Refer to the official [Raspberry Pi config.txt documentation](https://www.raspberrypi.com/documentation/computers/config_txt.html) for supported options.
+To fix an existing installation without reflashing, either update the firmware on the boot partition using the [boot partition mount utility](https://worproject.com/downloads#boot-partition-mount-utility), or set a MAC by hand in `Device Manager` > the adapter > `Advanced` > `Network Address`.
 
-An unstable overclock can prevent the Pi from booting. Power it off, put the drive back in a Linux host, then reduce or remove the overclock entries from its `config.txt`. The GPU is not used by Windows on Raspberry Pi, so GPU overclocking has no meaningful benefit.
+</details>
 
-These Pi 4 examples are starting points, not guarantees. Board cooling, power supply quality, and silicon variation determine the stable limit. Add only the lines from one example below to the generated Pi 4 configuration.
+<details>
+<summary><b>Several "Unknown device" entries in Device Manager</b></summary>
 
-```ini
-# Conservative Pi 4 overclock: 2.147 GHz CPU
-over_voltage=6
-arm_freq=2147
-gpu_freq=300
-```
+Expected. No Windows drivers exist for some Pi hardware - the CYW43455 Wi-Fi, the camera interface, and VCHIQ among others. See the [driver status table](https://github.com/worproject/RPi-Windows-Drivers#status) for what is and is not supported. Wi-Fi in particular will not work; use Ethernet or a supported USB adapter.
 
-```ini
-# Higher Pi 4 overclock: 2.3 GHz CPU
-arm_freq=2300
-gpu_freq=300
-over_voltage=14
-force_turbo=1
-```
+</details>
 
-Do not treat extreme settings as a general recommendation. Start conservatively, test for stability, and ensure adequate cooling before raising voltage or frequency.
+<details>
+<summary><b>WoR-PE says the initialization disk must be recreated</b></summary>
 
-#### Advanced tuning variables
+The installer cannot find unallocated space for the Windows target partition. Reflash with a current checkout and wait for final verification. Do not manually expand `WOR_INSTALL`; the unused space after that staging partition is required during installation.
 
-These have working defaults and rarely need changing.
+</details>
 
-| Variable              | Default                                  | Description                                                                                                                                                                                |
-| --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `UEFI_USE_LATEST`     | `1`                                      | Download the newest UEFI firmware release from GitHub. Set to `0` to use the pinned version instead. Pre-releases are never selected, since upstream uses them to mark known-bad builds    |
-| `UEFI_VER_PI3`        | `v1.39`                                  | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                                |
-| `UEFI_VER_PI4`        | `v1.52`                                  | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                                |
-| `UEFI_VER_PI5`        | `v0.3`                                   | Pinned UEFI version, used when `UEFI_USE_LATEST=0` or GitHub is unreachable                                                                                                                |
-| `DRIVERS_USE_LATEST`  | `1`                                      | Download the newest ARM64 driver release from GitHub. Set to `0` to use the pinned version instead                                                                                         |
-| `DRIVER_VER`          | `v0.17`                                  | Pinned driver package version, used when `DRIVERS_USE_LATEST=0` or GitHub is unreachable. The upstream project is archived, so this is the final release                                   |
-| `PE_USE_LATEST`       | `1`                                      | Download the newest WoR PE-based installer from worproject.com. Set to `0` to use the pinned package instead                                                                               |
-| `PE_INSTALLER_URL`    | v1.1.0 asset                             | Pinned PE installer URL, used when `PE_USE_LATEST=0` or worproject.com is unreachable                                                                                                      |
-| `PE_INSTALLER_SHA256` | v1.1.0 hash                              | Expected SHA256 of the pinned PE installer. The download is always verified, either against this value or against the live hash when using the latest package                              |
-| `ARMV80_MAX_BUILD`    | `25163`                                  | The last Windows build that boots on an ARMv8.0 Pi. Higher builds are hidden and rejected for the Pi 3 and Pi 4                                                                            |
-| `ARMV80_SAFE_BID`     | `22631.2861`                             | The build suggested when a user picks an incompatible one for a Pi 3 or Pi 4                                                                                                               |
-| `WIN11_MIN_BUILD`     | `22000`                                  | The build number at which a release counts as Windows 11 rather than Windows 10                                                                                                            |
-| `WIN10_OLDEST_BUILD`  | `17134.112`                              | Marks the end of the Windows 10 section of worproject.com's version list                                                                                                                   |
-| `EXAMPLE_BID`         | `22621.525`                              | The example build number shown in prompts                                                                                                                                                  |
-| `VERIFY_TLS`          | `1`                                      | Verify TLS certificates when downloading. Set to `0` only if your system has an outdated CA bundle and downloads fail with certificate errors                                              |
-| `NO_UPDATE`           | `0`                                      | Set to `1` to skip the self-updater                                                                                                                                                        |
-| `UPDATE_REPO_URL`     | `https://github.com/Botspot/wor-flasher` | Repo the self-updater compares against to decide if an update exists. Only affects the check itself - `git pull` still uses the local checkout's own configured remote, typically `origin` |
-| `UPDATE_REF`          | `HEAD`                                   | Branch/ref on `UPDATE_REPO_URL` to compare the local commit against                                                                                                                        |
+<details>
+<summary><b>Keyboard does not work in UEFI</b></summary>
 
-Example usage:
+Press `Esc` repeatedly immediately after power-on. Connect a wired keyboard directly to a USB 2.0 port, and disconnect hubs and unnecessary USB devices.
+
+</details>
+
+<details>
+<summary><b>Only 3 GB of RAM on Pi 4</b></summary>
+
+This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unlock). To do it manually instead, set `Device Manager > Raspberry Pi Configuration > Advanced Configuration > Limit RAM to 3 GB` to `Disabled` (see the [worproject FAQ](https://worproject.com/faq#only-3-gb-of-ram-are-available-how-can-i-fix-this)). On Compute Module 4, set the limit to 1 GB instead; leaving it fully disabled or at 3 GB breaks USB.
+
+</details>
+
+## Development
 
 ```bash
-DL_DIR=/media/pi/my-big-flash-drive DEVICE=/dev/sdg DRY_RUN=1 BID=22631.2861 RPI_MODEL=4 WIN_LANG=en-us ~/wor-flasher/install-wor-gui.sh
+./tests/run-tests.sh                # static checks, plus Linux integration where available
+./tests/run-tests.sh --macos-auth   # mocked finalizer authorization; no sudo or disks
+./tests/run-tests.sh --gui          # walk the GUI in DRY_RUN mode
+./tests/run-tests.sh --walkthrough  # fake drives, then the CLI interactively
+./tests/run-linux-integration.sh    # force the Dockerised Linux suite
+LINUX_TEST_IMAGE=node:22-bookworm-slim ./tests/run-linux-integration.sh  # include Node-based Linux checks
+npm run check                       # shell syntax, package-plan checks, and release-tool syntax
+npm run build:macos                 # generate release/macos/WoR-Flasher.app
+node src/package-macos-app.mjs --check  # verify generated macOS runtime matches canonical sources
+shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 ```
 
-### Functions
+The suite creates loopback devices as stand-in drives, so nothing can be written to physical storage. Tests call the real functions out of `install-wor.sh` rather than restating their logic, which means a test cannot pass against behaviour the shipped script no longer has.
 
-The `install-wor.sh` script is designed to be used within other, larger bash scripts. For improved integration, `install-wor.sh` is equipped with a variety of useful functions that frontend scripts like `install-wor-gui.sh` can use.  
-**To source the script** so the functions are available:
+The Linux wrapper installs its test dependencies, including Python for answer-file XML validation, only inside its disposable container. Its default Ubuntu image does not include Node.js; use the Node image above to exercise the Node-based checks on Linux as well. Platform-specific macOS tests still run on the macOS host.
 
-```bash
-source ~/wor-flasher/install-wor.sh source
-```
+On a non-Linux host the run prints three summaries — the Docker container's nested run, the integration wrapper, then the host's own run. All three must report `failed 0`.
 
-Question: why does that command say "`source`" twice? Answer: The first "`source`" is a command, and the second "`source`" is a command-line flag that is passed to the script to let it know you are sourcing it.
+CI runs ShellCheck plus the suite on Ubuntu and macOS, and a one-model dry-run integration pass. See [CONTRIBUTING.md](CONTRIBUTING.md) for house style and for the traps that have already caught us.
 
-Once the script is sourced, these functions become available:
+Pushing a new semantic version tag matching `product.version` in
+[`src/config/metadata.json`](src/config/metadata.json) publishes a GitHub Release after those checks pass.
+The shell metadata module reads that same canonical value.
+The same workflow can be manually dispatched with `tag_name: auto` to select the next patch, or an
+explicit `vX.Y.Z` tag once the workflow is available on the repository's default branch.
+By default, manual releases update the shared version metadata, macOS app
+bundle metadata, documentation histories, and embedded runtime before validation; select **Do not
+update project version files before validating a new manual tag** only when those changes are
+already committed. A new manual tag is created and published only after validation. Each release
+includes a
+portable `wor-flasher-<version>-linux-rpi.zip` for Linux and Raspberry Pi OS users, a
+`WoR-Flasher-<version>-macos.zip` app bundle, the app launcher's verified runtime-update payload,
+and `SHA256SUMS`. Both runtime distributions include this README, LICENSE, and NOTICE. The portable
+ZIP contains the runtime source; GitHub additionally offers the full repository source archive for
+each tag. The macOS app bundle is unsigned and unnotarized; verify
+downloaded artifacts against `SHA256SUMS` before use.
 
-| Function                           | Purpose                                                           |
-| ---------------------------------- | ----------------------------------------------------------------- |
-| `error`                            | Print an error message and exit with code 1                       |
-| `status`, `echo_green`, `echo_red` | Print colored progress, success and failure messages              |
-| `resolve_path`                     | Resolve a path using GNU or BSD-compatible tools                  |
-| `require_linux_host`               | Stop early on unsupported non-Linux hosts                         |
-| `get_file_size`                    | File size in bytes                                                |
-| `sha1_file`, `sha256_file`         | Hash a file with GNU or BSD-compatible tools                      |
-| `package_available`                | Test whether an apt package exists in the repositories            |
-| `install_packages`                 | Install a space-separated list of apt packages                    |
-| `download_from_gdrive`             | Download a large publicly shared file from Google Drive           |
-| `get_partition`                    | Resolve a partition device node from a drive and partition number |
-| `get_device_name`                  | Human-readable manufacturer and model for a drive                 |
-| `get_size_raw`                     | Drive size in bytes                                               |
-| `drive_capability`                 | Classify a drive as too small, recovery-only, or install-capable  |
-| `get_space_free`                   | Free space in a folder, in bytes                                  |
-| `cache_is_current`, `mark_cache`   | Check and stamp downloaded component caches                       |
-| `list_devs`                        | Colored list of drives that can be flashed                        |
-| `detect_root_dev`                  | Detect the Linux block device backing the current root filesystem |
-| `list_langs`                       | Supported Windows language codes and names                        |
-| `list_bids`                        | Available Windows build IDs from the catalog                      |
-| `get_bid`                          | Newest Windows build ID the target Pi can actually boot           |
-| `cpu_supports_bid`                 | Whether the target Pi's CPU can run a given build                 |
-| `list_bids_supported`              | Build list filtered to what the target Pi can boot                |
-| `get_os_name`                      | Human-readable OS name from a build ID                            |
-| `setup`                            | Run host checks and install Linux dependencies                    |
+### Repository layout
 
-The most commonly reused functions are documented in detail below.
+The root entry points remain stable for existing users and integrations: `install-wor.sh` is the engine and CLI, `install-wor-gui.sh` is the Linux/macOS front end, and `install-wor-hook.sh` is the automation adapter. The macOS app template lives under `src/macos-app`, while `npm run build:macos` generates `release/macos/WoR-Flasher.app` with an embedded runtime and manifest from the canonical files. Do not edit generated release output directly.
 
-- `error` - a simple function that Botspot uses in bash scripts to warn the user that something failed and to exit the script with a failure code. (1)  
-  Input: string containing the error message  
-  Usage:
+Shared UI artwork lives in `assets/`, and boot and setup inputs live in `config-templates/`.
 
-```bash
-command-that-downloads-windows || error "Windows failed to download! Check your internet connection and try again."
-```
+Shared data and low-level helpers live under `src/lib/`. Entry points load these modules explicitly; the library files do not source one another:
 
-- `echo_green` and `echo_red` - announce the success or failure of an action in colored text. `status` prints blue progress text.  
-  Input: string containing message  
-  Usage:
+| Module            | Responsibility                                                                               |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| `metadata.sh`     | Product identity, asset metadata and the named macOS AppleScript host                        |
+| `dependencies.sh` | Homebrew and Linux package declarations shared by launcher preflight and engine installation |
+| `paths.sh`        | Platform-neutral path resolution used by engine bootstrap                                    |
+| `cleanup.sh`      | Shared mount, device and temporary-file cleanup registration                                 |
 
-```bash
-status "Now, downloading windows... please wait"
-echo_green "Done"
-echo_red "That did not work, but it is not fatal"
-```
+## Support
 
-- `package_available` - Determines if a package is possible to install from the apt repositories
-  Input: one name of a package
-  Usage:
+| Where                                                         | For                                                           |
+| ------------------------------------------------------------- | ------------------------------------------------------------- |
+| [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher) | Report issues, share feedback, request features or contribute |
+| [Botspot Software Discord](https://discord.gg/RXSTvaUvuu)     | Real-time help with WoR-Flasher                               |
+| [WoR project Discord](https://discord.gg/jQCpfVK)             | Windows on Raspberry, the operating system                    |
+| [worproject.com contact](https://worproject.com/contact)      | The WoR developers directly                                   |
+| [Security policy](SECURITY.md)                                | Anything that should not be public                            |
 
-```bash
-if package_available yad ;then
-  echo "yad can be installed"
-fi
-```
+## Maintainer partnership
 
-- `install_packages` - Checks for and installs a quoted list of packages.  
-  Input: string containing a space-separated list of packages  
-  Usage:
+WoR-Flasher is a community project created by **[Botspot](https://github.com/Botspot)** and directly maintained by **[Blackout Secure](https://blackoutsecure.app/)**. This partnership improves its documentation, testing and cross-platform experience while keeping Botspot's original authorship and project direction visible.
 
-```bash
-install_packages 'yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse exfatprogs wget parted dosfstools unzip git'
-```
+Report issues, share feedback, request features or contribute through the [Botspot/wor-flasher repository](https://github.com/Botspot/wor-flasher).
 
-- `download_from_gdrive` - Downloads a publicly shared large-file from Google Drive. [Here's the tutorial](https://medium.com/@acpanjan/download-google-drive-files-using-wget-3c2c025a8b99) I adapted it from.
-  Inputs: File ID, output filename  
-  Usage:
+Support continued development by [sponsoring Botspot](https://github.com/sponsors/Botspot) or [buying Blackout Secure a coffee](https://github.com/sponsors/blackoutsecure?frequency=one-time&amount=8) through GitHub Sponsors.
 
-```bash
-download_from_gdrive 1WHyHFYjM4WPAAGH2PICGEhT4R5TlxlJC WoR-PE_Package.zip
-```
+Blackout Secure is a cybersecurity, secure application development, cloud and AI security consultancy. Its open-source work focuses on practical automation, privacy-conscious tooling and dependable developer workflows. Learn more at [blackoutsecure.app](https://blackoutsecure.app), browse the organization's projects at [github.com/blackoutsecure](https://github.com/blackoutsecure), or find Dr Bill McIlhargey through [Linktree](https://linktr.ee/billmcilhargey).
 
-- `get_partition` - A clean, reliable way to determine the block-device of a partition.  
-  Input: block device of drive, partition number  
-  Usage:
+This directly maintained source is intended to strengthen the wider community around [Botspot's projects](https://github.com/Botspot), [Windows on Raspberry](https://worproject.com/) and the people who use them.
 
-```bash
-get_partition /dev/sda 2
-#Assuming partition 2 exists, the above command returns "/dev/sda2"
+## What this maintained source adds
 
-get_partition /dev/mmcblk0 2
-#Assuming partition 2 exists, the above command returns "/dev/mmcblk0p2"
+Building on Botspot's original work, this maintained source adds:
 
-get_partition /dev/mmcblk0 all
-#Returns every partition within the drive, each one on a line
-```
+| Area                  | Added capability                                                                                                                                                         |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Hosts                 | macOS support alongside Debian-based Linux, including `diskutil`, `hdiutil`, `sgdisk`, native password handling and safe external-drive detection                        |
+| Interfaces            | Native AppKit/JXA windows on macOS, `yad` progress on Linux, Advanced Options on both, and an explicit `install-wor.sh --gui` entry point                                |
+| Installer flow        | One shared `install-wor.sh` engine with the GUI as a presentation layer, so validation, settings, downloads and flashing do not drift between front-ends                 |
+| Progress and failures | File-backed progress reporting, real installer exit codes, abort handling, durable error markers and retained failure logs with a configurable `WOR_LOG_FILE` path       |
+| Safety                | Boot-drive protection, free-space preflight, cached-payload SHA-256 manifests, written-image verification and clearer cache modes                                        |
+| Windows setup         | Offline-OOBE support and the Pi 4 RAM-unlock action delivered to the installed OS through WoR-PE's `prefinalize.cmd` hook, rather than only copying files to media roots |
+| Firmware and drivers  | Tested Pi 4 UEFI pinning, including the v1.50 choice that avoids both the v1.51 zero-MAC bug and the v1.52/v1.53 microSD boot regression                                 |
+| Quality               | Cross-platform static checks, ShellCheck, loopback-drive integration tests, XML validation, mutation-tested anti-drift checks and macOS/Linux CI                         |
 
-- `get_device_name` - Determine a human-readable name for the given storage drive.  
-  Input: block device of drive  
-  Usage:
+These additions are maintained directly by Blackout Secure in cooperation with Botspot and the wider Windows on Raspberry community.
 
-```bash
-get_device_name /dev/sda
-```
+## Related resources
 
-- `get_size_raw` - Determines the size of a drive in bytes.  
-  Input: block device of drive  
-  Usage:
+- [worproject.com](https://worproject.com/) — the WoR-PE installer, UEFI firmware and drivers that WoR-Flasher assembles
+- [Advanced customization guide](https://worproject.com/guides/wor-imager-customization) — the `scripts/prefinalize.cmd` hook and `settings.ini` options. Written for the official WoR imager and not verified against WoR-Flasher's headless media
+- [How can I update the drivers?](https://worproject.com/faq#how-can-i-update-the-drivers) — updating drivers on an already-installed system
+- [Boot partition mount utility](https://worproject.com/downloads#boot-partition-mount-utility) — mount the boot partition later to edit `config.txt` or firmware
+- [PiMon](https://worproject.com/downloads#pimon) — hardware monitor (CPU temperature and so on) for Windows on Raspberry Pi
+- [How to perform OS updates](https://worproject.com/guides/performing-os-updates) — using Windows Update on a WoR installation
+- [BVM](https://github.com/Botspot/bvm) — Botspot's newer project: Windows 11 in a KVM virtual machine on ARM Linux, rather than on bare metal
 
-```bash
-get_size_raw /dev/sda
-```
+## Versions
 
-- `list_devs` - list available storage drives in a human-readable, colored format.  
-  Usage:
+- **2.0.0**
+  - Modernized the cross-platform flashing workflow, release tooling and configuration.
+  - Added a native standalone macOS runtime with validated, rollback-capable updates.
+  - Improved macOS disk preparation, remount handling and post-write verification resilience.
+  - Reused one administrator authorization for late disk writes and automatically chose Ignore only for the matching unreadable-disk alert during active GUI writes.
+  - Added password-retry resume, configurable completion sounds and desktop notifications.
+  - Corrected CI progress-test prerequisites and privileged loop-device inspection, and aligned release version lookup with the canonical JSON metadata.
+  - Included README, LICENSE, and NOTICE in both packaged runtime distributions.
+  - Aligned bootstrap and update discovery with the publishing repository and enforced the documented macOS 13 minimum.
+  - Refreshed staged files on package writes, rejected linked or stale runtime manifests, and propagated version-build failures.
+  - Kept the optional Pi 4 UEFI Shell handoff independent of answer-file customization.
+  - Reworked Advanced Options with a compact, dedicated `config.txt` editor.
+    This maintained source uses its own version line. The product name, window title, current version, runtime file list and pinned system defaults are defined in [`src/config/metadata.json`](src/config/metadata.json), loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and checked against [`package.json`](package.json) and the macOS app property list. The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion`. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
 
-```bash
-list_devs
-```
-
-- `get_bid` - Get the latest Windows build ID for either Windows 10 or Windows 11 that the target Raspberry Pi can actually boot. When `RPI_MODEL` is "`3`" or "`4`", builds requiring ARMv8.1 are skipped.  
-  Input: "`10`" or "`11`"
-  Usage:  
-
-```bash
-get_bid 11
-```
-
-- `cpu_supports_bid` - Exit 0 if the target Pi's CPU can run the given build, otherwise exit 1. Depends on `RPI_MODEL` being set.  
-  Input: build ID  
-  Usage:
-
-```bash
-if cpu_supports_bid 26100.1742 ;then
-  echo "this build will boot"
-fi
-```
-
-- `list_bids_supported` - Same as `list_bids`, but omits builds the target Pi cannot run.  
-  Input: "`10`" or "`11`"  
-  Usage:
-
-```bash
-list_bids_supported 11
-```
-
-- `get_os_name` - Get human-readable name of operating system.  
-  Input: valid Windows build ID  
-  Usage:
-
-```bash
-get_os_name 22631.2861
-```
-
-### Example function and variable usage
-
-This code will non-interactively flash Windows 11 to `/dev/sda` and add overclock settings. You can copy and paste the code into a terminal, or save this as a shell script.
-
-```bash
-#make all variables we set to be visible to the script (only necessary if you run this in a terminal)
-set -a
-
-#First, source the script so its functions are available
-source ~/wor-flasher/install-wor.sh source
-
-#Determine the latest Windows 11 update ID using a function
-BID="$(get_bid 11)"
-
-#set destination RPi model
-RPI_MODEL=4
-
-#choose language
-WIN_LANG=en-us
-
-#set the device to flash
-DEVICE=/dev/sda
-
-#set a custom config.txt
-CONFIG_TXT="over_voltage=6
-arm_freq=2147
-gpu_freq=750
-
-# don't change anything below this point #
-arm_64bit=1
-enable_uart=1
-uart_2ndstage=1
-enable_gic=1
-armstub=RPI_EFI.fd
-disable_commandline_tags=1
-disable_overscan=1
-device_tree_address=0x1f0000
-device_tree_end=0x200000
-dtoverlay=miniuart-bt"
-
-#indicate that drive is large enough to install Windows to itself
-CAN_INSTALL_ON_SAME_DRIVE=1
-
-~/wor-flasher/install-wor.sh
-```
+- **1.0.2**
+  - `WoR-Flasher.app` can run independently of a Git checkout using an immutable embedded runtime, validated writable runtime copies under Application Support, and active/previous/embedded fallback.
+  - Detached runtime updates reject downgrades and verify the archive digest, extracted file digests, file modes, and archive entry safety before atomic promotion.
+  - A standalone `install-wor-hook.sh` now obtains a complete trusted checkout automatically when no adjacent engine is available.
+  - The native macOS partnership announcement now has compatible attributed-text construction, dark-mode contrast and non-overlapping layout on current JXA runtimes.
+  - The partnership banner is now 800x533, so the Linux announcement window fits on screen. `yad` draws `--image` at its native size and cannot scale it down.
+  - Linux dialogs that size themselves to their content no longer log a `gtk_window_resize` assertion warning.
+  - A double-clickable macOS app now checks for clean fast-forward updates, installs missing Homebrew formulae with consent and offers non-destructive repair of missing tracked runtime files.
+  - Repeated GUI launches now activate the existing macOS window instead of opening concurrent workflows, including launches from another checkout or version.
+  - Partnership messaging and default update checks now use the directly maintained Blackout Secure source while preserving Botspot's original authorship.
+  - The engine, GUI, named macOS JXA host and app property list now share the canonical `WoR-Flasher` name and `1.0.2` version metadata.
+- **1.0.1**
+  - **Pi 4 UEFI pinned to v1.50**, the only release where both the Ethernet MAC and microSD boot work. v1.51 (the previous pin) and v1.52 report a MAC of `00:00:00:00:00:00`, leaving Windows with no DHCP ([pftf/RPi4#283](https://github.com/pftf/RPi4/issues/283)); v1.53 fixes that but still does not boot from microSD ([pftf/RPi4#285](https://github.com/pftf/RPi4/issues/285)).
+  - The Pi 4 RAM unlock and the offline-OOBE answer file now reach the installed OS through WoR-PE's prefinalize hook. The media-root copies alone were never read, because WoR-PE applies `install.wim` with DISM rather than running Windows Setup's media flow.
+- **1.0.0** — First versioned Blackout Secure release.
+  - **macOS host support**: `diskutil`/`hdiutil` drive discovery, and `sgdisk` GPT partitioning that keeps `WOR_BOOT` as partition 1. An extra ESP made the Pi 4 fall back to PXE boot.
+  - **A native macOS interface**: AppKit/JXA wizard, progress window, Advanced Options window and error dialogs.
+  - **No visible terminal in GUI mode**: the engine reports progress over a file, and each front-end renders it — AppKit on macOS, `yad` on Linux. Administrator access is requested through a native password dialog on both.
+  - **Post-flash verification** of partitions, filesystems, boot files, WIM images and the copied `install.wim` checksum.
+  - **Offline Windows OOBE** via a shipped `Autounattend.xml`, on by default.
+  - **Automatic Pi 4 3 GB RAM unlock** after the WoR-PE reboot, including the BCD `truncatememory` cap.
+  - **Pinned, overridable UEFI firmware and driver versions.** Pi 4 stays on UEFI v1.50, the only release where both the Ethernet MAC and microSD boot work.
+  - **Cache modes with SHA-256 payload manifests**, a free-space preflight, and `HideEmptyDrives` written into the cached WoR-PE `settings.ini`.
+  - **Editable `config.txt` from `config-templates/`**, applied by the CLI and the GUI alike.
+  - **One engine, two front-ends**: `install-wor-gui.sh` sources `install-wor.sh` and adds only windows. A function defined in both files now fails a test.
+  - **Explicit `--gui` entry point.** The front-end is never chosen by sniffing `DISPLAY`.
+  - **A test suite**, plus ShellCheck, macOS and Linux dry-run CI.
+- **0.x** — Original Botspot development history. Highlights, oldest first: the initial WoR automation, the self-updater, the "next steps" window, a complete rewrite to use ESD releases, download-to-RAM support, Pi 5 support, a GitHub API fallback for UEFI firmware, empty block devices filtered out of the drive list, and SHA-256 hashed ESD image handling.
 
 ## Contributing
 
-This repository is looking for a maintainer, so contributions are genuinely welcome.
+Pull requests are welcome at [Botspot/wor-flasher](https://github.com/Botspot/wor-flasher) — please read [CONTRIBUTING.md](CONTRIBUTING.md) first, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-> [!IMPORTANT]
-> `install-wor.sh` does not update its source checkout automatically. For a clean Git checkout only, you can opt in to the updater with `NO_UPDATE=0`; it skips the update when tracked files have uncommitted changes:
->
-> ```bash
-> NO_UPDATE=0 ~/wor-flasher/install-wor.sh
-> ```
+## Contributors
 
-Useful when testing changes:
+**Original author.** WoR-Flasher was created by **[Botspot](https://github.com/Botspot)**, who also created [Pi-Apps](https://github.com/Botspot/pi-apps) and [BVM](https://github.com/Botspot/bvm). This maintained source rests on five years of his work, given away for free. If you find WoR-Flasher useful, [consider sponsoring him](https://github.com/sponsors/Botspot).
 
-| Command                              | Purpose                                                                                         |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `./tests/run-tests.sh`               | Run the automated suite; on non-Linux hosts it uses Docker for Linux integration when available |
-| `./tests/run-linux-integration.sh`   | Run only the privileged Ubuntu-container integration path, useful for debugging Docker setup    |
-| `./tests/run-tests-gui.sh`           | Run the GUI walkthrough test with Linux/display/yad preflight                                   |
-| `./tests/run-tests.sh --walkthrough` | Create fake drives, then step through the terminal interface by hand                            |
-| `./tests/run-tests.sh --gui`         | Same, but launch the graphical interface                                                        |
-| `./tests/run-tests.sh --full`        | Include the real multi-gigabyte Windows image download                                          |
-| `./tests/run-tests.sh --clean`       | Remove the test workspace and detach its loop devices                                           |
-| `tests/test-lib.sh`                  | Shared test output helpers used by the test entrypoints                                         |
-| `bash -n install-wor.sh`             | Check syntax without running anything                                                           |
-| `DRY_RUN=1 ...`                      | Run the whole flow but stop before touching the drive                                           |
-| `USE_CACHE=1 ...`                    | Reuse downloaded components so iterations are fast                                              |
-| `DEBUG=1 ./terminal-run ...`         | Print which terminal emulator was selected                                                      |
+**Project contributors** ([historical list](https://github.com/Botspot/wor-flasher/graphs/contributors)):
 
-The harness needs Linux loop devices and passwordless `sudo` for the integration tests. On Linux, `./tests/run-tests.sh` creates loopback drives directly. On non-Linux hosts, the same command tries Docker and runs the integration suite inside a privileged Ubuntu container; if Docker is missing or unavailable, it reports a skip instead of failing. The container uses `/tmp/wor-flasher-test-workspace`, so loop devices, downloads and caches disappear with the container unless you explicitly pass `--keep` to the inner harness. The GUI walkthrough has its own wrapper, `./tests/run-tests-gui.sh`, which skips cleanly without a Linux desktop display and `yad`. The harness detects the newest bootable build for each model from the catalog, so no build number is hardcoded.
+|                                                                                                                      |                                                                                                                        |                                                                                                                          |                                                                                                                              |                                                                                                                        |                                                                                                                           |                                                                                                                              |
+| :------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------: | :-----------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------: |
+| [<img src="https://avatars.githubusercontent.com/u/54716352?v=4" width="64"><br>Botspot](https://github.com/Botspot) | [<img src="https://github.com/blackoutsecure.png?size=128" width="64"><br>Blackout Secure](https://blackoutsecure.app) | [<img src="https://avatars.githubusercontent.com/u/44128563?v=4" width="64"><br>NoozAbooz](https://github.com/NoozAbooz) | [<img src="https://avatars.githubusercontent.com/u/70802936?v=4" width="64"><br>Itai-Nelken](https://github.com/Itai-Nelken) | [<img src="https://avatars.githubusercontent.com/u/176234?v=4" width="64"><br>larskanis](https://github.com/larskanis) | [<img src="https://avatars.githubusercontent.com/u/2014596?v=4" width="64"><br>Marcinoo97](https://github.com/Marcinoo97) | [<img src="https://avatars.githubusercontent.com/u/71036629?v=4" width="64"><br>ryanfortner](https://github.com/ryanfortner) |
 
-GitHub Actions runs ShellCheck on every shell entrypoint and a focused Ubuntu dry-run integration job with `TEST_MODELS=4`. That keeps pull requests covered without downloading the full Windows image or exercising every Raspberry Pi firmware package on every push.
+**Maintainer partnership.** **[Blackout Secure](https://blackoutsecure.app)** — represented here by **Dr Bill McIlhargey** ([links](https://linktr.ee/billmcilhargey)) — is partnering with **[Botspot](https://github.com/Botspot)** to provide ongoing maintenance and support while helping improve this project. Blackout Secure's contributions include macOS host support, native progress and Advanced Options windows, post-flash verification, the shared-engine refactor, documentation, community health files, the expanded test suite, and continued community support. If WoR-Flasher helps you, [consider sending Blackout Secure a cup of coffee](https://github.com/sponsors/blackoutsecure?frequency=one-time&amount=8) to support that work.
 
-Both installer scripts are plain Bash with no build step. `install-wor-gui.sh` sources `install-wor.sh` for its functions, so shared installer logic belongs in the latter. Test entrypoints share reporting helpers through `tests/test-lib.sh`.
+**Projects this tool assembles**, each with its own authors and license:
 
-## Is this legal?
-
-Yes. All proprietary Windows components are downloaded straight from Microsoft's update servers using [uupdump](https://uupdump.net). Consider reading [this debate](https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=318599) that took place on the Raspberry Pi Forums. At the conclusion of the thread, Raspberry Pi **employees** [confirm](https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=318599#p1907313) that WoR is completely legal. The OS is unlicenced just like a regular Windows ISO, which can be activated via an activation key or by logging in with a pre-licensed Microsoft account.
+- [Windows on Raspberry](https://worproject.com/) — the PE-based installer
+- [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers) — Windows ARM64 drivers for the Pi
+- [pftf/RPi4](https://github.com/pftf/RPi4) and [pftf/RPi3](https://github.com/pftf/RPi3) — Raspberry Pi UEFI firmware
+- [worproject/rpi5-uefi](https://github.com/worproject/rpi5-uefi) — Pi 5 UEFI firmware
+- [UUP dump](https://uupdump.net/) — retrieves Windows directly from Microsoft's update servers
 
 ## License
 
-This repository does not currently contain a `LICENSE` or `COPYING` file, which means the code defaults to exclusive copyright. Botspot's related projects, [Pi-Apps](https://github.com/Botspot/pi-apps) and [BVM](https://github.com/Botspot/bvm), are both GPL-3.0. Adding a license here is a decision for the copyright holder.
+Released under the [GNU General Public License v3.0](LICENSE), matching Botspot's [BVM](https://github.com/Botspot/bvm).
 
-## Getting help
+> [!IMPORTANT]
+> The pre-existing Botspot code shipped **without** a license file and therefore carries no explicit grant. The Blackout Secure additions are offered under GPL-3.0 without reservation. Read [NOTICE](NOTICE) before commercial redistribution or relicensing.
 
-| Problem with                         | Where to go                                                                                                                                |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| The WoR-flasher tool                 | [Open an issue](https://github.com/Botspot/wor-flasher/issues/new/choose) or the [Botspot Software Discord](https://discord.gg/RXSTvaUvuu) |
-| Windows on Raspberry (the OS itself) | [Email the WoR developers](https://worproject.com/contact) or [join their Discord](https://discord.gg/jQCpfVK)                             |
+WoR-Flasher does **not** redistribute Windows. Proprietary components are downloaded straight from Microsoft's own update servers via [UUP dump](https://uupdump.net/). This is legal — Raspberry Pi employees [confirmed as much](https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=318599#p1907313) on the Raspberry Pi Forums. The resulting installation is unlicensed, exactly like a retail Windows ISO, and needs a product key or a pre-licensed Microsoft account to activate.
 
-## Credits
-
-WoR-flasher automates a process built by other people. It would not exist without:
-
-| Project                                                                                              | By                                    |
-| ---------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| [Windows on Raspberry](https://worproject.com/) and its PE-based installer                           | Mario Bălănică and contributors       |
-| [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers)                             | worproject                            |
-| [UEFI firmware for the Pi 3 and Pi 4](https://github.com/pftf/RPi4)                                  | Pete Batard and the pftf project      |
-| [UEFI firmware for the Pi 5](https://github.com/worproject/rpi5-uefi)                                | worproject                            |
-| [uupdump](https://uupdump.net)                                                                       | The UUP dump team                     |
-| WoR-flasher, [Pi-Apps](https://github.com/Botspot/pi-apps) and [BVM](https://github.com/Botspot/bvm) | [Botspot](https://github.com/Botspot) |
-
-## Sources
-
-Everything WoR-flasher downloads at runtime, and every external fact stated in this README, comes from the following.
-
-**Components downloaded during a flash**
-
-| Source                                                                                             | Used for                                                               |
-| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| [worproject.com ESD catalog](https://worproject.com/)                                              | Windows 10 and 11 ARM64 images, served from Microsoft's update servers |
-| [WoR PE-based installer](https://worproject.com/downloads#windows-on-raspberry-pe-based-installer) | The installer environment injected into `boot.wim`                     |
-| [pftf/RPi4](https://github.com/pftf/RPi4/releases)                                                 | UEFI firmware for the Pi 4 and Pi 400                                  |
-| [pftf/RPi3](https://github.com/pftf/RPi3/releases)                                                 | UEFI firmware for the Pi 3 and Pi 2 v1.2                               |
-| [worproject/rpi5-uefi](https://github.com/worproject/rpi5-uefi/releases)                           | UEFI firmware for the Pi 5                                             |
-| [RPi-Windows-Drivers](https://github.com/worproject/RPi-Windows-Drivers/releases)                  | ARM64 device drivers, archived at v0.17                                |
-
-**Reference material**
-
-| Source                                                                                                                                                 | Used for                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| [Windows on Raspberry FAQ](https://worproject.com/faq)                                                                                                 | The ARMv8.1 build cutoff, the 3 GB RAM limit, Pi 5 support status        |
-| [RPi-Windows-Drivers status page](https://github.com/worproject/RPi-Windows-Drivers#status)                                                            | Every per-model driver table                                             |
-| [Windows 11 Home and Pro lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-home-and-pro)                                      | Windows 11 end-of-support dates                                          |
-| [Windows 10 Home and Pro lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-10-home-and-pro)                                      | Windows 10 end-of-support date                                           |
-| [Windows 11 Enterprise and Education lifecycle](https://learn.microsoft.com/en-us/lifecycle/products/windows-11-enterprise-and-education-version-21h2) | Extended support dates                                                   |
-| [Windows Processor Requirements](https://learn.microsoft.com/en-us/windows-hardware/design/minimum/windows-processor-requirements)                     | Supported processor lists per Windows release                            |
-| [Raspberry Pi processors](https://www.raspberrypi.com/documentation/computers/processors.html)                                                         | CPU cores and architecture per model                                     |
-| [Raspberry Pi config.txt](https://www.raspberrypi.com/documentation/computers/config_txt.html)                                                         | `config.txt` option reference                                            |
-| [uupdump](https://uupdump.net)                                                                                                                         | Windows image generation, referenced in [Is this legal?](#is-this-legal) |
-| [Pi-Apps](https://github.com/Botspot/pi-apps)                                                                                                          | Recommended install method and the More RAM add-on                       |
-| [BVM](https://github.com/Botspot/bvm)                                                                                                                  | The recommended alternative for Wi-Fi and graphics acceleration          |
+No warranty. Neither Botspot nor Blackout Secure can be held responsible for data loss.

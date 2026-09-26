@@ -6,8 +6,9 @@
 
 <!-- Which Raspberry Pi model, which Windows build, and what you observed. -->
 
-- [ ] `bash -n install-wor.sh install-wor-gui.sh terminal-run tests/*.sh` passes
+- [ ] `bash -n install-wor.sh install-wor-gui.sh install-wor-hook.sh tests/*.sh` passes
 - [ ] `./tests/run-tests.sh` passes, skips only expected host/display/container checks, or the reason is explained
+- [ ] GUI walkthrough checked with `./tests/run-tests-gui.sh` on the intended host (`yad` on Linux or `osascript` plus a removable drive on macOS)
 - [ ] Tested with `DRY_RUN=1`, or flashed a real drive
 - [ ] Raspberry Pi model tested:
 - [ ] Windows build tested:
@@ -15,5 +16,8 @@
 ## Checklist
 
 - [ ] The GUI and CLI still agree, if shared logic changed
+- [ ] Shared logic lives in `install-wor.sh`, not duplicated into `install-wor-gui.sh`
 - [ ] README updated, if behaviour or variables changed
-- [ ] No new ShellCheck errors (`shellcheck --severity=error install-wor.sh install-wor-gui.sh terminal-run tests/*.sh`)
+- [ ] Version history at the top of `install-wor.sh` and the Versions section of the README updated, if behaviour changed
+- [ ] Sent upstream to Botspot/wor-flasher too, if the fix applies there
+- [ ] No new ShellCheck errors (`shellcheck --severity=error install-wor.sh install-wor-gui.sh install-wor-hook.sh tests/*.sh`)

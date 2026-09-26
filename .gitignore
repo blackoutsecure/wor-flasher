@@ -2,8 +2,20 @@
 cache/
 wget-log*
 
+# Run logs. WOR_LOG_FILE defaults under DL_DIR/logs, but that can be pointed anywhere
+*.log
+
 # Working directory for tests/run-tests.sh: loopback disk images and downloads
 .test-workspace/
+
+# Generated release staging output
+release/
+
+# User local configuration
+config.json
+*.config.json
+!config-templates/*.config.json
+!config-templates/*.json
 
 # Downloaded components, if DL_DIR is pointed inside the repo
 peinstaller/

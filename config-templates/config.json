@@ -1,0 +1,45 @@
+{
+  "$schema": "./config.schema.json",
+  "target": {
+    "rpiModel": 4,
+    "device": "",
+    "canInstallOnSameDrive": true
+  },
+  "media": {
+    "winLang": "en-us",
+    "bid": "22631.2861",
+    "sourceFile": "",
+    "downloadDir": "~/wor-flasher-files",
+    "useCache": 1
+  },
+  "customization": {
+    "applyCustomConfigTxt": true,
+    "oobeNetworkBypass": true,
+    "pi4AutoDisable3Gb": true,
+    "uefiUseLatest": false,
+    "driversUseLatest": true,
+    "hideEmptyDrives": true
+  },
+  "userAccount": {
+    "setupAccount": false,
+    "username": "",
+    "password": "",
+    "localeSetup": true,
+    "locale": ""
+  },
+  "execution": {
+    "dryRun": false,
+    "skipImageVerification": false,
+    "verifyTls": true,
+    "checkForUpdates": true
+  },
+  "notifications": {
+    "playSound": true,
+    "showNotification": true,
+    "sounds": {
+      "macos": "Glass",
+      "linux": "complete",
+      "windows": ""
+    }
+  }
+}

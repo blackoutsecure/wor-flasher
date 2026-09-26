@@ -1,0 +1,17 @@
+# don't change anything below this point #
+arm_64bit=1
+arm_boost=1
+enable_uart=1
+uart_2ndstage=1
+enable_gic=1
+armstub=RPI_EFI.fd
+disable_commandline_tags=1
+disable_overscan=1
+hdmi_drive=2
+hdmi_group=2
+hdmi_mode=87
+hdmi_cvt=1920 1200 60 6 0 0 0
+device_tree_address=0x3e0000
+device_tree_end=0x400000
+dtoverlay=miniuart-bt
+dtoverlay=upstream-pi4

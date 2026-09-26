@@ -1,11 +1,20 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Report it upstream instead
+    url: https://github.com/Botspot/wor-flasher/issues/new/choose
+    about: If the bug is not specific to macOS support, the native windows, or the test suite, upstream needs it more than this fork does
   - name: Botspot Software Discord
     url: https://discord.gg/RXSTvaUvuu
     about: Questions and help with WoR-flasher itself
+  - name: Windows on Raspberry Discord
+    url: https://discord.gg/jQCpfVK
+    about: Real-time help with Windows on Raspberry, the operating system
   - name: Windows on Raspberry support
     url: https://worproject.com/contact
     about: Problems with Windows, the drivers, or the UEFI firmware rather than the flasher
   - name: Windows on Raspberry FAQ
     url: https://worproject.com/faq
     about: Covers the 3 GB RAM limit, supported Windows versions, and driver status
+  - name: Report a security issue privately
+    url: https://github.com/blackoutsecure/wor-flasher/security/advisories/new
+    about: Anything that should not be discussed in public. See SECURITY.md
