@@ -48,6 +48,7 @@
 #        Reuse that worker for the late Pi3 GPT patch; macOS does not depend on sudo keepalive.
 #        Detach user-mounted macOS ISO images without requesting administrator access.
 #        Automatically choose Ignore for the exact macOS unreadable-disk alert during active GUI writes.
+#        Package source notices with each runtime and derive release versions from canonical JSON metadata.
 #        Added a native standalone macOS runtime, resilient disk handling, configurable completion
 #          sounds and notifications, password-retry resume, and a compact config.txt editor.
 #        macOS privacy-denial failures now expose an Open Settings action for Removable Volumes

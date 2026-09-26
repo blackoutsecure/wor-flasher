@@ -47,6 +47,9 @@
     "logDirname": "logs"
   },
   "runtimePaths": [
+    "README.md",
+    "LICENSE",
+    "NOTICE",
     "install-wor.sh",
     "install-wor-gui.sh",
     "install-wor-hook.sh",

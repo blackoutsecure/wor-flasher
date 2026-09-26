@@ -570,18 +570,21 @@ On a non-Linux host the run prints three summaries — the Docker container's ne
 
 CI runs ShellCheck plus the suite on Ubuntu and macOS, and a one-model dry-run integration pass. See [CONTRIBUTING.md](CONTRIBUTING.md) for house style and for the traps that have already caught us.
 
-Pushing a semantic version tag matching the canonical version in
-[`src/lib/metadata.sh`](src/lib/metadata.sh) publishes a GitHub Release after those checks pass.
+Pushing a new semantic version tag matching `product.version` in
+[`src/config/metadata.json`](src/config/metadata.json) publishes a GitHub Release after those checks pass.
+The shell metadata module reads that same canonical value.
 The same workflow can be manually dispatched with `tag_name: auto` to select the next patch, or an
-explicit `vX.Y.Z` tag. By default, manual releases update the shared version metadata, macOS app
+explicit `vX.Y.Z` tag once the workflow is available on the repository's default branch.
+By default, manual releases update the shared version metadata, macOS app
 bundle metadata, documentation histories, and embedded runtime before validation; select **Do not
 update project version files before validating a new manual tag** only when those changes are
 already committed. A new manual tag is created and published only after validation. Each release
 includes a
 portable `wor-flasher-<version>-linux-rpi.zip` for Linux and Raspberry Pi OS users, a
 `WoR-Flasher-<version>-macos.zip` app bundle, the app launcher's verified runtime-update payload,
-and `SHA256SUMS`. The portable ZIP is also the complete release source; GitHub additionally offers
-its standard source archive for each tag. The macOS app bundle is unsigned and unnotarized; verify
+and `SHA256SUMS`. Both runtime distributions include this README, LICENSE, and NOTICE. The portable
+ZIP contains the runtime source; GitHub additionally offers the full repository source archive for
+each tag. The macOS app bundle is unsigned and unnotarized; verify
 downloaded artifacts against `SHA256SUMS` before use.
 
 ### Repository layout
@@ -654,7 +657,10 @@ These additions are maintained directly by Blackout Secure in cooperation with B
   - Modernized the cross-platform flashing workflow, release tooling and configuration.
   - Added a native standalone macOS runtime with validated, rollback-capable updates.
   - Improved macOS disk preparation, remount handling and post-write verification resilience.
+  - Reused one administrator authorization for late disk writes and automatically chose Ignore only for the matching unreadable-disk alert during active GUI writes.
   - Added password-retry resume, configurable completion sounds and desktop notifications.
+  - Corrected CI progress-test prerequisites and privileged loop-device inspection, and aligned release version lookup with the canonical JSON metadata.
+  - Included README, LICENSE, and NOTICE in both packaged runtime distributions.
   - Reworked Advanced Options with a compact, dedicated `config.txt` editor.
     This maintained source uses its own version line. The product name, window title, current version, runtime file list and pinned system defaults are defined in [`src/config/metadata.json`](src/config/metadata.json), loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and checked against [`package.json`](package.json) and the macOS app property list. The macOS launcher synchronizes those values into `CFBundleDisplayName`, `CFBundleExecutable`, `CFBundleName`, `CFBundleShortVersionString` and `CFBundleVersion`. The same release history is repeated at the top of [`install-wor.sh`](install-wor.sh).
 

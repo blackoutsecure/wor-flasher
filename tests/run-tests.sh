@@ -2289,6 +2289,7 @@ make_disk() { #Input: size, name. Output: loop device path
 require_tools() {
   sudo -n true 2>/dev/null || die "This harness needs passwordless sudo to create loopback devices."
   command -v losetup >/dev/null || die "losetup is not installed."
+  command -v pv >/dev/null || die "pv is required before the progress-helper tests; install the test prerequisites first."
   [ -e /dev/loop-control ] || die "No /dev/loop-control, so loopback devices cannot be created here."
 }
 
@@ -2773,8 +2774,9 @@ expect_ok "Pi 4 real loop-device flash completes"
 expect_output "Pi 4 verifies the written image" "Written image verified successfully"
 
 boot_partition="$(get_partition "$DEV_INSTALL" 1)"
-partition_count="$(parted -ms "$DEV_INSTALL" unit s print | awk -F: '$1 ~ /^[0-9]+$/ { count++ } END { print count + 0 }')"
-boot_filesystem="$(parted -ms "$DEV_INSTALL" unit s print | awk -F: '$1 == 1 { print $5 }')"
+partition_layout="$(sudo parted -ms "$DEV_INSTALL" unit s print)" || die "Could not inspect the test loop-device partition layout."
+partition_count="$(awk -F: '$1 ~ /^[0-9]+$/ { count++ } END { print count + 0 }' <<<"$partition_layout")"
+boot_filesystem="$(awk -F: '$1 == 1 { print $5 }' <<<"$partition_layout")"
 boot_mount="$(mktemp -d)"
 if sudo mount "$boot_partition" "$boot_mount"; then
   [ "$partition_count" == 2 ] \

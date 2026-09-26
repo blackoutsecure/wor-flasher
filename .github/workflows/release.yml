@@ -28,6 +28,8 @@ jobs:
   prepare:
     name: Resolve release tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       create_tag: ${{ steps.release.outputs.create_tag }}
       ref: ${{ steps.release.outputs.ref }}
@@ -48,7 +50,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = workflow_dispatch ];then
-            version="$(sed -n "s/^WOR_FLASHER_VERSION=['\"]\([^'\"]*\)['\"]$/\1/p" src/lib/metadata.sh)"
+            #Metadata is JSON-backed; the shell module no longer has a literal version assignment.
+            version="$(node -p 'require("./src/config/metadata.json").product.version')"
             [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
               echo "Invalid version: $version" >&2
               exit 1
@@ -85,7 +88,8 @@ jobs:
                   git config user.name 'github-actions[bot]'
                   git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
                   git add src/config/metadata.json src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json
-                  git commit -m "chore: prepare $tag"
+                  git commit -m "chore: prepare $tag" \
+                    -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
                   git push origin "HEAD:$source_branch"
                 fi
               fi
@@ -123,16 +127,16 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
-          version="$(sed -n "s/^WOR_FLASHER_VERSION=['\"]\([^'\"]*\)['\"]$/\1/p" src/lib/metadata.sh)"
+          version="$(node -p 'require("./src/config/metadata.json").product.version')"
           [ -n "$version" ] || { echo 'WOR_FLASHER_VERSION is missing.' >&2; exit 1; }
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version: $version" >&2; exit 1; }
           [ "$RELEASE_TAG" = "v$version" ] || { echo "Tag $RELEASE_TAG does not match v$version." >&2; exit 1; }
 
-      - name: Install ShellCheck
+      - name: Install ShellCheck and integration test prerequisites
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
+          sudo apt-get install -y -qq shellcheck pv
 
       - name: Check shell syntax
         run: bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
@@ -195,7 +199,7 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
-          version="$(sed -n "s/^WOR_FLASHER_VERSION=['\"]\([^'\"]*\)['\"]$/\1/p" src/lib/metadata.sh)"
+          version="$(node -p 'require("./src/config/metadata.json").product.version')"
           archive_dir="$RUNNER_TEMP/release-artifacts"
           release_commit="$(git rev-parse HEAD)"
           mkdir -p "$archive_dir"
@@ -240,13 +244,20 @@ jobs:
           generate_release_notes: true
           body: |
             `wor-flasher-*-linux-rpi.zip` is the portable Bash distribution for Debian, Ubuntu,
-            Raspberry Pi OS, and other supported Linux hosts. It is also the complete release source.
+            Raspberry Pi OS, and other supported Linux hosts. It includes the runtime source,
+            README, LICENSE, and NOTICE.
 
             The `WoR-Flasher-*-macos.zip` application bundle is unsigned and unnotarized.
             `macos-runtime.json` and its versioned runtime archive are consumed only by the macOS
             launcher's verified runtime updater.
 
             Verify downloaded artifacts against `SHA256SUMS` before use.
+
+            macOS GUI disk writes use one administrator authentication and an already-authorized
+            finalizer. Automatic Ignore handles only the exact unreadable-disk system alert
+            during active writes; Accessibility and Automation permission may be required.
+            Physical-media completion and Raspberry Pi boot compatibility are not established
+            by the automated tests. See README and NOTICE for limitations and attribution.
           files: |
             ${{ steps.package.outputs.directory }}/wor-flasher-*-linux-rpi.zip
             ${{ steps.package.outputs.directory }}/WoR-Flasher-*-macos.zip
