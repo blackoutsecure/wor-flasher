@@ -267,6 +267,51 @@ gui_log_tail() { #Input: log path. Output: the last lines, with terminal escapes
   LC_ALL=C sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g' "$1" | tail -n 18
 }
 
+macos_password_retry_dialog() { #Input: saved log and progress file. Output: retry/close only for authentication that failed before writing.
+  local saved_log="$1" progress_path="$2" password_retry_reason choice
+  if [ ! -r "$saved_log" ] || [ ! -r "$progress_path" ];then
+    warning "Administrator authentication could not be classified because its diagnostics are unavailable."
+    return 1
+  fi
+  #Any write marker rules out a no-changes claim, even if a later marker says writing stopped.
+  awk -F '\t' '
+    $1 == "DISK_WRITE" && $2 == "1" { written = 1 }
+    $1 == "STEP" { step = $2; total = $3; label = $4 }
+    END {
+      exit written || label !~ /^Partitioning and formatting / ||
+        !((total == 8 && step == 5) || (total == 7 && step == 4))
+    }
+  ' "$progress_path" || return 1
+  if ! grep -qF 'Administrator authentication failed or was canceled.' "$saved_log" \
+    && ! grep -qF 'Administrator authentication was canceled or unavailable' "$saved_log";then
+    return 1
+  fi
+  if grep -qF '(-128)' "$saved_log";then
+    password_retry_reason='Administrator password entry was canceled.'
+  elif grep -qF 'incorrect password attempts' "$saved_log" \
+    || grep -qF 'Administrator password was not accepted.' "$saved_log";then
+    password_retry_reason='The administrator password was not accepted.'
+  elif grep -qF 'no password was provided' "$saved_log";then
+    password_retry_reason='No administrator password was entered.'
+  else
+    password_retry_reason='Administrator access was not obtained.'
+  fi
+  choice="$(macos_choose '' "$password_retry_reason
+
+Flashing has not started. No changes have been made to $DEVICE.
+
+Your prepared downloads have been kept. Try Again returns to the administrator password step.
+
+Log: $saved_log" retry Close '' '' '' 'Try Again' "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE | Administrator access")" || choice=close
+  case "$choice" in
+    retry|close) printf '%s\n' "$choice" ;;
+    *)
+      warning "The administrator retry dialog returned an unexpected response; showing the full error instead."
+      return 1
+      ;;
+  esac
+}
+
 loading_dialog() { #display a dialog to say something is loading
   local dialog_pid
   #1, not 0: gtk_window_resize asserts height > 0, and GTK still grows the window to its natural size
@@ -283,7 +328,7 @@ stop_loader() {
   loader_pid=''
 }
 
-macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label, optional action label/value, optional image path/next label/icon path/window title/cancel value/timeout/process title. Output: selected choice or action value.
+macos_choose() { #Input: choices, prompt, default, cancel label, action label/value, image, next label, icon, title, cancel value, timeout, process title, optional action URL. Output: choice or action value.
   local result choose_jxa
   choose_jxa="$(wor_jxa_window_lib; cat <<'JXA'
 ObjC.import('AppKit')
@@ -305,6 +350,7 @@ const windowTitle = ObjC.unwrap(args.objectAtIndex(13))
 const cancelValue = ObjC.unwrap(args.objectAtIndex(14))
 const announcementTimeout = Number(ObjC.unwrap(args.objectAtIndex(15) || '0'))
 const appTitle = ObjC.unwrap(args.objectAtIndex(16) || windowTitle)
+const actionURL = ObjC.unwrap(args.objectAtIndex(17))
 //a message screen has no selectable rows; it may still show an image (e.g. the welcome screen)
 const isMessageMode = choices.length === 0
 const isPartnershipAnnouncement = imagePath.endsWith('/partnership.png')
@@ -396,6 +442,17 @@ const Controller = ObjC.registerSubclass({
     'actionClicked:': {
       types: ['void', ['id']],
       implementation: function() {
+        if (actionURL.length > 0) {
+          //Keep Recheck available while System Settings is open.
+          if (!$.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($(actionURL)))) {
+            const alert = $.NSAlert.alloc.init
+            alert.messageText = 'Could not open System Settings'
+            alert.informativeText = 'Open System Settings > Privacy & Security > Accessibility manually, then return here and choose Recheck.'
+            alert.addButtonWithTitle('OK')
+            alert.runModal
+          }
+          return
+        }
         selectedValue = actionValue
         app.stopModalWithCode($.NSOKButton)
         window.orderOut(null)
@@ -672,11 +729,45 @@ allowTermination = true
 app.terminate(null)
 JXA
 )"
-  result="$(wor_osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_ICON_PATH}" "${10:-$WOR_WINDOW_TITLE}" "${11:-}" "${12:-0}" "${13:-$WOR_APP_TITLE}" <<<"$choose_jxa")"
+  result="$(wor_osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_ICON_PATH}" "${10:-$WOR_WINDOW_TITLE}" "${11:-}" "${12:-0}" "${13:-$WOR_APP_TITLE}" "${14:-}" <<<"$choose_jxa")"
   if [ "$result" == __WOR_CANCEL__ ];then
     return 1
   fi
   printf '%s\n' "$result"
+}
+
+macos_check_accessibility() { #Checks the same script host as Automatic Ignore before opening the setup wizard.
+  is_macos || return 0
+  local permission check_status choice message
+  status "Checking Accessibility permission for Automatic Ignore"
+  while true ;do
+    check_status=0
+    permission="$(wor_osascript -l JavaScript "$DIRECTORY/src/lib/macos-disk-alerts.js" --check-accessibility 2>&1)" || check_status=$?
+    if [ "$check_status" == 0 ] && [ "$permission" == granted ];then
+      status "Automatic Ignore: Accessibility permission is allowed."
+      return 0
+    fi
+    if [ "$check_status" == 0 ] && [ "$permission" == missing ];then
+      message="Automatic Ignore needs Accessibility permission."
+    else
+      message="Automatic Ignore could not check Accessibility permission."
+      echo_red "Warning: $message (helper exit $check_status).${permission:+ ($permission)}"
+    fi
+    message="$message
+
+Open Settings and enable WoR-Flasher in Privacy & Security > Accessibility. If it is not listed, use + to add the app you launched. If macOS lists the script host or launcher instead, enable that entry. Return here and choose Recheck. If the change is not detected, quit and reopen WoR-Flasher.
+
+This permission is only for automatically choosing Ignore on the unreadable-disk alert. You can Continue Manually and choose Ignore yourself during flashing. Never choose Initialize or Eject while a flash is running."
+    choice="$(macos_choose '' "$message" recheck 'Continue Manually' 'Open Settings' '' '' Recheck "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE | Accessibility" manual 0 "$WOR_APP_TITLE" 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility')" || return 1
+    case "$choice" in
+      recheck) ;;
+      manual)
+        echo_red "Warning: continuing without confirmed Accessibility permission. Choose Ignore manually if the unreadable-disk alert appears."
+        return 0
+        ;;
+      *) error "Unexpected Accessibility startup response: $choice" ;;
+    esac
+  done
 }
 
 macos_show_announcement() { #Output: proceed or project partner.
@@ -1655,7 +1746,7 @@ JXA
 }
 
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice password_retry_reason privacy_guidance privacy_settings_url progress_file progress_jxa resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning
+  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice privacy_guidance privacy_settings_url progress_file progress_jxa resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning
 
   current_windows_ver='Windows 11'
   current_rpi_model=''
@@ -2005,7 +2096,7 @@ function updateDiskAlertStatus() {
     const text = readFile(diskAlertStatus)
     if (text.length > 0) {
       const status = JSON.parse(text)
-      diskAlertLabel.stringValue = status.message
+      diskAlertLabel.stringValue = status.state === 'waiting' || status.state === 'watching' ? '' : status.message
       diskAlertLabel.textColor = status.state === 'warning' ? $.NSColor.systemOrangeColor : $.NSColor.secondaryLabelColor
     }
     const result = readFile(diskAlertDone).trim()
@@ -2229,7 +2320,7 @@ taskBar.maxValue = 100
 taskBar.doubleValue = 0
 content.addSubview(taskBar)
 
-diskAlertLabel = $.NSTextField.wrappingLabelWithString('Automatic Ignore is waiting for disk preparation.')
+diskAlertLabel = $.NSTextField.wrappingLabelWithString('')
 diskAlertLabel.frame = $.NSMakeRect(20, 106, width - 40, 30)
 diskAlertLabel.font = $.NSFont.systemFontOfSizeWeight(10, $.NSFontWeightRegular)
 diskAlertLabel.textColor = $.NSColor.secondaryLabelColor
@@ -2295,6 +2386,13 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
 
     installer_status="$(cat "$done_marker" 2>/dev/null)"
     [ -z "$installer_status" ] && installer_status=1
+    password_retry_choice=''
+    if [ "$installer_status" != 0 ];then
+      saved_log="$(gui_save_failure_log)"
+      if ! installer_showed_own_error;then
+        password_retry_choice="$(macos_password_retry_dialog "$saved_log" "$progress_file")" || password_retry_choice=''
+      fi
+    fi
     rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker"
 
     privacy_guidance=''
@@ -2306,33 +2404,15 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
     It is now safe to remove your USB drive."
       [ -z "$disk_alert_warning" ] || completion_text="$completion_text"$'\n\n'"$disk_alert_warning"
     else
-      #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
-      saved_log="$(gui_save_failure_log)"
       #installer writes the error_marker before showing its own error dialog; if it exists, skip the completion dialog
       if installer_showed_own_error ;then
         rm -f "$error_marker"
         exit "$installer_status"
       fi
-      #canceling the password dialog, or mistyping it three times, fails before the destructive script
-      #ever runs; say so plainly instead of the generic "stopped unexpectedly" wording, which reads like
-      #a real crash, and offer to try the password again rather than forcing a full app restart
-      password_retry_reason=''
-      if grep -qF 'Administrator authentication was canceled or unavailable' "$saved_log" 2>/dev/null ;then
-        password_retry_reason='Flashing did not start: administrator access was canceled or the password dialog closed before a password was entered.'
-      elif grep -qF 'incorrect password attempts' "$saved_log" 2>/dev/null ;then
-        password_retry_reason='Flashing did not start: the administrator password was entered incorrectly too many times.'
-      fi
-      if [ -n "$password_retry_reason" ];then
-        password_retry_choice="$(macos_choose '' "$password_retry_reason
-
-No changes have been made to $DEVICE yet. Trying again picks up at the password step and keeps the files already prepared.
-
-  Full log: $saved_log" retry Abort '' '' '' 'Try Again')" || password_retry_choice=abort
-        if [ "$password_retry_choice" == retry ];then
-          #the downloads and extraction finished before the password was ever asked for
-          resume_at_flash=1
-          continue
-        fi
+      if [ "$password_retry_choice" == retry ];then
+        resume_at_flash=1
+        continue
+      elif [ "$password_retry_choice" == close ];then
         exit "$installer_status"
       fi
       if grep -qF 'macOS denied removable-volume access' "$saved_log" 2>/dev/null ;then
@@ -2362,6 +2442,7 @@ Full log: $saved_log"
 
 if is_macos ;then
   command -v osascript >/dev/null 2>&1 || error "Cannot present graphical interface: osascript is unavailable on this macOS host. Cannot continue."
+  macos_check_accessibility || exit 0
   setup || exit 1
   announcement_choice="$(macos_show_announcement)" || exit 0
   macos_start_cli

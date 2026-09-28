@@ -8,8 +8,10 @@ import { spawnSync } from "node:child_process";
 import vm from "node:vm";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const helperSource = readFileSync(join(root, "src/lib/macos-disk-alerts.js"), "utf8");
+const guiSource = readFileSync(join(root, "install-wor-gui.sh"), "utf8");
 const context = vm.createContext({});
-vm.runInContext(readFileSync(join(root, "src/lib/macos-disk-alerts.js"), "utf8"), context);
+vm.runInContext(helperSource, context);
 const decide = context.worDiskAlertDecision;
 const active = "STEP\t5\t8\tPartitioning\nDISK_WRITE\t1\t/dev/disk99\n";
 
@@ -26,6 +28,265 @@ function alert(overrides = {}) {
     ...overrides,
   };
 }
+
+describe("macOS startup Accessibility probe", () => {
+  it("checks current trust without starting alert automation or requesting permissions", () => {
+    let trusted = true;
+    let checks = 0;
+    const imports = [];
+    const probe = vm.createContext({
+      ObjC: { import: (name) => imports.push(name) },
+      $: { AXIsProcessTrusted: () => { checks++; return trusted; } },
+      Application: () => assert.fail("The startup probe must not send Apple events."),
+    });
+    vm.runInContext(helperSource, probe);
+    assert.equal(probe.run(["--check-accessibility"]), "granted");
+    trusted = false;
+    assert.equal(probe.run(["--check-accessibility"]), "missing");
+    assert.equal(checks, 2);
+    assert.deepEqual(imports, ["ApplicationServices", "ApplicationServices"]);
+  });
+
+  it("propagates check failures and rejects malformed probe arguments", () => {
+    const probe = vm.createContext({
+      ObjC: { import: () => {} },
+      $: { AXIsProcessTrusted: () => { throw new Error("mock Accessibility failure"); } },
+    });
+    vm.runInContext(helperSource, probe);
+    assert.throws(() => probe.run(["--check-accessibility"]), /mock Accessibility failure/);
+    assert.throws(() => probe.run(["--check-accessibility", "extra"]), /Expected --check-accessibility/);
+  });
+});
+
+function runStartupPreflight({ checks, choices = [], os = "Darwin", repeat = 1 }) {
+  const directory = mkdtempSync(join(tmpdir(), "wor-startup-accessibility-"));
+  try {
+    const match = guiSource.match(/^macos_check_accessibility\(\) \{[\s\S]*?^\}/m);
+    assert.ok(match, "The GUI startup preflight function is missing.");
+    writeFileSync(join(directory, "function.sh"), match[0]);
+    writeFileSync(join(directory, "checks"), checks.join("\n") + "\n");
+    writeFileSync(join(directory, "choices"), choices.join("\n") + "\n");
+    writeFileSync(join(directory, "check-count"), "0");
+    writeFileSync(join(directory, "choice-count"), "0");
+    writeFileSync(join(directory, "messages"), "");
+    const result = spawnSync("bash", ["-c", `
+      DIRECTORY="$1" WOR_ICON_PATH=mock-icon WOR_WINDOW_TITLE="WoR-Flasher test" WOR_APP_TITLE=WoR-Flasher
+      source "$DIRECTORY/function.sh"
+      is_macos() { [ "$TEST_OS" == Darwin ]; }
+      status() { printf "status: %s\\n" "$*" >&2; }
+      echo_red() { printf "warning: %s\\n" "$*" >&2; }
+      error() { printf "error: %s\\n" "$*" >&2; exit 1; }
+      wor_osascript() {
+        [ "$#" == 4 ] && [ "$1" == -l ] && [ "$2" == JavaScript ] &&
+          [ "$3" == "$DIRECTORY/src/lib/macos-disk-alerts.js" ] &&
+          [ "$4" == --check-accessibility ] || return 99
+        count="$(cat "$DIRECTORY/check-count")"
+        count=$((count + 1))
+        printf '%s\\n' "$count" > "$DIRECTORY/check-count"
+        response="$(sed -n "\${count}p" "$DIRECTORY/checks")"
+        if [ "$response" == failure ];then
+          printf "mock helper failure\\n" >&2
+          return 42
+        fi
+        [ -n "$response" ] || return 98
+        printf '%s\\n' "$response"
+      }
+      macos_choose() {
+        [ "$#" == 14 ] && [ "$3" == recheck ] && [ "$4" == "Continue Manually" ] &&
+          [ "$5" == "Open Settings" ] && [ "$8" == Recheck ] &&
+          [ "\${11}" == manual ] && [ "\${12}" == 0 ] &&
+          [ "\${14}" == "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" ] || return 99
+        printf '%s\\n' "$2" >> "$DIRECTORY/messages"
+        count="$(cat "$DIRECTORY/choice-count")"
+        count=$((count + 1))
+        printf '%s\\n' "$count" > "$DIRECTORY/choice-count"
+        response="$(sed -n "\${count}p" "$DIRECTORY/choices")"
+        [ "$response" != quit ] && [ -n "$response" ] || return 1
+        printf '%s\\n' "$response"
+      }
+      for ((iteration=0; iteration<TEST_REPEAT; iteration++));do
+        macos_check_accessibility || exit "$?"
+      done
+      printf "wizard may start\\n"
+    `, "bash", directory], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: { ...process.env, TEST_OS: os, TEST_REPEAT: String(repeat) },
+    });
+    return {
+      ...result,
+      checks: Number(readFileSync(join(directory, "check-count"), "utf8")),
+      dialogs: Number(readFileSync(join(directory, "choice-count"), "utf8")),
+      messages: readFileSync(join(directory, "messages"), "utf8"),
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+describe("macOS startup Accessibility preflight", () => {
+  it("continues quietly when already granted and checks again on the next invocation", () => {
+    const result = runStartupPreflight({ checks: ["granted", "granted"], repeat: 2 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.checks, 2);
+    assert.equal(result.dialogs, 0);
+    assert.equal(result.stdout, "wizard may start\n");
+  });
+
+  it("rechecks the real host after missing permission instead of caching denial", () => {
+    const result = runStartupPreflight({ checks: ["missing", "granted"], choices: ["recheck"] });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.checks, 2);
+    assert.equal(result.dialogs, 1);
+    assert.match(result.messages, /Automatic Ignore needs Accessibility permission/);
+    assert.match(result.messages, /quit and reopen WoR-Flasher/);
+    assert.match(result.stderr, /Accessibility permission is allowed/);
+  });
+
+  it("keeps prompting when a recheck is still denied, without implicitly granting access", () => {
+    const result = runStartupPreflight({ checks: ["missing", "missing"], choices: ["recheck", "manual"] });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.dialogs, 2);
+    assert.doesNotMatch(result.stderr, /permission is allowed/);
+    assert.match(result.stderr, /Choose Ignore manually/);
+  });
+
+  it("permits manual continuation only after the user makes that explicit choice", () => {
+    const result = runStartupPreflight({ checks: ["missing"], choices: ["manual"] });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /continuing without confirmed Accessibility permission/);
+    assert.equal(result.stdout, "wizard may start\n");
+  });
+
+  it("stops before setup when the permission dialog is closed or quit", () => {
+    const result = runStartupPreflight({ checks: ["missing"], choices: ["quit"] });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.doesNotMatch(result.stderr, /continuing without/);
+  });
+
+  for (const check of ["failure", "unexpected-output"]) {
+    it(`reports ${check} instead of silently assuming trust`, () => {
+      const result = runStartupPreflight({ checks: [check], choices: ["manual"] });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.messages, /could not check Accessibility permission/);
+      assert.match(result.stderr, /helper exit/);
+      assert.match(result.stderr, /continuing without confirmed Accessibility permission/);
+    });
+  }
+
+  it("rejects unexpected dialog responses without starting setup", () => {
+    const result = runStartupPreflight({ checks: ["missing"], choices: ["invalid-choice"] });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unexpected Accessibility startup response/);
+    assert.equal(result.stdout, "");
+  });
+
+  it("leaves non-macOS startup unchanged", () => {
+    const result = runStartupPreflight({ checks: [], os: "Linux" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.checks, 0);
+    assert.equal(result.dialogs, 0);
+  });
+
+  it("runs after single-instance acquisition and before setup or the target wizard", () => {
+    const branch = guiSource.match(/^if is_macos ;then\n  command -v osascript[\s\S]*?^fi$/m);
+    assert.ok(branch);
+    const preflight = branch[0].indexOf("macos_check_accessibility || exit 0");
+    const setup = branch[0].indexOf("setup || exit 1");
+    const announcement = branch[0].indexOf("macos_show_announcement");
+    const wizard = branch[0].indexOf("macos_start_cli");
+    assert.ok(preflight >= 0 && preflight < setup && setup < announcement && announcement < wizard);
+    assert.ok(guiSource.indexOf("acquire_gui_instance || exit 0") < branch.index);
+    assert.match(helperSource, /if \(!\$\.AXIsProcessTrusted\(\)\)/);
+  });
+});
+
+describe("macOS permission dialog settings action", () => {
+  const start = guiSource.indexOf("    'actionClicked:':", guiSource.indexOf("macos_choose() {"));
+  const end = guiSource.indexOf("    'windowWillClose:':", start);
+  assert.ok(start >= 0 && end > start);
+  const action = guiSource.slice(start, end);
+
+  for (const scenario of ["settings", "settings-failure", "existing-action"]) {
+    it(`handles ${scenario} without changing other chooser behavior`, () => {
+      const calls = [];
+      const url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+      const bridge = (value) => value;
+      Object.assign(bridge, {
+        NSWorkspace: { sharedWorkspace: { openURL: (value) => { calls.push(["open", value]); return scenario !== "settings-failure"; } } },
+        NSURL: { URLWithString: (value) => value },
+        NSAlert: { alloc: { get init() {
+          return {
+            addButtonWithTitle: (title) => calls.push(["button", title]),
+            get runModal() { calls.push(["warning", this.messageText]); return 0; },
+          };
+        } } },
+        NSOKButton: 1,
+      });
+      const scope = vm.createContext({
+        $: bridge,
+        actionURL: scenario === "existing-action" ? "" : url,
+        actionValue: "existing-result",
+        selectedValue: null,
+        app: { stopModalWithCode: () => calls.push(["stop"]) },
+        window: { orderOut: () => calls.push(["close"]) },
+      });
+      vm.runInContext(`({${action}})["actionClicked:"].implementation()`, scope);
+      if (scenario === "existing-action") {
+        assert.equal(scope.selectedValue, "existing-result");
+        assert.deepEqual(calls, [["stop"], ["close"]]);
+      } else {
+        assert.equal(scope.selectedValue, null);
+        assert.deepEqual(calls[0], ["open", url]);
+        assert.ok(!calls.some(([name]) => name === "stop" || name === "close"));
+        assert.equal(calls.some(([name]) => name === "warning"), scenario === "settings-failure");
+      }
+    });
+  }
+});
+
+describe("macOS alert status presentation", () => {
+  const render = guiSource.match(/^function updateDiskAlertStatus\(\) \{[\s\S]*?^\}/m);
+  assert.ok(render, "The actual progress status renderer is missing.");
+  it("starts with no routine message before the first status update", () => {
+    const initializer = guiSource.match(/^diskAlertLabel = .*$/m);
+    assert.ok(initializer);
+    const scope = vm.createContext({
+      diskAlertLabel: null,
+      $: { NSTextField: { wrappingLabelWithString: (message) => ({ stringValue: message }) } },
+    });
+    vm.runInContext(initializer[0], scope);
+    assert.equal(scope.diskAlertLabel.stringValue, "");
+  });
+
+  for (const scenario of [
+    { state: "watching", message: "Automatic Ignore is watching for the macOS unreadable-disk alert.", expected: "" },
+    { state: "warning", message: "Accessibility permission is required.", expected: "Accessibility permission is required.", warning: true },
+    { state: "ignored", message: "Automatically chose Ignore.", expected: "Automatically chose Ignore." },
+    { state: "waiting", message: "Automatic Ignore is waiting for disk preparation.", expected: "" },
+    { state: "waiting", message: "Waiting", done: "23", expected: /Automatic Ignore is unavailable/, warning: true },
+    { state: "watching", message: "Watching", done: "23", expected: /Automatic Ignore is unavailable/, warning: true },
+    { state: "invalid", raw: "not JSON", expected: /Automatic Ignore status is unavailable/, warning: true },
+  ]) {
+    it(`renders ${scenario.state}${scenario.done ? " with helper failure" : ""} without hiding actionable messages`, () => {
+      const label = { stringValue: "previous warning", textColor: "orange" };
+      const scope = vm.createContext({
+        diskAlertLabel: label,
+        diskAlertStatus: "status",
+        diskAlertDone: "done",
+        readFile: (path) => path === "done"
+          ? (scenario.done || "")
+          : (scenario.raw || JSON.stringify({ state: scenario.state, message: scenario.message })),
+        $: { NSColor: { systemOrangeColor: "orange", secondaryLabelColor: "secondary" } },
+      });
+      vm.runInContext(`${render[0]}\nupdateDiskAlertStatus()`, scope);
+      if (scenario.expected instanceof RegExp) assert.match(label.stringValue, scenario.expected);
+      else assert.equal(label.stringValue, scenario.expected);
+      assert.equal(label.textColor, scenario.warning ? "orange" : "secondary");
+    });
+  }
+});
 
 describe("macOS unreadable-disk alert policy", () => {
   it("selects only Ignore for the exact system alert during authorized writes", () => {

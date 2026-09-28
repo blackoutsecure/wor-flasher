@@ -150,6 +150,7 @@ Administrator access is requested through a native password dialog on both platf
 #### macOS walkthrough
 
 1. Double-click **WoR-Flasher.app**, or launch `./install-wor-gui.sh` or `./install-wor.sh --gui`, from macOS 13 or newer.
+   Before the setup wizard, the GUI checks Accessibility using the same script host as Automatic Ignore. If permission is missing, choose **Open Settings**, enable the entry macOS shows for WoR-Flasher or its launcher, then return and choose **Recheck**. **Continue Manually** proceeds without requiring this optional permission; closing the dialog quits without starting setup or flashing.
 2. Review the partnership announcement. The **Botspot** and **Blackout Secure** names open their respective websites, and the Proceed button continues automatically after the countdown.
 3. Choose the Windows version, language, Raspberry Pi model and target drive in native AppKit windows. The target drive is clearly identified before any erase operation.
 4. Review the shared Installation Overview, then use **Advanced Options** for cache mode, firmware and driver choices, Pi 4 RAM handling, offline OOBE and `config.txt` customization.
@@ -456,6 +457,10 @@ Source-file repair requires a complete Git checkout. A detached app instead vali
 
 If a flash fails from the GUI, the full log is kept under `$DL_DIR/logs/` with a UTC timestamp in the filename, or wherever `WOR_LOG_FILE` points. `$DL_DIR/last-run.log` is also refreshed as a stable support shortcut. The primary path is shown in the error dialog and listed on the confirmation screen before you start. Attach that log to any bug report.
 
+Canceling the macOS administrator password dialog before writing shows **Administrator password entry was canceled**, not an unexpected-crash message. The retry screen confirms that this attempt has not changed the target and that prepared downloads are kept. **Try Again** resumes at the password step; **Close** exits without flashing. Empty or incorrect password entries have their own concise explanations. Raw `sudo`/AppleScript diagnostics remain in the saved log, not in this dialog. If writing has already started or its state cannot be confirmed, the normal error details are shown instead of claiming no changes were made.
+
+Each macOS GUI attempt accepts one password submission. If it is rejected, WoR-Flasher returns to **Try Again** instead of letting `sudo` reopen another password dialog behind the progress window. Retrying creates fresh prompt state and keeps prepared downloads. Once authorization succeeds, the log records **Administrator access granted** and progress changes to **Preparing the target disk...**, rather than continuing to display a password wait during partitioning.
+
 On macOS, `Written image verified successfully` confirms the copied data, but partition finalization must still finish. If the finalizer fails, the media is not confirmed ready to boot. The installer requires worker readiness before disk preparation and pre-creates user-owned result files.
 
 GUI launches normally have no terminal, so the default `sudo` policy scopes cached authorization to the parent process. The finalizer launches the external `sudo` command directly from the authenticated shell, rather than running the GUI wrapper inside another background shell. This avoids the immediate `Administrator authentication is no longer reusable` startup failure without allowing a second password prompt. The worker script is passed as a fixed command argument instead of relying on detached stdin. Parent-scoped authorization and startup failures are covered by mock-only regression tests; an end-to-end flash with the correction still needs confirmation. Keep the diagnostic log rather than repeatedly reflashing after a startup error.
@@ -464,7 +469,11 @@ The same worker applies the Pi 3 GPT patch at its original point before written-
 
 The disk can temporarily appear unformatted immediately after administrator authentication. During an active macOS GUI flash, WoR-Flasher automatically chooses **Ignore** for the exact **The disk you attached was not readable by this computer** system alert. It never chooses **Initialize** or **Eject**, never dismisses other alert types, and does not disable Disk Arbitration or change global disk settings. The alert may appear briefly before dismissal. Automation starts only after authentication and finalizer readiness, and stops when the flash completes, fails, or is aborted.
 
-This requires macOS **Accessibility** permission for WoR-Flasher and permission to control **System Events** under **Privacy & Security > Automation**. WoR-Flasher does not grant these permissions itself. If access is denied, the progress window shows a warning and flashing continues normally; choose **Ignore** manually in that case. Because the system alert does not identify its disk, automatic dismissal is limited to the active-write window and a single matching system alert; multiple matching alerts are left for manual handling.
+Routine Automatic Ignore waiting and watching messages are not displayed in the progress window, including when it first opens. Permission warnings and helper errors remain visible.
+
+This requires macOS **Accessibility** permission for WoR-Flasher and permission to control **System Events** under **Privacy & Security > Automation**. Both the packaged app and a directly launched macOS GUI check Accessibility at startup, before the flashing wizard, Windows/firmware preparation, or administrator authentication for disk writing. Already-granted permission does not show a dialog. Otherwise, **Open Settings** opens the Accessibility pane without closing the startup dialog; add the app with **+** if it is not listed. **Recheck** queries the actual script host again, and **Continue Manually** explicitly accepts manual Ignore handling for that launch. If macOS does not recognize a changed permission immediately, quit and reopen WoR-Flasher.
+
+WoR-Flasher never grants permission itself or caches a successful check as authorization. System Events Automation permission is separate and may still be requested when Automatic Ignore is first used. The live helper continues checking Accessibility during writing, so revoking permission or denying Automation still produces a progress warning without interrupting the flash; choose **Ignore** manually in that case. Because the system alert does not identify its disk, automatic dismissal is limited to the active-write window and a single matching system alert; multiple matching alerts are left for manual handling.
 
 The developer-only `src/macos-disk-claim.c` prototype explores a per-disk claim held by a control pipe. It is not packaged or invoked by the app: compilation succeeded, but claim acquisition timed out on a disposable disk image on the development host. Prompt suppression and formatter compatibility remain unverified. Do not use this prototype on physical media until its lifecycle and formatting interactions have been validated on disposable images.
 
@@ -654,6 +663,7 @@ These additions are maintained directly by Blackout Secure in cooperation with B
 ## Versions
 
 - **2.0.0**
+  - Check Automatic Ignore Accessibility permission at macOS GUI startup, with Open Settings, Recheck, and an explicit manual fallback before flashing.
   - Modernized the cross-platform flashing workflow, release tooling and configuration.
   - Added a native standalone macOS runtime with validated, rollback-capable updates.
   - Improved macOS disk preparation, remount handling and post-write verification resilience.

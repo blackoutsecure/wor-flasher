@@ -927,7 +927,8 @@ SH
   [ "$(grep -cE '(^|[^n]) *sudo -v' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
     && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 1 ] \
     && grep -qF 'sudo -v || error "Administrator authentication failed or was canceled.' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'sudo -v || error "Administrator authentication failed or was canceled.'$'\n''  darwin_start_partition_finalizer_or_die' "$REPO_DIR/install-wor.sh" \
+    && grep -qF "emit_gui_task_progress 0 'Preparing the target disk...'" "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'status "Administrator access granted."' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Administrator access: requesting macOS password with the native WoR-Flasher dialog.' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'if command sudo -n -v >/dev/null 2>&1;then' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'export WOR_GUI_SUDO_PROMPTED=1' "$REPO_DIR/install-wor.sh" \
@@ -1063,7 +1064,8 @@ SH
   #canceling the password dialog fails before anything destructive runs; the completion screen must say so
   #plainly instead of the generic "stopped unexpectedly" wording, which reads like a real crash
   grep -qF "grep -qF 'Administrator authentication was canceled or unavailable' \"\$saved_log\"" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'No changes have been made to $DEVICE yet.' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Flashing has not started. No changes have been made to $DEVICE.' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'macos_password_retry_dialog "$saved_log" "$progress_file"' "$REPO_DIR/install-wor-gui.sh" \
     && pass "canceling the administrator password dialog is not reported as a script crash" \
     || fail "canceling the administrator password dialog is reported as if the script crashed"
 
@@ -1071,7 +1073,7 @@ SH
   #instead of forcing a full app restart when nothing has been written to disk yet
   grep -qF "grep -qF 'incorrect password attempts' \"\$saved_log\"" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "macos_choose '' \"\$password_retry_reason" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "retry Abort '' '' '' 'Try Again'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "retry Close '' '' '' 'Try Again'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'if [ "$password_retry_choice" == retry ];then' "$REPO_DIR/install-wor-gui.sh" \
     && pass "a failed password attempt offers to try again instead of only an OK button" \
     || fail "a failed password attempt does not offer to try again"
@@ -1631,6 +1633,10 @@ SH
       error() { printf "%s\n" "$*"; exit 1; }
       [ "$(type -P sudo)" == "$AUTH_MOCK_SUDO" ] || error "Refusing to use real sudo in an authorization test."
       mktemp() {
+        if [ "$#" == 0 ];then
+          /usr/bin/mktemp "$AUTH_TEST_DIR/prompt.XXXXXX"
+          return
+        fi
         [ "$*" == -d ] || return 1
         printf "%s\n" "$AUTH_TEST_DIR/worker"
       }
