@@ -55,6 +55,25 @@ describe("Release workflow prerequisites", () => {
       assert.ok(paths.includes(document), `${document} is missing from the runtime manifest`);
     }
   });
+
+  it("publishes both minimal Linux tarballs with checksums instead of the combined ZIP", () => {
+    for (const flavor of ["cli", "gui"]) {
+      assert.ok(release.includes(`cp "release/linux/wor-flasher-$version-linux-${flavor}.tar.gz" "$archive_dir/"`));
+      assert.ok(release.includes(`wor-flasher-"$version"-linux-${flavor}.tar.gz`));
+      assert.ok(release.includes(`\${{ steps.package.outputs.directory }}/wor-flasher-*-linux-${flavor}.tar.gz`));
+    }
+    assert.doesNotMatch(release, /linux-rpi\.zip/);
+    assert.match(release, /\/install-wor\.sh/);
+  });
+
+  it("publishes the macOS DMG with checksums instead of a ZIP", () => {
+    assert.ok(release.includes('cp "release/macos/WoR-Flasher-$version-macos.dmg" "$archive_dir/"'));
+    assert.ok(release.includes('WoR-Flasher-"$version"-macos.dmg'));
+    assert.ok(release.includes("${{ steps.package.outputs.directory }}/WoR-Flasher-*-macos.dmg"));
+    assert.doesNotMatch(release, /macos\.zip/);
+    const publisher = release.slice(release.indexOf("  publish:"));
+    assert.match(publisher, /runs-on: macos-latest/);
+  });
 });
 
 describe("CI loop-device verification", () => {

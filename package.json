@@ -1,6 +1,6 @@
 {
   "name": "wor-flasher",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "type": "module",
   "description": "Release tooling for WoR-Flasher packaging; disk flashing remains in the shell engine.",
@@ -37,6 +37,7 @@
     "build": "node src/build-release.mjs --platform=all",
     "build:macos": "node src/build-release.mjs --platform=macos",
     "build:linux": "node src/build-release.mjs --platform=linux",
+    "build:standalone": "node src/build-release.mjs --platform=standalone",
     "package:macos": "node src/build-release.mjs --platform=macos",
     "package:all": "node src/build-release.mjs --platform=all",
     "pe:check": "node src/check-pe-installer.mjs --check",
@@ -47,7 +48,7 @@
     "version:set": "node src/set-version.mjs",
     "test": "node --test tests/*.test.mjs && ./tests/run-tests.sh",
     "test:node": "node --test tests/*.test.mjs",
-    "check": "bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh && node --check src/build-release.mjs && node --check src/check-pe-installer.mjs && node --check src/sync-package-metadata.mjs && node --check src/updater.mjs && node --check src/package-macos-app.mjs && node --check src/set-version.mjs && node --check src/lib/node-runtime.mjs && node --test tests/*.test.mjs && node src/sync-package-metadata.mjs --check && node src/build-release.mjs --check --platform=all"
+    "check": "bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh && bash -n src/standalone-launcher.sh && node --check src/build-release.mjs && node --check src/package-macos-dmg.mjs && node --check src/package-standalone.mjs && node --check src/check-pe-installer.mjs && node --check src/sync-package-metadata.mjs && node --check src/updater.mjs && node --check src/package-macos-app.mjs && node --check src/set-version.mjs && node --check src/lib/node-runtime.mjs && node --test tests/*.test.mjs && node src/sync-package-metadata.mjs --check && node src/build-release.mjs --check --platform=all"
   },
   "engines": {
     "node": ">=20"

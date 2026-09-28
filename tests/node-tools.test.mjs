@@ -1,4 +1,5 @@
 import { describe, it } from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import {
   mkdtempSync,
@@ -592,32 +593,54 @@ describe("Node.js Tooling - Runtime Paths & Manifests", () => {
 });
 
 describe("Node.js Tooling - macOS Packaging & Version CLI", () => {
-  it("should package Linux entry scripts in a versioned tar.gz release", () => {
+  it("should package separate minimal Linux GUI and CLI tar.gz clients", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-    const archiveName = `WoR-Flasher-${pkg.version}-linux.tar.gz`;
-    const archivePath = join("release", "linux", archiveName);
     const buildRes = spawnSync(
       "node",
       ["src/build-release.mjs", "--platform=linux"],
       { encoding: "utf8" },
     );
     assert.equal(buildRes.status, 0, buildRes.stderr);
-    assert.equal(existsSync(archivePath), true);
-
-    const archiveRes = spawnSync("tar", ["-tzf", archivePath], {
-      encoding: "utf8",
-    });
-    assert.equal(archiveRes.status, 0, archiveRes.stderr);
-    for (const script of [
-      "wor-flasher/install-wor.sh",
-      "wor-flasher/install-wor-gui.sh",
-      "wor-flasher/install-wor-hook.sh",
-    ]) {
-      assert.match(archiveRes.stdout, new RegExp(`^${script}$`, "m"));
-    }
-
     const sums = readFileSync(join("release", "linux", "SHA256SUMS"), "utf8");
-    assert.match(sums, new RegExp(`^[a-f0-9]{64}  ${archiveName}$`, "m"));
+    for (const [flavor, script] of [["cli", "install-wor.sh"], ["gui", "install-wor-gui.sh"]]) {
+      const archiveName = `wor-flasher-${pkg.version}-linux-${flavor}.tar.gz`;
+      const archivePath = join("release", "linux", archiveName);
+      assert.equal(existsSync(archivePath), true);
+      const archiveRes = spawnSync("tar", ["-tzf", archivePath], { encoding: "utf8" });
+      assert.equal(archiveRes.status, 0, archiveRes.stderr);
+      assert.deepEqual(archiveRes.stdout.trim().split("\n").sort(),
+        [script, "README.txt", "LICENSE", "NOTICE"].sort());
+      assert.match(sums, new RegExp(`^[a-f0-9]{64}  ${archiveName}$`, "m"));
+      const extracted = mkdtempSync(join(tmpdir(), `wor-flat-${flavor}-`));
+      try {
+        const unpack = spawnSync("tar", ["-xzf", archivePath, "-C", extracted], { encoding: "utf8" });
+        assert.equal(unpack.status, 0, unpack.stderr);
+        assert.ok(existsSync(join(extracted, script)));
+        assert.equal(existsSync(join(extracted, "wor-flasher")), false);
+        assert.equal(readFileSync(join(extracted, "README.txt"), "utf8"),
+          readFileSync(join("release", "linux", "README.txt"), "utf8"));
+        if (flavor === "cli") {
+          const home = join(extracted, "home");
+          mkdirSync(home);
+          const run = spawnSync("/bin/bash", [join(extracted, script), "--version"], {
+            cwd: extracted, encoding: "utf8", timeout: 10000,
+            env: { ...process.env, HOME: home, XDG_CACHE_HOME: join(home, ".cache"), NO_UPDATE: "1", RUN_MODE: "cli" },
+          });
+          assert.equal(run.status, 0, run.stderr);
+          assert.equal(run.stdout.trim(), `WoR-Flasher ${pkg.version}`);
+        }
+      } finally {
+        rmSync(extracted, { recursive: true, force: true });
+      }
+    }
+    assert.equal(existsSync(join("release", "linux", "wor-flasher")), false);
+    const client = readFileSync(join("release", "linux", "install-wor.sh"));
+    const clientHash = createHash("sha256").update(client).digest("hex");
+    const gui = readFileSync(join("release", "linux", "install-wor-gui.sh"), "utf8");
+    assert.ok(gui.includes(`WOR_GUI_BOOTSTRAP_BASE_URL='https://github.com/${readProjectMetadata().systemDefaults.repoSlug}/releases/download/v${pkg.version}'`));
+    assert.ok(gui.includes(`WOR_GUI_BOOTSTRAP_SHA256='${clientHash}'`));
+    assert.match(client.toString("utf8"), /^#WOR_STANDALONE_CLIENT$/m);
+    assert.equal(existsSync(join("release", "linux", `WoR-Flasher-${pkg.version}-linux.tar.gz`)), false);
   });
 
   it("should pass packaging validation for staged macOS app", () => {
@@ -627,6 +650,18 @@ describe("Node.js Tooling - macOS Packaging & Version CLI", () => {
       { encoding: "utf8" },
     );
     assert.equal(buildRes.status, 0);
+
+    const version = readProjectMetadata().product.version;
+    const dmgName = `WoR-Flasher-${version}-macos.dmg`;
+    const dmgPath = join("release", "macos", dmgName);
+    if (process.platform === "darwin") {
+      assert.equal(existsSync(dmgPath), true);
+      const dmgHash = createHash("sha256").update(readFileSync(dmgPath)).digest("hex");
+      assert.ok(readFileSync(join("release", "macos", "SHA256SUMS"), "utf8").includes(`${dmgHash}  ${dmgName}`));
+    } else {
+      assert.equal(existsSync(dmgPath), false);
+      assert.match(buildRes.stdout, /DMG creation requires macOS/);
+    }
 
     const checkRes = spawnSync(
       "node",

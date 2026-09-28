@@ -41,6 +41,13 @@
 #
 #Version history
 #---------------
+#2.0.1 - Distribute the macOS app in a verified compressed DMG while retaining the local app bundle.
+#        Package a self-contained install-wor.sh release asset for macOS and supported Linux hosts.
+#        Ship flat, minimal Linux GUI/CLI tar.gz clients; fetch a verified matching runtime when GUI files are missing.
+#        Check Automatic Ignore Accessibility permission at macOS GUI startup with Settings and Recheck.
+#        Hide routine Automatic Ignore waiting and watching statuses while retaining permission and error warnings.
+#        Present canceled pre-write administrator prompts as retryable, without implying the disk was modified.
+#        Keep macOS password retries explicit and advance progress immediately after authorization succeeds.
 #2.0.0 - Modernized the cross-platform flashing workflow, release tooling and configuration.
 #        Report the macOS partition finalizer's exit status when its result file is unavailable.
 #        Require finalizer readiness before disk preparation and pre-create user-owned results.
@@ -135,13 +142,23 @@ gui_start_sudo_keepalive() { #Keeps the GUI sudo timestamp fresh after the one a
 }
 
 sudo() { #On the GUI, show a native password dialog instead of blocking a hidden/absent terminal.
-  local sudo_status
+  local sudo_status askpass_state
   if is_macos && [ "$RUN_MODE" == gui ];then
     if [ -z "$MACOS_ASKPASS" ] && MACOS_ASKPASS="$(mktemp)" && chmod +x "$MACOS_ASKPASS";then
       cat > "$MACOS_ASKPASS" <<'ASKPASS'
 #!/bin/bash
 #shellcheck disable=SC1090
 source "$WOR_METADATA_FILE"
+#Track prompt use, never the password; a second callback returns control to the GUI retry screen.
+if [ -z "${WOR_GUI_ASKPASS_STATE:-}" ] || [ ! -f "$WOR_GUI_ASKPASS_STATE" ] || [ ! -w "$WOR_GUI_ASKPASS_STATE" ];then
+  printf '%s\n' 'Administrator password prompt state is unavailable.' >&2
+  exit 1
+fi
+if [ -s "$WOR_GUI_ASKPASS_STATE" ];then
+  printf '%s\n' 'Administrator password was not accepted. Choose Try Again to enter it again.' >&2
+  exit 1
+fi
+printf 'prompted\n' > "$WOR_GUI_ASKPASS_STATE" || exit 1
 wor_osascript - "$WOR_WINDOW_TITLE" "$WOR_FLASH_TARGET" <<'APPLESCRIPT'
 on run argv
   set windowTitle to item 1 of argv
@@ -166,9 +183,12 @@ ASKPASS
         printf '%s\n' 'Administrator authentication is no longer reusable; refusing to show a second password dialog during the flash.' >&2
         return 1
       fi
+      #A fresh marker prevents a canceled or rejected attempt from blocking the next explicit retry.
+      askpass_state="$(mktemp)" || { printf '%s\n' 'Failed to create administrator password prompt state.' >&2; return 1; }
+      register_file_cleanup "$askpass_state"
       printf '%s\n' 'Administrator access: requesting macOS password with the native WoR-Flasher dialog.' >&2
       emit_gui_task_progress 0 'Waiting for administrator access...'
-      WOR_FLASH_TARGET="$DEVICE" WOR_METADATA_FILE="$WOR_METADATA_FILE" WOR_APP_TITLE="$WOR_APP_TITLE" WOR_WINDOW_TITLE="$WOR_WINDOW_TITLE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"
+      WOR_GUI_ASKPASS_STATE="$askpass_state" WOR_FLASH_TARGET="$DEVICE" WOR_METADATA_FILE="$WOR_METADATA_FILE" WOR_APP_TITLE="$WOR_APP_TITLE" WOR_WINDOW_TITLE="$WOR_WINDOW_TITLE" SUDO_ASKPASS="$MACOS_ASKPASS" command sudo -A "$@"
       sudo_status=$?
       if [ "$sudo_status" == 0 ];then
         export WOR_GUI_SUDO_PROMPTED=1
@@ -1044,8 +1064,7 @@ darwin_flash_device() {
   is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
   local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device copy_attempt pi3_patch=''
   sgdisk_bin="$(command -v sgdisk)" || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."
-  #GUI mode authenticated at startup, while a dialog could still reach the front; prompting from here
-  #would put it behind the progress window, where it can never be answered
+  #The GUI requests authorization at the write boundary through its native password dialog.
   if [ "$RUN_MODE" != gui ] && ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1;then
     error "Administrator authentication failed or was canceled. Enter the correct macOS password and try again."
   fi
@@ -1055,15 +1074,17 @@ darwin_flash_device() {
   [ "$boot_size_mb" -lt 1536 ] && boot_size_mb=1536
   [ "$CAN_INSTALL_ON_SAME_DRIVE" == 1 ] && install_size_mb=18000 || install_size_mb=6000
   phase "Partitioning and formatting $DEVICE"
-  printf '  There is no turning back now.\n' 1>&2
-  status "  Creating WOR_BOOT (${boot_size_mb} MB) and WOR_INSTALL (${install_size_mb} MB)"
   PART1="${DEVICE}s1"
   PART2="${DEVICE}s2"
   [ "$RPI_MODEL" != 3 ] || pi3_patch="$PWD/peinstaller/pi3/gptpatch.img"
   #Authenticate in this shell before helpers capture their output in subshells; otherwise the
   #GUI prompt state does not survive to the final privileged disk operation.
   sudo -v || error "Administrator authentication failed or was canceled. Enter the macOS password in the WoR-Flasher dialog and try again."
+  emit_gui_task_progress 0 'Preparing the target disk...'
+  status "Administrator access granted."
   darwin_start_partition_finalizer_or_die "$DEVICE" "$sgdisk_bin" "$pi3_patch"
+  printf '  There is no turning back now.\n' 1>&2
+  status "  Creating WOR_BOOT (${boot_size_mb} MB) and WOR_INSTALL (${install_size_mb} MB)"
   emit_gui_progress "DISK_WRITE"$'\t'"1"$'\t'"$DEVICE"
   darwin_prepare_disk_or_die "$DEVICE" "$sgdisk_bin" "$boot_size_mb" "$install_size_mb" "$PART1" "$PART2"
   gui_start_sudo_keepalive

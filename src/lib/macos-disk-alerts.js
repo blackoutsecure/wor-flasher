@@ -55,11 +55,13 @@ function worDiskAlertTransientError(error) {
 }
 
 function run(argv) {
-  if (argv.length !== 5 || !/^[1-9][0-9]*$/.test(argv[3])) {
-    throw new Error("Expected progress, completion, abort, installer PID, and status paths.");
+  const checkAccessibility = argv.length === 1 && argv[0] === "--check-accessibility";
+  if (!checkAccessibility && (argv.length !== 5 || !/^[1-9][0-9]*$/.test(argv[3]))) {
+    throw new Error("Expected --check-accessibility or progress, completion, abort, installer PID, and status paths.");
   }
-  ObjC.import("Foundation");
   ObjC.import("ApplicationServices");
+  if (checkAccessibility) return $.AXIsProcessTrusted() ? "granted" : "missing";
+  ObjC.import("Foundation");
   ObjC.bindFunction("kill", ["int", ["int", "int"]]);
   const progressPath = argv[0];
   const donePath = argv[1];

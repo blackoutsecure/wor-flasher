@@ -11,6 +11,10 @@
 
 : "${WOR_ANNOUNCEMENT_TIMEOUT:=30}"
 
+#Packaged Linux GUI clients pin both values to their matching release.
+WOR_GUI_BOOTSTRAP_BASE_URL='https://github.com/blackoutsecure/wor-flasher/releases/latest/download'
+WOR_GUI_BOOTSTRAP_SHA256=''
+
 export RUN_MODE=gui #this variable is detected by install-wor.sh to display gui error messages
 
 #Determine the directory that contains this script
@@ -31,16 +35,6 @@ if [ "$(uname -s 2>/dev/null)" == Darwin ] && [ "${WOR_NATIVE_APP:-0}" != 1 ] &&
   exec /usr/bin/open -W "$DIRECTORY/release/macos/WoR-Flasher.app"
 fi
 
-#This script and cli-based install-wor.sh must be in the same directory. Source it before anything else
-#so every shared behaviour - error dialogs, status output, drive detection, the settings summary - comes
-#from the installer itself and can never drift out of step with what actually gets flashed.
-#Nothing above this point may call a shared function, so failures here are reported by hand.
-cli_script="$DIRECTORY/install-wor.sh"
-if [ ! -d "$DIRECTORY" ] || [ ! -f "$cli_script" ];then
-  printf '\033[91m%b\033[0m\n' "No script found named install-wor.sh\nBoth scripts must be in the same directory." 1>&2
-  exit 1
-fi
-
 repair_missing_checkout_runtime() { #Restore only absent runtime files from local HEAD before shared libraries are sourced.
   local required_path
   local missing=()
@@ -57,10 +51,132 @@ repair_missing_checkout_runtime() { #Restore only absent runtime files from loca
     || { printf 'Failed to restore missing WoR-Flasher files from local Git HEAD.\n' 1>&2; return 1; }
 }
 
+gui_runtime_complete() { #Input: runtime directory. Do not source a partial engine or mix versions of its dependencies.
+  local path
+  for path in \
+    install-wor.sh \
+    src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh \
+    src/lib/node-runtime.mjs src/lib/macos-disk-alerts.js src/updater.mjs \
+    src/config/metadata.json src/config/metadata.schema.json \
+    config-templates/config.json config-templates/config.schema.json \
+    config-templates/pi3.config.txt config-templates/pi4.config.txt config-templates/pi5.config.txt \
+    config-templates/pi4-ram-unlock.ps1 config-templates/pi4-ram-unlock-specialize.xml \
+    config-templates/oobe-network-bypass.xml config-templates/prefinalize.cmd \
+    assets/logo-full.png assets/partnership.png assets/overview.png assets/ram.png assets/next-steps.png ;do
+    [ -f "$1/$path" ] && [ -r "$1/$path" ] || return 1
+  done
+}
+
+gui_fetch_runtime_file() { #Input: HTTPS URL and destination. Bootstrap must not weaken transport verification.
+  case "$1" in
+    https://*) ;;
+    *) printf 'Refusing a non-HTTPS GUI runtime download.\n' >&2; return 1 ;;
+  esac
+  if command -v curl >/dev/null 2>&1;then
+    curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+      --connect-timeout 15 --max-time 120 --output "$2" -- "$1"
+  elif command -v wget >/dev/null 2>&1;then
+    wget --https-only --timeout=30 --tries=2 -O "$2" -- "$1"
+  else
+    printf 'Missing GUI runtime: curl or wget is required to download it. Alternatively, put the standalone install-wor.sh release file beside this GUI script.\n' >&2
+    return 1
+  fi
+}
+
+gui_bootstrap_client() { #Output: verified standalone client path. Only a private cache is written; local files are preserved.
+  (
+    set -euo pipefail
+    umask 077
+    #Subshell-owned state remains available to EXIT cleanup even on Bash 3.2 error exits.
+    cache_root='' workspace='' expected='' actual='' cached=''
+    hash_command=()
+    if command -v sha256sum >/dev/null 2>&1;then
+      hash_command=(sha256sum)
+    elif command -v shasum >/dev/null 2>&1;then
+      hash_command=(shasum -a 256)
+    else
+      printf 'GUI runtime verification requires sha256sum or shasum.\n' >&2
+      exit 1
+    fi
+    cache_root="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/wor-flasher/gui-client"
+    [[ "$cache_root" == /* ]] && [ ! -L "$cache_root" ] \
+      || { printf 'Refusing an unsafe GUI runtime cache: %s\n' "$cache_root" >&2; exit 1; }
+    mkdir -p "$cache_root" || { printf 'Could not create GUI runtime cache: %s\n' "$cache_root" >&2; exit 1; }
+    [ -O "$cache_root" ] || { printf 'GUI runtime cache is not owned by this user: %s\n' "$cache_root" >&2; exit 1; }
+    chmod 700 "$cache_root" || { printf 'Could not secure GUI runtime cache: %s\n' "$cache_root" >&2; exit 1; }
+    workspace="$(mktemp -d "$cache_root/.download.XXXXXX")" \
+      || { printf 'Could not create GUI download staging.\n' >&2; exit 1; }
+    trap 'result=$?; trap - EXIT; rm -rf -- "$workspace" || result=1; exit "$result"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' HUP TERM
+    expected="$WOR_GUI_BOOTSTRAP_SHA256"
+    if [ -z "$expected" ];then
+      gui_fetch_runtime_file "$WOR_GUI_BOOTSTRAP_BASE_URL/SHA256SUMS" "$workspace/SHA256SUMS" \
+        || { printf 'Could not obtain GUI runtime checksums from the maintained release.\n' >&2; exit 1; }
+      expected="$(awk '$2 == "install-wor.sh" { count++; digest=$1 } END { if (count != 1) exit 1; print digest }' "$workspace/SHA256SUMS")" \
+        || { printf 'The release does not identify exactly one standalone install-wor.sh checksum.\n' >&2; exit 1; }
+    fi
+    [[ "$expected" =~ ^[0-9a-f]{64}$ ]] \
+      || { printf 'Invalid standalone runtime SHA-256 checksum.\n' >&2; exit 1; }
+    cached="$cache_root/$expected.sh"
+    if [ ! -e "$cached" ] && [ ! -L "$cached" ];then
+      printf 'Obtaining the complete GUI runtime from %s/install-wor.sh...\n' "$WOR_GUI_BOOTSTRAP_BASE_URL" >&2
+      gui_fetch_runtime_file "$WOR_GUI_BOOTSTRAP_BASE_URL/install-wor.sh" "$workspace/install-wor.sh" \
+        || { printf 'Could not download the GUI runtime. No local files were replaced.\n' >&2; exit 1; }
+      actual="$("${hash_command[@]}" "$workspace/install-wor.sh")" \
+        || { printf 'Could not hash the downloaded GUI runtime.\n' >&2; exit 1; }
+      [ "${actual%% *}" == "$expected" ] \
+        || { printf 'Downloaded GUI runtime checksum mismatch; refusing to run it.\n' >&2; exit 1; }
+      grep -qFx '#WOR_STANDALONE_CLIENT' "$workspace/install-wor.sh" \
+        || { printf 'The release runtime is not a standalone client; refusing to run a partial script.\n' >&2; exit 1; }
+      chmod 700 "$workspace/install-wor.sh" || { printf 'Could not secure the downloaded GUI runtime.\n' >&2; exit 1; }
+      mv -n "$workspace/install-wor.sh" "$cached" || { printf 'Could not cache the verified GUI runtime.\n' >&2; exit 1; }
+    fi
+    [ -f "$cached" ] && [ -O "$cached" ] && [ ! -L "$cached" ] \
+      || { printf 'Refusing an unsafe cached GUI runtime: %s\n' "$cached" >&2; exit 1; }
+    actual="$("${hash_command[@]}" "$cached")" \
+      || { printf 'Could not hash the cached GUI runtime.\n' >&2; exit 1; }
+    [ "${actual%% *}" == "$expected" ] \
+      || { printf 'Cached GUI runtime failed verification. Move this file aside after closing all runs: %s\n' "$cached" >&2; exit 1; }
+    grep -qFx '#WOR_STANDALONE_CLIENT' "$cached" \
+      || { printf 'The cached GUI runtime is not a standalone client.\n' >&2; exit 1; }
+    printf '%s\n' "$cached"
+  )
+}
+
 repair_missing_checkout_runtime || exit 1
 
+cli_script="$DIRECTORY/install-wor.sh"
+if [ -z "${WOR_CONFIG_FILE:-}" ] && [ -f "$DIRECTORY/config.json" ];then
+  export WOR_CONFIG_FILE="$DIRECTORY/config.json"
+fi
+if [ -f "$cli_script" ] && grep -qFx '#WOR_STANDALONE_CLIENT' "$cli_script";then
+  [ "${WOR_GUI_BOOTSTRAPPED:-0}" != 1 ] \
+    || { printf 'The standalone GUI runtime is incomplete; refusing a bootstrap loop.\n' >&2; exit 1; }
+  export WOR_GUI_BOOTSTRAPPED=1
+  exec "$BASH" "$cli_script" --gui "$@"
+fi
+if ! gui_runtime_complete "$DIRECTORY";then
+  if [ "$(uname -s 2>/dev/null)" != Linux ];then
+    printf 'The GUI runtime is incomplete. Use the full checkout or the macOS app, or place the standalone install-wor.sh release beside this script.\n' >&2
+    exit 1
+  fi
+  if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSLENV:-}" ] || grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null;then
+    printf 'WoR-Flasher does not support WSL. No runtime was downloaded.\n' >&2
+    exit 1
+  fi
+  if [ "${WOR_GUI_BOOTSTRAPPED:-0}" == 1 ];then
+    printf 'The downloaded GUI runtime is incomplete; refusing a bootstrap loop.\n' >&2
+    exit 1
+  fi
+  printf 'Local GUI runtime files are missing. Using a verified release runtime; existing files are left unchanged.\n' >&2
+  cli_script="$(gui_bootstrap_client)" || exit 1
+  export WOR_GUI_BOOTSTRAPPED=1
+  exec "$BASH" "$cli_script" --gui "$@"
+fi
+
 #shellcheck disable=SC1090
-source "$cli_script" source #by sourcing, this script checks for and applies updates.
+source "$cli_script" source #shared engine definitions and a read-only release check
 
 #outside the packaged .app (which sets this from its own bundled .icns), fall back to the same
 #logo PNG the rest of the app already uses, so the Dock and minimized-window tile are branded
@@ -267,6 +383,51 @@ gui_log_tail() { #Input: log path. Output: the last lines, with terminal escapes
   LC_ALL=C sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g' "$1" | tail -n 18
 }
 
+macos_password_retry_dialog() { #Input: saved log and progress file. Output: retry/close only for authentication that failed before writing.
+  local saved_log="$1" progress_path="$2" password_retry_reason choice
+  if [ ! -r "$saved_log" ] || [ ! -r "$progress_path" ];then
+    warning "Administrator authentication could not be classified because its diagnostics are unavailable."
+    return 1
+  fi
+  #Any write marker rules out a no-changes claim, even if a later marker says writing stopped.
+  awk -F '\t' '
+    $1 == "DISK_WRITE" && $2 == "1" { written = 1 }
+    $1 == "STEP" { step = $2; total = $3; label = $4 }
+    END {
+      exit written || label !~ /^Partitioning and formatting / ||
+        !((total == 8 && step == 5) || (total == 7 && step == 4))
+    }
+  ' "$progress_path" || return 1
+  if ! grep -qF 'Administrator authentication failed or was canceled.' "$saved_log" \
+    && ! grep -qF 'Administrator authentication was canceled or unavailable' "$saved_log";then
+    return 1
+  fi
+  if grep -qF '(-128)' "$saved_log";then
+    password_retry_reason='Administrator password entry was canceled.'
+  elif grep -qF 'incorrect password attempts' "$saved_log" \
+    || grep -qF 'Administrator password was not accepted.' "$saved_log";then
+    password_retry_reason='The administrator password was not accepted.'
+  elif grep -qF 'no password was provided' "$saved_log";then
+    password_retry_reason='No administrator password was entered.'
+  else
+    password_retry_reason='Administrator access was not obtained.'
+  fi
+  choice="$(macos_choose '' "$password_retry_reason
+
+Flashing has not started. No changes have been made to $DEVICE.
+
+Your prepared downloads have been kept. Try Again returns to the administrator password step.
+
+Log: $saved_log" retry Close '' '' '' 'Try Again' "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE | Administrator access")" || choice=close
+  case "$choice" in
+    retry|close) printf '%s\n' "$choice" ;;
+    *)
+      warning "The administrator retry dialog returned an unexpected response; showing the full error instead."
+      return 1
+      ;;
+  esac
+}
+
 loading_dialog() { #display a dialog to say something is loading
   local dialog_pid
   #1, not 0: gtk_window_resize asserts height > 0, and GTK still grows the window to its natural size
@@ -283,7 +444,7 @@ stop_loader() {
   loader_pid=''
 }
 
-macos_choose() { #Input: newline-separated choices, prompt, default, cancel/back label, optional action label/value, optional image path/next label/icon path/window title/cancel value/timeout/process title. Output: selected choice or action value.
+macos_choose() { #Input: choices, prompt, default, cancel label, action label/value, image, next label, icon, title, cancel value, timeout, process title, optional action URL. Output: choice or action value.
   local result choose_jxa
   choose_jxa="$(wor_jxa_window_lib; cat <<'JXA'
 ObjC.import('AppKit')
@@ -305,6 +466,7 @@ const windowTitle = ObjC.unwrap(args.objectAtIndex(13))
 const cancelValue = ObjC.unwrap(args.objectAtIndex(14))
 const announcementTimeout = Number(ObjC.unwrap(args.objectAtIndex(15) || '0'))
 const appTitle = ObjC.unwrap(args.objectAtIndex(16) || windowTitle)
+const actionURL = ObjC.unwrap(args.objectAtIndex(17))
 //a message screen has no selectable rows; it may still show an image (e.g. the welcome screen)
 const isMessageMode = choices.length === 0
 const isPartnershipAnnouncement = imagePath.endsWith('/partnership.png')
@@ -396,6 +558,17 @@ const Controller = ObjC.registerSubclass({
     'actionClicked:': {
       types: ['void', ['id']],
       implementation: function() {
+        if (actionURL.length > 0) {
+          //Keep Recheck available while System Settings is open.
+          if (!$.NSWorkspace.sharedWorkspace.openURL($.NSURL.URLWithString($(actionURL)))) {
+            const alert = $.NSAlert.alloc.init
+            alert.messageText = 'Could not open System Settings'
+            alert.informativeText = 'Open System Settings > Privacy & Security > Accessibility manually, then return here and choose Recheck.'
+            alert.addButtonWithTitle('OK')
+            alert.runModal
+          }
+          return
+        }
         selectedValue = actionValue
         app.stopModalWithCode($.NSOKButton)
         window.orderOut(null)
@@ -672,11 +845,45 @@ allowTermination = true
 app.terminate(null)
 JXA
 )"
-  result="$(wor_osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_ICON_PATH}" "${10:-$WOR_WINDOW_TITLE}" "${11:-}" "${12:-0}" "${13:-$WOR_APP_TITLE}" <<<"$choose_jxa")"
+  result="$(wor_osascript -l JavaScript - "$1" "$2" "$3" "${4:-Cancel}" "${5:-}" "${6:-}" "${7:-}" "${8:-Next}" "${9:-$WOR_ICON_PATH}" "${10:-$WOR_WINDOW_TITLE}" "${11:-}" "${12:-0}" "${13:-$WOR_APP_TITLE}" "${14:-}" <<<"$choose_jxa")"
   if [ "$result" == __WOR_CANCEL__ ];then
     return 1
   fi
   printf '%s\n' "$result"
+}
+
+macos_check_accessibility() { #Checks the same script host as Automatic Ignore before opening the setup wizard.
+  is_macos || return 0
+  local permission check_status choice message
+  status "Checking Accessibility permission for Automatic Ignore"
+  while true ;do
+    check_status=0
+    permission="$(wor_osascript -l JavaScript "$DIRECTORY/src/lib/macos-disk-alerts.js" --check-accessibility 2>&1)" || check_status=$?
+    if [ "$check_status" == 0 ] && [ "$permission" == granted ];then
+      status "Automatic Ignore: Accessibility permission is allowed."
+      return 0
+    fi
+    if [ "$check_status" == 0 ] && [ "$permission" == missing ];then
+      message="Automatic Ignore needs Accessibility permission."
+    else
+      message="Automatic Ignore could not check Accessibility permission."
+      echo_red "Warning: $message (helper exit $check_status).${permission:+ ($permission)}"
+    fi
+    message="$message
+
+Open Settings and enable WoR-Flasher in Privacy & Security > Accessibility. If it is not listed, use + to add the app you launched. If macOS lists the script host or launcher instead, enable that entry. Return here and choose Recheck. If the change is not detected, quit and reopen WoR-Flasher.
+
+This permission is only for automatically choosing Ignore on the unreadable-disk alert. You can Continue Manually and choose Ignore yourself during flashing. Never choose Initialize or Eject while a flash is running."
+    choice="$(macos_choose '' "$message" recheck 'Continue Manually' 'Open Settings' '' '' Recheck "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE | Accessibility" manual 0 "$WOR_APP_TITLE" 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility')" || return 1
+    case "$choice" in
+      recheck) ;;
+      manual)
+        echo_red "Warning: continuing without confirmed Accessibility permission. Choose Ignore manually if the unreadable-disk alert appears."
+        return 0
+        ;;
+      *) error "Unexpected Accessibility startup response: $choice" ;;
+    esac
+  done
 }
 
 macos_show_announcement() { #Output: proceed or project partner.
@@ -1655,7 +1862,7 @@ JXA
 }
 
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice password_retry_reason privacy_guidance privacy_settings_url progress_file progress_jxa resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning
+  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice privacy_guidance privacy_settings_url progress_file progress_jxa resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning
 
   current_windows_ver='Windows 11'
   current_rpi_model=''
@@ -2005,7 +2212,7 @@ function updateDiskAlertStatus() {
     const text = readFile(diskAlertStatus)
     if (text.length > 0) {
       const status = JSON.parse(text)
-      diskAlertLabel.stringValue = status.message
+      diskAlertLabel.stringValue = status.state === 'waiting' || status.state === 'watching' ? '' : status.message
       diskAlertLabel.textColor = status.state === 'warning' ? $.NSColor.systemOrangeColor : $.NSColor.secondaryLabelColor
     }
     const result = readFile(diskAlertDone).trim()
@@ -2229,7 +2436,7 @@ taskBar.maxValue = 100
 taskBar.doubleValue = 0
 content.addSubview(taskBar)
 
-diskAlertLabel = $.NSTextField.wrappingLabelWithString('Automatic Ignore is waiting for disk preparation.')
+diskAlertLabel = $.NSTextField.wrappingLabelWithString('')
 diskAlertLabel.frame = $.NSMakeRect(20, 106, width - 40, 30)
 diskAlertLabel.font = $.NSFont.systemFontOfSizeWeight(10, $.NSFontWeightRegular)
 diskAlertLabel.textColor = $.NSColor.secondaryLabelColor
@@ -2295,6 +2502,13 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
 
     installer_status="$(cat "$done_marker" 2>/dev/null)"
     [ -z "$installer_status" ] && installer_status=1
+    password_retry_choice=''
+    if [ "$installer_status" != 0 ];then
+      saved_log="$(gui_save_failure_log)"
+      if ! installer_showed_own_error;then
+        password_retry_choice="$(macos_password_retry_dialog "$saved_log" "$progress_file")" || password_retry_choice=''
+      fi
+    fi
     rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker"
 
     privacy_guidance=''
@@ -2306,33 +2520,15 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
     It is now safe to remove your USB drive."
       [ -z "$disk_alert_warning" ] || completion_text="$completion_text"$'\n\n'"$disk_alert_warning"
     else
-      #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
-      saved_log="$(gui_save_failure_log)"
       #installer writes the error_marker before showing its own error dialog; if it exists, skip the completion dialog
       if installer_showed_own_error ;then
         rm -f "$error_marker"
         exit "$installer_status"
       fi
-      #canceling the password dialog, or mistyping it three times, fails before the destructive script
-      #ever runs; say so plainly instead of the generic "stopped unexpectedly" wording, which reads like
-      #a real crash, and offer to try the password again rather than forcing a full app restart
-      password_retry_reason=''
-      if grep -qF 'Administrator authentication was canceled or unavailable' "$saved_log" 2>/dev/null ;then
-        password_retry_reason='Flashing did not start: administrator access was canceled or the password dialog closed before a password was entered.'
-      elif grep -qF 'incorrect password attempts' "$saved_log" 2>/dev/null ;then
-        password_retry_reason='Flashing did not start: the administrator password was entered incorrectly too many times.'
-      fi
-      if [ -n "$password_retry_reason" ];then
-        password_retry_choice="$(macos_choose '' "$password_retry_reason
-
-No changes have been made to $DEVICE yet. Trying again picks up at the password step and keeps the files already prepared.
-
-  Full log: $saved_log" retry Abort '' '' '' 'Try Again')" || password_retry_choice=abort
-        if [ "$password_retry_choice" == retry ];then
-          #the downloads and extraction finished before the password was ever asked for
-          resume_at_flash=1
-          continue
-        fi
+      if [ "$password_retry_choice" == retry ];then
+        resume_at_flash=1
+        continue
+      elif [ "$password_retry_choice" == close ];then
         exit "$installer_status"
       fi
       if grep -qF 'macOS denied removable-volume access' "$saved_log" 2>/dev/null ;then
@@ -2362,6 +2558,7 @@ Full log: $saved_log"
 
 if is_macos ;then
   command -v osascript >/dev/null 2>&1 || error "Cannot present graphical interface: osascript is unavailable on this macOS host. Cannot continue."
+  macos_check_accessibility || exit 0
   setup || exit 1
   announcement_choice="$(macos_show_announcement)" || exit 0
   macos_start_cli
