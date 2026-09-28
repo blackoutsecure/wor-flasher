@@ -4,7 +4,7 @@
 
 ![Maintainer partnership banner](assets/partnership.png)
 
-[![Version](https://img.shields.io/badge/version-2.0.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
+[![Version](https://img.shields.io/badge/version-2.0.1-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
 [![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=555555&logo=githubactions&logoColor=ffffff&color=0a7ea4&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
 [![License](https://img.shields.io/badge/license-GPL--3.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnu&logoColor=ffffff)](LICENSE)
 [![Platform](https://img.shields.io/badge/host-Linux%20%7C%20macOS-0a7ea4?style=for-the-badge&labelColor=555555&logo=linux&logoColor=ffffff)](#requirements)
@@ -697,11 +697,16 @@ These additions are maintained directly by Blackout Secure in cooperation with B
 
 ## Versions
 
-- **2.0.0**
+- **2.0.1**
   - Package the macOS release as a verified compressed DMG containing the complete app, while retaining the unpacked local app.
   - Split Linux releases into minimal GUI and CLI tar.gz clients; obtain a verified matching runtime when GUI dependencies are missing.
   - Add a self-contained `install-wor.sh` client to release assets for macOS and supported Linux hosts.
   - Check Automatic Ignore Accessibility permission at macOS GUI startup, with Open Settings, Recheck, and an explicit manual fallback before flashing.
+  - Hide routine Automatic Ignore waiting/watching captions while retaining permission and failure warnings.
+  - Handle canceled, empty, and rejected administrator passwords with concise Try Again/Close guidance before writing.
+  - Use fresh password-free prompt state for each explicit retry, and advance progress as soon as authorization succeeds.
+
+- **2.0.0**
   - Modernized the cross-platform flashing workflow, release tooling and configuration.
   - Added a native standalone macOS runtime with validated, rollback-capable updates.
   - Improved macOS disk preparation, remount handling and post-write verification resilience.

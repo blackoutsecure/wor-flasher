@@ -41,14 +41,14 @@
 #
 #Version history
 #---------------
-#2.0.0 - Modernized the cross-platform flashing workflow, release tooling and configuration.
-#        Distribute the macOS app in a verified compressed DMG while retaining the local app bundle.
+#2.0.1 - Distribute the macOS app in a verified compressed DMG while retaining the local app bundle.
 #        Package a self-contained install-wor.sh release asset for macOS and supported Linux hosts.
 #        Ship flat, minimal Linux GUI/CLI tar.gz clients; fetch a verified matching runtime when GUI files are missing.
 #        Check Automatic Ignore Accessibility permission at macOS GUI startup with Settings and Recheck.
 #        Hide routine Automatic Ignore waiting and watching statuses while retaining permission and error warnings.
 #        Present canceled pre-write administrator prompts as retryable, without implying the disk was modified.
 #        Keep macOS password retries explicit and advance progress immediately after authorization succeeds.
+#2.0.0 - Modernized the cross-platform flashing workflow, release tooling and configuration.
 #        Report the macOS partition finalizer's exit status when its result file is unavailable.
 #        Require finalizer readiness before disk preparation and pre-create user-owned results.
 #        Launch the macOS finalizer from the authenticated parent for no-terminal sudo sessions.
