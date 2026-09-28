@@ -42,6 +42,9 @@
 #Version history
 #---------------
 #2.0.0 - Modernized the cross-platform flashing workflow, release tooling and configuration.
+#        Distribute the macOS app in a verified compressed DMG while retaining the local app bundle.
+#        Package a self-contained install-wor.sh release asset for macOS and supported Linux hosts.
+#        Ship flat, minimal Linux GUI/CLI tar.gz clients; fetch a verified matching runtime when GUI files are missing.
 #        Check Automatic Ignore Accessibility permission at macOS GUI startup with Settings and Recheck.
 #        Hide routine Automatic Ignore waiting and watching statuses while retaining permission and error warnings.
 #        Present canceled pre-write administrator prompts as retryable, without implying the disk was modified.

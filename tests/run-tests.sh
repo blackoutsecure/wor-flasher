@@ -84,7 +84,7 @@ static_checks() {
     git -C "$REPO_DIR" diff --check >/dev/null 2>&1 \
       && pass "working tree has no whitespace errors" || fail "working tree has whitespace errors"
   fi
-  for f in src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh 'src/macos-app/Contents/MacOS/WoR-Flasher' ;do
+  for f in src/standalone-launcher.sh src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh 'src/macos-app/Contents/MacOS/WoR-Flasher' ;do
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
   jq empty "$REPO_DIR/src/config/metadata.json" >/dev/null 2>&1 \
@@ -111,6 +111,8 @@ static_checks() {
   fi
   if command -v node >/dev/null ;then
     node --check "$REPO_DIR/src/build-release.mjs" >/dev/null 2>&1 \
+    && node --check "$REPO_DIR/src/package-macos-dmg.mjs" >/dev/null 2>&1 \
+    && node --check "$REPO_DIR/src/package-standalone.mjs" >/dev/null 2>&1 \
     && node --check "$REPO_DIR/src/check-pe-installer.mjs" >/dev/null 2>&1 \
     && node --check "$REPO_DIR/src/sync-package-metadata.mjs" >/dev/null 2>&1 \
     && node --check "$REPO_DIR/src/updater.mjs" >/dev/null 2>&1 \
@@ -137,7 +139,7 @@ static_checks() {
   fi
 
   if command -v shellcheck >/dev/null ;then
-    shellcheck --severity=error "$REPO_DIR"/src/lib/metadata.sh "$REPO_DIR"/src/lib/dependencies.sh "$REPO_DIR"/src/lib/paths.sh "$REPO_DIR"/src/lib/cleanup.sh "$REPO_DIR"/src/lib/gui.sh "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/install-wor-hook.sh "$REPO_DIR"/src/macos-app/Contents/MacOS/WoR-Flasher >/dev/null 2>&1 \
+    shellcheck --severity=error "$REPO_DIR"/src/standalone-launcher.sh "$REPO_DIR"/src/lib/metadata.sh "$REPO_DIR"/src/lib/dependencies.sh "$REPO_DIR"/src/lib/paths.sh "$REPO_DIR"/src/lib/cleanup.sh "$REPO_DIR"/src/lib/gui.sh "$REPO_DIR"/install-wor.sh "$REPO_DIR"/install-wor-gui.sh "$REPO_DIR"/install-wor-hook.sh "$REPO_DIR"/src/macos-app/Contents/MacOS/WoR-Flasher >/dev/null 2>&1 \
       && pass "shellcheck reports no errors" || fail "shellcheck reports errors"
   else
     skip "shellcheck is not installed"
@@ -1867,17 +1869,14 @@ JSON
     && pass "no function is defined in both install-wor.sh and install-wor-gui.sh" \
     || fail "these functions are defined twice and will drift apart: $duplicate_functions"
 
-  #bootstrap repair is the sole pre-source helper because it restores missing shared libraries;
-  #every other GUI helper still has to come after the engine is loaded
-  gui_source_line="$(grep -an 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
-  gui_first_function_line="$(grep -anE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | head -n1 | cut -d: -f1)"
-  gui_second_function_line="$(grep -anE '^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{' "$REPO_DIR/install-wor-gui.sh" | sed -n '2p' | cut -d: -f1)"
-  [ -n "$gui_source_line" ] && [ -n "$gui_first_function_line" ] && [ -n "$gui_second_function_line" ] \
-    && [ "$gui_first_function_line" -lt "$gui_source_line" ] \
-    && [ "$gui_source_line" -lt "$gui_second_function_line" ] \
-    && grep -qF 'repair_missing_checkout_runtime() {' "$REPO_DIR/install-wor-gui.sh" \
+  #Only runtime acquisition may precede source; presentation and disk logic still require the engine.
+  gui_bootstrap_functions="$(awk '
+    /^source "\$cli_script" source/ { exit }
+    /^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{/ { sub(/\(\).*/, ""); print }
+  ' "$REPO_DIR/install-wor-gui.sh")"
+  [ "$gui_bootstrap_functions" == $'repair_missing_checkout_runtime\ngui_runtime_complete\ngui_fetch_runtime_file\ngui_bootstrap_client' ] \
     && [ "$(grep -ac 'source "$cli_script" source' "$REPO_DIR/install-wor-gui.sh")" == 1 ] \
-    && pass "bootstrap repair runs before the GUI sources its engine; all other helpers run after" \
+    && pass "only explicit runtime-bootstrap helpers precede the shared engine" \
     || fail "a non-bootstrap GUI helper is defined before shared engine functions are available"
 
   #every shared name the GUI relies on has to survive as a function, on both platforms

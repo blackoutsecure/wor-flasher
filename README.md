@@ -92,17 +92,47 @@ Windows, WSL and non-Debian Linux distributions are **not** supported. WoR-Flash
 
 ## Install
 
+Linux releases provide two small archives, using the existing script names:
+
+| Download | Run after extraction | Included files |
+| --- | --- | --- |
+| `wor-flasher-<version>-linux-cli.tar.gz` | `bash install-wor.sh` | Standalone CLI, README.txt, LICENSE, NOTICE |
+| `wor-flasher-<version>-linux-gui.tar.gz` | `bash install-wor-gui.sh` | GUI entry script, README.txt, LICENSE, NOTICE |
+
+Verify the archive against the release `SHA256SUMS` and extract into a new directory. The files extract directly into that directory, with no `wor-flasher/` subfolder. Extract both archives into the same directory to put the two scripts next to each other. The CLI embeds the complete runtime. The GUI uses a complete local runtime or the standalone CLI beside it; if its engine, libraries, templates, or artwork are missing, it downloads the complete verified client from the maintained GitHub release instead of mixing individual file versions. The packaged GUI pins that download to its release version and SHA-256 digest.
+
+The first GUI-only launch needs HTTPS access and `curl` or `wget`, plus `sha256sum` or `shasum`. The verified client is retained under `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher/gui-client` and can be reused without another download. Existing local files, including `config.json`, are not overwritten. A directly downloaded source GUI script uses the latest release checksums when it needs a runtime. This bootstrap is for Linux; the macOS app retains its existing verified-runtime startup.
+
+To work from the complete source checkout instead:
+
 ```bash
 git clone https://github.com/blackoutsecure/wor-flasher
 cd wor-flasher
 ./install-wor-gui.sh
 ```
 
-On macOS, Finder users can instead double-click the generated **WoR-Flasher.app** from a release download, or run `npm run build:macos` in a checkout and open `release/macos/WoR-Flasher.app`. The app opens the same native GUI without leaving a Terminal window open. Keep the entire `.app` bundle together when moving it.
+On macOS, download **`WoR-Flasher-<version>-macos.dmg`**, verify it against the release `SHA256SUMS`, and open the disk image. It contains the complete **WoR-Flasher.app** and brief instructions. Copy the app to a writable folder, such as **`~/Applications`**, then eject the DMG and open your copied app. Keep the entire `.app` bundle together. The app opens the same native GUI without leaving a Terminal window open and remains unsigned/unnotarized.
+
+For a local build, `npm run build:macos` retains `release/macos/WoR-Flasher.app` and, on macOS, also creates the compressed `release/macos/WoR-Flasher-<version>-macos.dmg`. Linux can stage and validate the app bundle, but DMG creation requires macOS; the release publisher runs on macOS.
 
 WoR-Flasher runs one GUI session per signed-in user, even if more than one checkout or version is present. Opening the app again brings the current macOS window forward instead of starting another installer workflow.
 
-For command-line use, use the complete repository. Neither script is designed to be downloaded on its own or piped into Bash. The standalone macOS application carries a generated, integrity-checked copy of that same repository runtime rather than a second implementation.
+For command-line use without a checkout, download the **`install-wor.sh` release asset** and **`SHA256SUMS`** from the same [release](https://github.com/blackoutsecure/wor-flasher/releases). This single file works on macOS and supported Debian-family Linux hosts, including Raspberry Pi OS. It embeds that release's engine, libraries, templates, artwork, README, LICENSE, and NOTICE; it does not clone a repository or fetch another version of the code.
+
+```bash
+#Verify only the standalone download using the checksum file from the same release.
+grep '  install-wor.sh$' SHA256SUMS > install-wor.sh.sha256
+test -s install-wor.sh.sha256 &&
+  shasum -a 256 -c install-wor.sh.sha256 &&
+  bash install-wor.sh --help
+#On Linux, sha256sum -c install-wor.sh.sha256 is an alternative.
+```
+
+After verification succeeds, `bash install-wor.sh --version` prints the release version and `bash install-wor.sh` starts the interactive CLI, with the existing confirmations before erasing a drive. Do not run it if checksum verification fails. Download and save the script first; do not pipe it into Bash. The **Raw source** copy of `install-wor.sh` still needs the full repository. The release asset is a generated wrapper around the same engine, not a separate flashing implementation.
+
+Unpacking needs Bash, `tar`, `gzip`, `base64`, standard Unix file utilities, and either `shasum` or `sha256sum`, but no Git checkout or Node.js. Normal macOS/Linux flashing dependencies still apply. Arguments such as `--config` and `--gui`, environment settings, and the caller's working directory are preserved. Use `--config /path/to/config.json` for your settings; do not edit the embedded runtime.
+
+The standalone client verifies and caches its runtime privately in `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher/standalone`, keyed by the embedded archive digest. Each launch checks the cached files and refuses modified or linked content. Staging is cleaned up on errors and normal termination; a verified runtime is retained so an active flash never loses its scripts. If a forcibly killed extraction leaves a preparation lock, close all runs before removing the lock named in the error. To reclaim the runtime cache, likewise close all WoR-Flasher runs first. Downloads and logs remain in the normal download directory, separate from the runtime cache. The script never rewrites itself. Sourcing engine functions still requires the full checkout.
 
 ## Pi-Apps
 
@@ -251,8 +281,8 @@ The flashing engine remains `install-wor.sh`. Node.js is used only for release p
 ```bash
 npm run check          # shell syntax, macOS runtime freshness and release-plan validation
 npm run build          # stage fresh macOS, Linux and Windows-placeholder release folders
-npm run build:macos    # stage release/macos/WoR-Flasher.app and SHA256SUMS
-npm run build:linux    # stage release/linux/wor-flasher, WoR-Flasher-<version>-linux.tar.gz and SHA256SUMS
+npm run build:macos    # stage the .app and, on macOS, its versioned .dmg with SHA256SUMS
+npm run build:linux    # stage separate minimal Linux GUI/CLI tar.gz clients and SHA256SUMS
 npm run package:all    # refresh the embedded .app runtime, then stage every release folder
 npm run pe:check       # download the pinned WoR-PE package and verify the recorded SHA-256
 npm run pe:update      # resolve the latest WoR-PE package, hash it and update project metadata
@@ -261,7 +291,7 @@ npm run metadata:write # rewrite package.json to match src/config/metadata.json
 npm run clean          # remove generated release output
 ```
 
-Generated release output is written under `release/` and is intentionally ignored by Git. It is rebuilt from the source checkout and the embedded macOS runtime each time, so the release folder is not another maintained copy of the project. Publish `release/linux/WoR-Flasher-<version>-linux.tar.gz` for Linux users; it contains the `wor-flasher/` payload including `install-wor.sh`, `install-wor-gui.sh`, and `install-wor-hook.sh`. Review the staged app or Linux payload and the matching `SHA256SUMS` before publishing.
+Generated release output is written under `release/` and is intentionally ignored by Git. Publish `release/linux/wor-flasher-<version>-linux-cli.tar.gz` and `release/linux/wor-flasher-<version>-linux-gui.tar.gz` for Linux users. Each archive has exactly four files: its entry script, README.txt, LICENSE, and NOTICE. The CLI embeds the full runtime; the GUI obtains it only when needed. `npm run package:all` reuses the same standalone client bytes for the CLI archive and the published `install-wor.sh`, so the GUI bootstrap digest matches the shared asset. Keep these outputs together when publishing. The old combined Linux tarball and Linux ZIP are no longer generated.
 
 `pe:check` and `pe:update` are maintainer commands because they download release assets. Keep `pe:check` out of routine CI unless network access is expected; use `pe:update` only when deliberately refreshing the pinned WoR-PE package URL and digest in [`src/config/metadata.json`](src/config/metadata.json).
 
@@ -566,9 +596,10 @@ This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unloc
 ./tests/run-linux-integration.sh    # force the Dockerised Linux suite
 LINUX_TEST_IMAGE=node:22-bookworm-slim ./tests/run-linux-integration.sh  # include Node-based Linux checks
 npm run check                       # shell syntax, package-plan checks, and release-tool syntax
-npm run build:macos                 # generate release/macos/WoR-Flasher.app
+npm run build:macos                 # generate the .app and, on macOS, the release .dmg
+npm run build:standalone            # generate release/standalone/install-wor.sh
 node src/package-macos-app.mjs --check  # verify generated macOS runtime matches canonical sources
-shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+shellcheck --severity=error src/standalone-launcher.sh src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 ```
 
 The suite creates loopback devices as stand-in drives, so nothing can be written to physical storage. Tests call the real functions out of `install-wor.sh` rather than restating their logic, which means a test cannot pass against behaviour the shipped script no longer has.
@@ -588,17 +619,21 @@ By default, manual releases update the shared version metadata, macOS app
 bundle metadata, documentation histories, and embedded runtime before validation; select **Do not
 update project version files before validating a new manual tag** only when those changes are
 already committed. A new manual tag is created and published only after validation. Each release
-includes a
-portable `wor-flasher-<version>-linux-rpi.zip` for Linux and Raspberry Pi OS users, a
-`WoR-Flasher-<version>-macos.zip` app bundle, the app launcher's verified runtime-update payload,
-and `SHA256SUMS`. Both runtime distributions include this README, LICENSE, and NOTICE. The portable
-ZIP contains the runtime source; GitHub additionally offers the full repository source archive for
+includes the two minimal
+`wor-flasher-<version>-linux-cli.tar.gz` and `wor-flasher-<version>-linux-gui.tar.gz` clients, a
+`WoR-Flasher-<version>-macos.dmg` containing the app, the app launcher's verified runtime-update payload,
+the cross-platform `install-wor.sh` standalone client, and `SHA256SUMS`. Every future release built
+by this workflow includes the standalone script and its checksum alongside the macOS and Linux packages.
+Runtime distributions include this README, LICENSE, and NOTICE. The standalone CLI contains the
+runtime source; GitHub additionally offers the full repository source archive for
 each tag. The macOS app bundle is unsigned and unnotarized; verify
 downloaded artifacts against `SHA256SUMS` before use.
 
 ### Repository layout
 
-The root entry points remain stable for existing users and integrations: `install-wor.sh` is the engine and CLI, `install-wor-gui.sh` is the Linux/macOS front end, and `install-wor-hook.sh` is the automation adapter. The macOS app template lives under `src/macos-app`, while `npm run build:macos` generates `release/macos/WoR-Flasher.app` with an embedded runtime and manifest from the canonical files. Do not edit generated release output directly.
+The root entry points remain stable for existing users and integrations: `install-wor.sh` is the engine and CLI, `install-wor-gui.sh` is the Linux/macOS front end, and `install-wor-hook.sh` is the automation adapter. The macOS app template lives under `src/macos-app`, while `npm run build:macos` generates `release/macos/WoR-Flasher.app` with an embedded runtime and manifest from the canonical files. On macOS, `src/package-macos-dmg.mjs` also creates and verifies its compressed DMG. Do not edit generated release output directly.
+
+`src/package-standalone.mjs` combines the canonical runtime with `src/standalone-launcher.sh` to produce `release/standalone/install-wor.sh`. Only that generated release asset is self-contained; neither the source engine nor the launcher template is a standalone download.
 
 Shared UI artwork lives in `assets/`, and boot and setup inputs live in `config-templates/`.
 
@@ -663,6 +698,9 @@ These additions are maintained directly by Blackout Secure in cooperation with B
 ## Versions
 
 - **2.0.0**
+  - Package the macOS release as a verified compressed DMG containing the complete app, while retaining the unpacked local app.
+  - Split Linux releases into minimal GUI and CLI tar.gz clients; obtain a verified matching runtime when GUI dependencies are missing.
+  - Add a self-contained `install-wor.sh` client to release assets for macOS and supported Linux hosts.
   - Check Automatic Ignore Accessibility permission at macOS GUI startup, with Open Settings, Recheck, and an explicit manual fallback before flashing.
   - Modernized the cross-platform flashing workflow, release tooling and configuration.
   - Added a native standalone macOS runtime with validated, rollback-capable updates.

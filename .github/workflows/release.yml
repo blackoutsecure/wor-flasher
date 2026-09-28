@@ -139,10 +139,12 @@ jobs:
           sudo apt-get install -y -qq shellcheck pv
 
       - name: Check shell syntax
-        run: bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+        run: |
+          bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+          bash -n src/standalone-launcher.sh
 
       - name: Check ShellCheck errors
-        run: shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+        run: shellcheck --severity=error src/standalone-launcher.sh src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
       - name: Verify packaged macOS runtime
         run: npm run build:macos && node src/package-macos-app.mjs --check
@@ -166,7 +168,9 @@ jobs:
           ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Check shell syntax
-        run: /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+        run: |
+          /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+          /bin/bash -n src/standalone-launcher.sh
 
       - name: Verify packaged macOS runtime
         run: npm run build:macos && node src/package-macos-app.mjs --check
@@ -204,8 +208,10 @@ jobs:
           release_commit="$(git rev-parse HEAD)"
           mkdir -p "$archive_dir"
           npm run package:all
-          ditto -c -k --keepParent release/linux/wor-flasher "$archive_dir/wor-flasher-$version-linux-rpi.zip"
-          ditto -c -k --keepParent release/macos/WoR-Flasher.app "$archive_dir/WoR-Flasher-$version-macos.zip"
+          cp release/standalone/install-wor.sh "$archive_dir/install-wor.sh"
+          cp "release/linux/wor-flasher-$version-linux-cli.tar.gz" "$archive_dir/"
+          cp "release/linux/wor-flasher-$version-linux-gui.tar.gz" "$archive_dir/"
+          cp "release/macos/WoR-Flasher-$version-macos.dmg" "$archive_dir/"
           tar -czf "$archive_dir/macos-runtime-$version.tar.gz" \
             -C release/macos/WoR-Flasher.app/Contents/Resources runtime runtime-manifest.json
           runtime_digest="$(shasum -a 256 "$archive_dir/macos-runtime-$version.tar.gz" | awk '{print $1}')"
@@ -213,7 +219,7 @@ jobs:
             "$version" "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$version" "$runtime_digest" > "$archive_dir/macos-runtime.json"
           (
             cd "$archive_dir"
-            shasum -a 256 wor-flasher-"$version"-linux-rpi.zip WoR-Flasher-"$version"-macos.zip \
+            shasum -a 256 install-wor.sh wor-flasher-"$version"-linux-cli.tar.gz wor-flasher-"$version"-linux-gui.tar.gz WoR-Flasher-"$version"-macos.dmg \
               macos-runtime-"$version".tar.gz macos-runtime.json > SHA256SUMS
           )
           {
@@ -243,11 +249,23 @@ jobs:
           target_commitish: ${{ steps.package.outputs.commit }}
           generate_release_notes: true
           body: |
-            `wor-flasher-*-linux-rpi.zip` is the portable Bash distribution for Debian, Ubuntu,
-            Raspberry Pi OS, and other supported Linux hosts. It includes the runtime source,
-            README, LICENSE, and NOTICE.
+            `install-wor.sh` is a standalone command-line client for macOS and supported Linux hosts.
+            Save it, verify SHA256SUMS, and run `bash install-wor.sh --help`.
+            It bundles this release's runtime; no Git checkout or Node.js is needed to unpack it.
+            Normal flashing dependencies and disk-write confirmations still apply.
 
-            The `WoR-Flasher-*-macos.zip` application bundle is unsigned and unnotarized.
+            Linux has two minimal tar.gz clients for Debian, Ubuntu, and Raspberry Pi OS:
+            `wor-flasher-*-linux-cli.tar.gz` contains `install-wor.sh`;
+            `wor-flasher-*-linux-gui.tar.gz` contains `install-wor-gui.sh`.
+            Each includes only its entry script, brief instructions, LICENSE, and NOTICE.
+            Files extract directly into your chosen directory, without a wrapper folder.
+            Extract either or both into a new directory. The GUI prefers a complete local runtime
+            or the standalone CLI beside it; otherwise it downloads this release's verified CLI
+            to obtain the engine and supporting files without overwriting local changes.
+
+            `WoR-Flasher-*-macos.dmg` contains the complete `WoR-Flasher.app` and brief instructions.
+            Mount the DMG and copy the app to a writable folder, such as `~/Applications`, before opening it.
+            The application bundle is unsigned and unnotarized.
             `macos-runtime.json` and its versioned runtime archive are consumed only by the macOS
             launcher's verified runtime updater.
 
@@ -259,8 +277,10 @@ jobs:
             Physical-media completion and Raspberry Pi boot compatibility are not established
             by the automated tests. See README and NOTICE for limitations and attribution.
           files: |
-            ${{ steps.package.outputs.directory }}/wor-flasher-*-linux-rpi.zip
-            ${{ steps.package.outputs.directory }}/WoR-Flasher-*-macos.zip
+            ${{ steps.package.outputs.directory }}/install-wor.sh
+            ${{ steps.package.outputs.directory }}/wor-flasher-*-linux-cli.tar.gz
+            ${{ steps.package.outputs.directory }}/wor-flasher-*-linux-gui.tar.gz
+            ${{ steps.package.outputs.directory }}/WoR-Flasher-*-macos.dmg
             ${{ steps.package.outputs.directory }}/macos-runtime-*.tar.gz
             ${{ steps.package.outputs.directory }}/macos-runtime.json
             ${{ steps.package.outputs.directory }}/SHA256SUMS

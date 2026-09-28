@@ -11,6 +11,10 @@
 
 : "${WOR_ANNOUNCEMENT_TIMEOUT:=30}"
 
+#Packaged Linux GUI clients pin both values to their matching release.
+WOR_GUI_BOOTSTRAP_BASE_URL='https://github.com/blackoutsecure/wor-flasher/releases/latest/download'
+WOR_GUI_BOOTSTRAP_SHA256=''
+
 export RUN_MODE=gui #this variable is detected by install-wor.sh to display gui error messages
 
 #Determine the directory that contains this script
@@ -31,16 +35,6 @@ if [ "$(uname -s 2>/dev/null)" == Darwin ] && [ "${WOR_NATIVE_APP:-0}" != 1 ] &&
   exec /usr/bin/open -W "$DIRECTORY/release/macos/WoR-Flasher.app"
 fi
 
-#This script and cli-based install-wor.sh must be in the same directory. Source it before anything else
-#so every shared behaviour - error dialogs, status output, drive detection, the settings summary - comes
-#from the installer itself and can never drift out of step with what actually gets flashed.
-#Nothing above this point may call a shared function, so failures here are reported by hand.
-cli_script="$DIRECTORY/install-wor.sh"
-if [ ! -d "$DIRECTORY" ] || [ ! -f "$cli_script" ];then
-  printf '\033[91m%b\033[0m\n' "No script found named install-wor.sh\nBoth scripts must be in the same directory." 1>&2
-  exit 1
-fi
-
 repair_missing_checkout_runtime() { #Restore only absent runtime files from local HEAD before shared libraries are sourced.
   local required_path
   local missing=()
@@ -57,10 +51,132 @@ repair_missing_checkout_runtime() { #Restore only absent runtime files from loca
     || { printf 'Failed to restore missing WoR-Flasher files from local Git HEAD.\n' 1>&2; return 1; }
 }
 
+gui_runtime_complete() { #Input: runtime directory. Do not source a partial engine or mix versions of its dependencies.
+  local path
+  for path in \
+    install-wor.sh \
+    src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh \
+    src/lib/node-runtime.mjs src/lib/macos-disk-alerts.js src/updater.mjs \
+    src/config/metadata.json src/config/metadata.schema.json \
+    config-templates/config.json config-templates/config.schema.json \
+    config-templates/pi3.config.txt config-templates/pi4.config.txt config-templates/pi5.config.txt \
+    config-templates/pi4-ram-unlock.ps1 config-templates/pi4-ram-unlock-specialize.xml \
+    config-templates/oobe-network-bypass.xml config-templates/prefinalize.cmd \
+    assets/logo-full.png assets/partnership.png assets/overview.png assets/ram.png assets/next-steps.png ;do
+    [ -f "$1/$path" ] && [ -r "$1/$path" ] || return 1
+  done
+}
+
+gui_fetch_runtime_file() { #Input: HTTPS URL and destination. Bootstrap must not weaken transport verification.
+  case "$1" in
+    https://*) ;;
+    *) printf 'Refusing a non-HTTPS GUI runtime download.\n' >&2; return 1 ;;
+  esac
+  if command -v curl >/dev/null 2>&1;then
+    curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+      --connect-timeout 15 --max-time 120 --output "$2" -- "$1"
+  elif command -v wget >/dev/null 2>&1;then
+    wget --https-only --timeout=30 --tries=2 -O "$2" -- "$1"
+  else
+    printf 'Missing GUI runtime: curl or wget is required to download it. Alternatively, put the standalone install-wor.sh release file beside this GUI script.\n' >&2
+    return 1
+  fi
+}
+
+gui_bootstrap_client() { #Output: verified standalone client path. Only a private cache is written; local files are preserved.
+  (
+    set -euo pipefail
+    umask 077
+    #Subshell-owned state remains available to EXIT cleanup even on Bash 3.2 error exits.
+    cache_root='' workspace='' expected='' actual='' cached=''
+    hash_command=()
+    if command -v sha256sum >/dev/null 2>&1;then
+      hash_command=(sha256sum)
+    elif command -v shasum >/dev/null 2>&1;then
+      hash_command=(shasum -a 256)
+    else
+      printf 'GUI runtime verification requires sha256sum or shasum.\n' >&2
+      exit 1
+    fi
+    cache_root="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/wor-flasher/gui-client"
+    [[ "$cache_root" == /* ]] && [ ! -L "$cache_root" ] \
+      || { printf 'Refusing an unsafe GUI runtime cache: %s\n' "$cache_root" >&2; exit 1; }
+    mkdir -p "$cache_root" || { printf 'Could not create GUI runtime cache: %s\n' "$cache_root" >&2; exit 1; }
+    [ -O "$cache_root" ] || { printf 'GUI runtime cache is not owned by this user: %s\n' "$cache_root" >&2; exit 1; }
+    chmod 700 "$cache_root" || { printf 'Could not secure GUI runtime cache: %s\n' "$cache_root" >&2; exit 1; }
+    workspace="$(mktemp -d "$cache_root/.download.XXXXXX")" \
+      || { printf 'Could not create GUI download staging.\n' >&2; exit 1; }
+    trap 'result=$?; trap - EXIT; rm -rf -- "$workspace" || result=1; exit "$result"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' HUP TERM
+    expected="$WOR_GUI_BOOTSTRAP_SHA256"
+    if [ -z "$expected" ];then
+      gui_fetch_runtime_file "$WOR_GUI_BOOTSTRAP_BASE_URL/SHA256SUMS" "$workspace/SHA256SUMS" \
+        || { printf 'Could not obtain GUI runtime checksums from the maintained release.\n' >&2; exit 1; }
+      expected="$(awk '$2 == "install-wor.sh" { count++; digest=$1 } END { if (count != 1) exit 1; print digest }' "$workspace/SHA256SUMS")" \
+        || { printf 'The release does not identify exactly one standalone install-wor.sh checksum.\n' >&2; exit 1; }
+    fi
+    [[ "$expected" =~ ^[0-9a-f]{64}$ ]] \
+      || { printf 'Invalid standalone runtime SHA-256 checksum.\n' >&2; exit 1; }
+    cached="$cache_root/$expected.sh"
+    if [ ! -e "$cached" ] && [ ! -L "$cached" ];then
+      printf 'Obtaining the complete GUI runtime from %s/install-wor.sh...\n' "$WOR_GUI_BOOTSTRAP_BASE_URL" >&2
+      gui_fetch_runtime_file "$WOR_GUI_BOOTSTRAP_BASE_URL/install-wor.sh" "$workspace/install-wor.sh" \
+        || { printf 'Could not download the GUI runtime. No local files were replaced.\n' >&2; exit 1; }
+      actual="$("${hash_command[@]}" "$workspace/install-wor.sh")" \
+        || { printf 'Could not hash the downloaded GUI runtime.\n' >&2; exit 1; }
+      [ "${actual%% *}" == "$expected" ] \
+        || { printf 'Downloaded GUI runtime checksum mismatch; refusing to run it.\n' >&2; exit 1; }
+      grep -qFx '#WOR_STANDALONE_CLIENT' "$workspace/install-wor.sh" \
+        || { printf 'The release runtime is not a standalone client; refusing to run a partial script.\n' >&2; exit 1; }
+      chmod 700 "$workspace/install-wor.sh" || { printf 'Could not secure the downloaded GUI runtime.\n' >&2; exit 1; }
+      mv -n "$workspace/install-wor.sh" "$cached" || { printf 'Could not cache the verified GUI runtime.\n' >&2; exit 1; }
+    fi
+    [ -f "$cached" ] && [ -O "$cached" ] && [ ! -L "$cached" ] \
+      || { printf 'Refusing an unsafe cached GUI runtime: %s\n' "$cached" >&2; exit 1; }
+    actual="$("${hash_command[@]}" "$cached")" \
+      || { printf 'Could not hash the cached GUI runtime.\n' >&2; exit 1; }
+    [ "${actual%% *}" == "$expected" ] \
+      || { printf 'Cached GUI runtime failed verification. Move this file aside after closing all runs: %s\n' "$cached" >&2; exit 1; }
+    grep -qFx '#WOR_STANDALONE_CLIENT' "$cached" \
+      || { printf 'The cached GUI runtime is not a standalone client.\n' >&2; exit 1; }
+    printf '%s\n' "$cached"
+  )
+}
+
 repair_missing_checkout_runtime || exit 1
 
+cli_script="$DIRECTORY/install-wor.sh"
+if [ -z "${WOR_CONFIG_FILE:-}" ] && [ -f "$DIRECTORY/config.json" ];then
+  export WOR_CONFIG_FILE="$DIRECTORY/config.json"
+fi
+if [ -f "$cli_script" ] && grep -qFx '#WOR_STANDALONE_CLIENT' "$cli_script";then
+  [ "${WOR_GUI_BOOTSTRAPPED:-0}" != 1 ] \
+    || { printf 'The standalone GUI runtime is incomplete; refusing a bootstrap loop.\n' >&2; exit 1; }
+  export WOR_GUI_BOOTSTRAPPED=1
+  exec "$BASH" "$cli_script" --gui "$@"
+fi
+if ! gui_runtime_complete "$DIRECTORY";then
+  if [ "$(uname -s 2>/dev/null)" != Linux ];then
+    printf 'The GUI runtime is incomplete. Use the full checkout or the macOS app, or place the standalone install-wor.sh release beside this script.\n' >&2
+    exit 1
+  fi
+  if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSLENV:-}" ] || grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null;then
+    printf 'WoR-Flasher does not support WSL. No runtime was downloaded.\n' >&2
+    exit 1
+  fi
+  if [ "${WOR_GUI_BOOTSTRAPPED:-0}" == 1 ];then
+    printf 'The downloaded GUI runtime is incomplete; refusing a bootstrap loop.\n' >&2
+    exit 1
+  fi
+  printf 'Local GUI runtime files are missing. Using a verified release runtime; existing files are left unchanged.\n' >&2
+  cli_script="$(gui_bootstrap_client)" || exit 1
+  export WOR_GUI_BOOTSTRAPPED=1
+  exec "$BASH" "$cli_script" --gui "$@"
+fi
+
 #shellcheck disable=SC1090
-source "$cli_script" source #by sourcing, this script checks for and applies updates.
+source "$cli_script" source #shared engine definitions and a read-only release check
 
 #outside the packaged .app (which sets this from its own bundled .icns), fall back to the same
 #logo PNG the rest of the app already uses, so the Dock and minimized-window tile are branded
