@@ -44,6 +44,7 @@
 #2.0.1 - Distribute the macOS app in a verified compressed DMG while retaining the local app bundle.
 #        Package a self-contained install-wor.sh release asset for macOS and supported Linux hosts.
 #        Ship flat, minimal Linux GUI/CLI tar.gz clients; fetch a verified matching runtime when GUI files are missing.
+#        Align CLI prompts with the GUI order and present numbered device, refresh, and quit choices.
 #        Check Automatic Ignore Accessibility permission at macOS GUI startup with Settings and Recheck.
 #        Hide routine Automatic Ignore waiting and watching statuses while retaining permission and error warnings.
 #        Present canceled pre-write administrator prompts as retryable, without implying the disk was modified.
@@ -623,28 +624,32 @@ darwin_apfs_volume_names() { #Input: whole disk. Output: APFS volume labels back
   ' <<<"$apfs_details"
 }
 
+darwin_device_details() { #Input: safe whole disk. Output: human-readable size, media name, labels, and volumes.
+  local device="$1" details label_names volume_names
+  details="$(darwin_plist_json diskutil list -plist "$device")" || return 1
+  label_names="$(
+    {
+      jq -r '.AllDisksAndPartitions[0].Partitions[]?.VolumeName? // empty' <<<"$details"
+      darwin_apfs_volume_names "$device"
+    } | awk 'NF && !seen[$0]++ { labels = labels ? labels ", " $0 : $0 } END { print labels }'
+  )"
+  [ -z "$label_names" ] && label_names='No labels'
+  volume_names="$(jq -r '[.AllDisksAndPartitions[0].Partitions[]? | .VolumeName // .DeviceIdentifier] | if length == 0 then "No volumes" else join(", ") end' <<<"$details")"
+  printf '%s   %s   Labels: %s   Volumes: %s\n' \
+    "$(human_size "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')")" \
+    "$(darwin_device_value "$device" '.MediaName // .DeviceIdentifier')" \
+    "$label_names" \
+    "$volume_names"
+}
+
 darwin_list_device_choices() { #Output: tab-delimited safe disk path, size, media name, labels, and detected volumes.
-  local device details label_names volume_names
+  local device
   while read -r device; do
     device="/dev/$device"
     darwin_is_safe_device "$device" || continue
-    details="$(darwin_plist_json diskutil list -plist "$device")" || continue
-    label_names="$(
-      {
-        jq -r '.AllDisksAndPartitions[0].Partitions[]?.VolumeName? // empty' <<<"$details"
-        darwin_apfs_volume_names "$device"
-      } | awk 'NF && !seen[$0]++ { labels = labels ? labels ", " $0 : $0 } END { print labels }'
-    )"
-    [ -z "$label_names" ] && label_names='No labels'
-    volume_names="$(jq -r '[.AllDisksAndPartitions[0].Partitions[]? | .VolumeName // .DeviceIdentifier] | if length == 0 then "No volumes" else join(", ") end' <<<"$details")"
     #only the field before the first tab is parsed as the device path, so the remaining
     #fields use readable spacing instead of raw tabs, which render squished together
-    printf '%s\t%s   %s   Labels: %s   Volumes: %s\n' \
-      "$device" \
-      "$(human_size "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')")" \
-      "$(darwin_device_value "$device" '.MediaName // .DeviceIdentifier')" \
-      "$label_names" \
-      "$volume_names"
+    printf '%s\t%s\n' "$device" "$(darwin_device_details "$device")"
   done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
 }
 
@@ -1982,6 +1987,16 @@ list_dev_paths() { #Output: whole-disk paths that may be written to. Omits /dev/
   lsblk -I 8,179,259 -dno NAME | sed 's+^+/dev/+g' | grep -v loop | grep -vx "$ROOT_DEV"
 }
 
+list_selectable_device_paths() { #Output: safe whole-disk paths with a readable, nonzero capacity.
+  local device size
+  while IFS= read -r device ;do
+    [ -n "$device" ] || continue
+    size="$(get_size_raw "$device" 2>/dev/null)" || continue
+    [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -gt 0 ] && is_safe_target_device "$device" \
+      && printf '%s\n' "$device"
+  done < <(list_dev_paths)
+}
+
 list_devs() { #Output: human-readable, colorized list of valid block devices to write to. Omits /dev/loop* and the root device. Returns code 1 if no drives found
   if is_macos ;then
     darwin_list_devices
@@ -2137,6 +2152,13 @@ set_default_config_txt() { #Sets CONFIG_TXT from the selected model's shipped te
 describe_device() { #Input: device. Output: the path plus its size and model when those can be read.
   local size name detail
   [ -z "$1" ] && return 0
+  if is_macos && is_safe_target_device "$1" ;then
+    detail="$(darwin_device_details "$1" 2>/dev/null)"
+    if [ -n "$detail" ];then
+      printf '%s   %s\n' "$1" "$detail"
+      return
+    fi
+  fi
   size="$(get_size_raw "$1" 2>/dev/null)"
   name="$(get_device_name "$1" 2>/dev/null)"
   #a summary line must never be the thing that stops a run, so unreadable details are simply omitted
@@ -2145,6 +2167,78 @@ describe_device() { #Input: device. Output: the path plus its size and model whe
   fi
   [ -n "$name" ] && detail="${detail:+$detail }$name"
   [ -n "$detail" ] && printf '%s (%s)\n' "$1" "$detail" || printf '%s\n' "$1"
+}
+
+device_from_menu_choice() { #Input: numeric choice followed by device paths. Output: the selected path.
+  local choice="$1" device index=1
+  shift
+  [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$#" ] || return 1
+  for device in "$@" ;do
+    if [ "$index" -eq "$choice" ];then
+      printf '%s\n' "$device"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+  return 1
+}
+
+choose_device() { #Sets DEVICE from a numbered snapshot of currently safe target disks. Returns 2 when Quit is selected.
+  local reply device index refresh_choice quit_choice
+  local -a devices
+  while true;do
+    devices=()
+    echo
+    echo "Available devices:"
+    while IFS= read -r device ;do
+      [ -n "$device" ] && devices+=("$device")
+    done < <(list_selectable_device_paths)
+
+    if [ "${#devices[@]}" -eq 0 ];then
+      echo -e "\e[93mNone found - connect a storage device, then choose Refresh\e[0m"
+    else
+      for ((index=0; index<${#devices[@]}; index++));do
+        printf '\e[96m%d\e[0m) ' "$((index + 1))"
+        describe_device "${devices[$index]}"
+      done
+    fi
+    refresh_choice=$((${#devices[@]} + 1))
+    quit_choice=$((refresh_choice + 1))
+    printf '\e[96m%d\e[0m) Refresh device list\n' "$refresh_choice"
+    printf '\e[96m%d\e[0m) Quit %s\n' "$quit_choice" "$WOR_APP_TITLE"
+    read -r -p "Choose an option: " reply
+    if [ "$reply" == "$refresh_choice" ];then
+      continue
+    elif [ "$reply" == "$quit_choice" ];then
+      return 2
+    fi
+    if device="$(device_from_menu_choice "$reply" "${devices[@]}")";then
+      if [ -b "$device" ] && is_safe_target_device "$device";then
+        DEVICE="$device"
+        return 0
+      fi
+      echo_red "Device $device is no longer an available safe target. Refreshing the list."
+    else
+      echo_red "Invalid option '${reply}'. Enter a number from the list."
+    fi
+  done
+}
+
+confirm_cli_installation() { #Returns 0 to flash or 2 to quit after showing the shared installation overview.
+  local reply
+  while true;do
+    printf '\n\033[96mInstallation overview\033[0m\n'
+    settings_summary_plain '  %-24s %s\n'
+    printf '\n\033[91mAll data on the target drive will be erased.\033[0m\n'
+    printf '\e[96m1\e[0m) Flash\n'
+    printf '\e[96m2\e[0m) Quit %s\n' "$WOR_APP_TITLE"
+    read -r -p "Choose an option: " reply
+    case "$reply" in
+      1) return 0 ;;
+      2) return 2 ;;
+      *) echo_red "Invalid option '${reply}'. Expected '1' or '2'." ;;
+    esac
+  done
 }
 
 wor_log_file() { #Output: where this run's log is kept. Resolved on use, since the Linux GUI can still change DL_DIR.
@@ -2807,6 +2901,8 @@ if [ "$USE_CACHE" == 0 ];then
   clear_cached_components
 fi
 
+CLI_INTERACTIVE=0
+
 { #choose windows version
 using_esd=true #indicate that ESD download is required - will be changed to false otherwise
 if [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
@@ -2815,6 +2911,7 @@ if [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
 fi
 
 if [ -z "$BID" ];then
+  CLI_INTERACTIVE=1
 
   while [ -z "$BID" ];do
     echo -ne "\nChoose Windows version:
@@ -2947,34 +3044,9 @@ else
 fi
 }
 
-{ #choose language
-if [ -z "$WIN_LANG" ];then
-  default_language="$(default_win_lang)"
-  #list languages and highlight the language codes
-  echo
-  list_langs | sed "s/^/${ANSI_CYAN}/g" | sed "s/:/${ANSI_RESET} - /g" | sort
-
-  while true; do
-    read -p $'\nFrom the list above, enter a language ['"$default_language"']: ' WIN_LANG
-    [ -z "$WIN_LANG" ] && WIN_LANG="$default_language"
-
-    if is_known_win_lang "$WIN_LANG" ;then
-      #if selected language matches line in language list
-      break
-    else
-      echo_red "Invalid answer. Expected to see something like 'en-us'. Try again."
-    fi
-
-  done
-
-#Verify WIN_LANG value provided to script
-elif ! is_known_win_lang "$WIN_LANG" ;then
-  error "Invalid WIN_LANG value '$WIN_LANG'.\nAvailable languages:\n$(list_langs | awk -F: '{print $1}')"
-fi
-}
-
 { #choose destination RPi model
 if [ -z "$RPI_MODEL" ];then
+  CLI_INTERACTIVE=1
   while true; do
     echo -ne "\nChoose Raspberry Pi model to deploy Windows on:
 \e[96m1\e[0m) Raspberry Pi 5
@@ -3003,6 +3075,33 @@ elif [ "$RPI_MODEL" != 3 ] && [ "$RPI_MODEL" != 4 ] && [ "$RPI_MODEL" != 5 ];the
 fi
 }
 
+{ #choose language
+if [ -z "$WIN_LANG" ];then
+  CLI_INTERACTIVE=1
+  default_language="$(default_win_lang)"
+  #list languages and highlight the language codes
+  echo
+  list_langs | sed "s/^/${ANSI_CYAN}/g" | sed "s/:/${ANSI_RESET} - /g" | sort
+
+  while true; do
+    read -p $'\nFrom the list above, enter a language ['"$default_language"']: ' WIN_LANG
+    [ -z "$WIN_LANG" ] && WIN_LANG="$default_language"
+
+    if is_known_win_lang "$WIN_LANG" ;then
+      #if selected language matches line in language list
+      break
+    else
+      echo_red "Invalid answer. Expected to see something like 'en-us'. Try again."
+    fi
+
+  done
+
+#Verify WIN_LANG value provided to script
+elif ! is_known_win_lang "$WIN_LANG" ;then
+  error "Invalid WIN_LANG value '$WIN_LANG'.\nAvailable languages:\n$(list_langs | awk -F: '{print $1}')"
+fi
+}
+
 { #make sure the chosen Windows build can run on the chosen Raspberry Pi
 if ! cpu_supports_bid "$BID" ;then
   error "$(get_os_name "$BID") cannot run on a Raspberry Pi ${RPI_MODEL}.
@@ -3014,21 +3113,11 @@ fi
 
 { #choose output device
 if [ -z "$DEVICE" ];then
-  while true;do
-    echo
-    echo "Available devices:"
-    list_devs || echo -e "\e[93mNone found - please insert a storage device and press Enter\e[0m"
-    read -p "Choose a device to flash the Windows setup files to: " DEVICE
-    if ! is_safe_target_device "$DEVICE";then
-      echo_red "Device $DEVICE is your current boot drive! You cannot overwrite this drive."
-    elif [ -b "$DEVICE" ];then
-      break #exit loop
-    elif [ -z "$DEVICE" ];then
-      true #refresh list if user presses Enter
-    else
-      echo_red "Device $DEVICE is not a valid block device!"
-    fi
-  done
+  CLI_INTERACTIVE=1
+  choose_device
+  device_choice_status=$?
+  [ "$device_choice_status" == 2 ] && exit 0
+  [ "$device_choice_status" == 0 ] || exit "$device_choice_status"
 
 elif [ ! -b "$DEVICE" ];then
   error "Invalid value for DEVICE: block device $DEVICE does not exist. Available devices:\n$(list_devs)"
@@ -3042,6 +3131,7 @@ device_capability="$(drive_capability "$DEVICE")"
 validate_install_mode "$device_capability"
 
 if [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ] && [ "$device_capability" == install ];then
+  CLI_INTERACTIVE=1
   #Drive is >=25GB, so present the user with the option to make this a recovery drive or a full installation
 
   while true; do
@@ -3076,6 +3166,13 @@ is_macos && { command -v sgdisk >/dev/null || error "sgdisk is required to parti
 
 #the GUI already picked one and exported it; a CLI run gets the same shipped template, so both write identical media
 set_default_config_txt
+
+if [ "$CLI_INTERACTIVE" == 1 ];then
+  confirm_cli_installation
+  confirmation_status=$?
+  [ "$confirmation_status" == 2 ] && exit 0
+  [ "$confirmation_status" == 0 ] || exit "$confirmation_status"
+fi
 
 printf '\n\033[96m%s\033[0m - starting installation\n' "$WOR_APP_TITLE"
 settings_summary_plain '  %-24s %s\n'

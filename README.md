@@ -195,6 +195,15 @@ The repository does not currently include desktop captures of the macOS windows 
 ./install-wor.sh
 ```
 
+The interactive CLI follows the GUI wizard order: Windows version, Raspberry Pi model,
+language, target drive and installation mode. It displays available target drives as a
+numbered list with each drive's path, human-readable capacity and model. On macOS, the
+list also includes the same detected **Labels** and **Volumes** shown by the GUI. Numbered
+**Refresh device list** and **Quit WoR-Flasher** options follow the drives. The selected
+drive is checked again before it can be used. Before preparation begins, the shared
+installation overview is shown with an erase warning and explicit **Flash** and **Quit
+WoR-Flasher** choices.
+
 ```text
 Usage: install-wor.sh [OPTIONS]
 

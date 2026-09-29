@@ -202,6 +202,64 @@ static_checks() {
     && pass "validated cache reuse is the default" \
     || fail "validated cache reuse is not the default"
 
+  selected_device="$(DIRECTORY="$REPO_DIR" bash -c 'source "$1" source >/dev/null 2>&1; device_from_menu_choice 2 /dev/first /dev/second' _ "$REPO_DIR/install-wor.sh")"
+  if [ "$selected_device" == /dev/second ] \
+    && ! DIRECTORY="$REPO_DIR" bash -c 'source "$1" source >/dev/null 2>&1; device_from_menu_choice /dev/second /dev/first /dev/second' _ "$REPO_DIR/install-wor.sh" \
+    && ! DIRECTORY="$REPO_DIR" bash -c 'source "$1" source >/dev/null 2>&1; device_from_menu_choice 3 /dev/first /dev/second' _ "$REPO_DIR/install-wor.sh";then
+    pass "CLI target menu accepts only an in-range number and resolves it to the corresponding device"
+  else
+    fail "CLI target menu accepted free-form or out-of-range device input"
+  fi
+
+  device_menu_output="$(mktemp)"
+  DIRECTORY="$REPO_DIR" bash -c '
+    source "$1" source >/dev/null 2>&1
+    list_selectable_device_paths() { printf "/dev/test-device\n"; }
+    choose_device
+  ' _ "$REPO_DIR/install-wor.sh" >"$device_menu_output" <<< $'2\n3\n'
+  device_menu_status=$?
+  if [ "$device_menu_status" == 2 ] \
+    && [ "$(grep -cF 'Refresh device list' "$device_menu_output")" == 2 ] \
+    && grep -qF "Quit $WOR_APP_TITLE" "$device_menu_output";then
+    pass "CLI target menu exposes numbered Refresh and Quit options"
+  else
+    fail "CLI target menu did not refresh or quit through its numbered options"
+  fi
+  rm -f "$device_menu_output"
+
+  confirmation_output="$(mktemp)"
+  DIRECTORY="$REPO_DIR" bash -c '
+    source "$1" source >/dev/null 2>&1
+    settings_summary_plain() { printf "  Target drive:            /dev/test-device\n"; }
+    confirm_cli_installation
+  ' _ "$REPO_DIR/install-wor.sh" >"$confirmation_output" 2>&1 <<< $'9\n2\n'
+  confirmation_status=$?
+  if [ "$confirmation_status" == 2 ] \
+    && grep -qF 'Installation overview' "$confirmation_output" \
+    && grep -qF 'All data on the target drive will be erased.' "$confirmation_output" \
+    && grep -qF "Invalid option '9'." "$confirmation_output";then
+    pass "interactive CLI overview requires an explicit Flash or Quit choice"
+  else
+    fail "interactive CLI overview did not gate flashing behind an explicit choice"
+  fi
+  rm -f "$confirmation_output"
+
+  windows_prompt_line="$(grep -nF '{ #choose windows version' "$REPO_DIR/install-wor.sh" | cut -d: -f1)"
+  pi_prompt_line="$(grep -nF '{ #choose destination RPi model' "$REPO_DIR/install-wor.sh" | cut -d: -f1)"
+  language_prompt_line="$(grep -nF '{ #choose language' "$REPO_DIR/install-wor.sh" | cut -d: -f1)"
+  device_prompt_line="$(grep -nF '{ #choose output device' "$REPO_DIR/install-wor.sh" | cut -d: -f1)"
+  mode_prompt_line="$(grep -nF '{ #CAN_INSTALL_ON_SAME_DRIVE' "$REPO_DIR/install-wor.sh" | cut -d: -f1)"
+  confirmation_line="$(grep -nF '  confirm_cli_installation' "$REPO_DIR/install-wor.sh" | tail -n1 | cut -d: -f1)"
+  if [ "$windows_prompt_line" -lt "$pi_prompt_line" ] \
+    && [ "$pi_prompt_line" -lt "$language_prompt_line" ] \
+    && [ "$language_prompt_line" -lt "$device_prompt_line" ] \
+    && [ "$device_prompt_line" -lt "$mode_prompt_line" ] \
+    && [ "$mode_prompt_line" -lt "$confirmation_line" ];then
+    pass "CLI prompts follow the GUI target, language, device, mode, and confirmation order"
+  else
+    fail "CLI prompt order has diverged from the GUI wizard"
+  fi
+
   grep -qF "printf 'Downloaded files\\t%s\\n' \"\$(cache_mode_label \"\$USE_CACHE\")\"" "$REPO_DIR/install-wor.sh" \
     && pass "startup summary shows cache policy" \
     || fail "startup summary does not show cache policy"
@@ -2551,6 +2609,26 @@ DIRECTORY="$REPO_DIR"
 #shellcheck disable=SC1090
 source "$REPO_DIR/install-wor.sh" source >/dev/null 2>&1
 
+original_list_selectable_device_paths="$(declare -f list_selectable_device_paths)"
+list_selectable_device_paths() {
+  printf '%s\n%s\n' "$DEV_INSTALL" "$DEV_RECOVERY"
+}
+device_menu_output="$(mktemp)"
+DEVICE=''
+if choose_device >"$device_menu_output" <<< $'9\n3\n2\n' \
+  && [ "$DEVICE" == "$DEV_RECOVERY" ] \
+  && grep -qF $'\e[96m1\e[0m) ' "$device_menu_output" \
+  && grep -qF $'\e[96m2\e[0m) ' "$device_menu_output" \
+  && [ "$(grep -cF 'Refresh device list' "$device_menu_output")" == 2 ] \
+  && grep -qF "Quit $WOR_APP_TITLE" "$device_menu_output" \
+  && grep -qF "Invalid option '9'." "$device_menu_output";then
+  pass "CLI target selection refreshes its numbered list and never accepts a device path"
+else
+  fail "CLI target selection did not resolve a numbered safe-device choice"
+fi
+rm -f "$device_menu_output"
+eval "$original_list_selectable_device_paths"
+
 #configure_pe_settings_ini edits cached payload, so it has to re-record the manifest or every run re-downloads the PE installer
 pe_cache_dir="$(mktemp -d)"
 mkdir -p "$pe_cache_dir/peinstaller/winpe/2"
@@ -2601,7 +2679,7 @@ if command -v jq >/dev/null ;then
   test_root_dev="$ROOT_DEV"
   HOST_OS=Darwin
   ROOT_DEV=/dev/disk0
-  DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false,"DiskSize":64000000000,"MediaName":"USB Drive"}'
+  DARWIN_DEVICE_INFO='{"WholeDisk":true,"Internal":false,"VirtualOrPhysical":"Physical","ReadOnlyMedia":false,"DiskSize":62226694144,"MediaName":"USB Drive"}'
   darwin_plist_json() {
     if [ "$2" == list ] && [ "$4" == /dev/disk2 ];then
       printf '%s\n' '{"AllDisksAndPartitions":[{"Partitions":[{"VolumeName":"WOR_BOOT","DeviceIdentifier":"disk2s1"},{"VolumeName":"WOR_INSTALL","DeviceIdentifier":"disk2s2"}]}]}'
@@ -2614,8 +2692,12 @@ if command -v jq >/dev/null ;then
   is_safe_target_device /dev/disk2 && pass "Darwin accepts an external physical writable disk" || fail "Darwin rejected an external physical writable disk"
   is_safe_target_device /dev/disk0 && fail "Darwin accepted the startup disk" || pass "Darwin rejects the startup disk"
   [ "$(darwin_list_device_paths)" == /dev/disk2 ] && pass "Darwin GUI lists safe external disks" || fail "Darwin GUI listed an unexpected disk"
-  [ "$(darwin_list_device_choices)" == $'/dev/disk2\t59.6 GB   USB Drive   Labels: WOR_BOOT, WOR_INSTALL   Volumes: WOR_BOOT, WOR_INSTALL' ] \
+  expected_darwin_details='58.0 GB   USB Drive   Labels: WOR_BOOT, WOR_INSTALL   Volumes: WOR_BOOT, WOR_INSTALL'
+  [ "$(darwin_list_device_choices)" == $'/dev/disk2\t'"$expected_darwin_details" ] \
     && pass "Darwin GUI lists detected volumes" || fail "Darwin GUI did not show detected volume details"
+  [ "$(describe_device /dev/disk2)" == "/dev/disk2   $expected_darwin_details" ] \
+    && pass "Darwin CLI lists human-readable size, labels, and volumes" \
+    || fail "Darwin CLI did not show the same device details as the GUI"
   [ "$(darwin_partition_by_volume_name /dev/disk2 WOR_BOOT)" == /dev/disk2s1 ] \
     && [ "$(darwin_partition_by_volume_name /dev/disk2 WOR_INSTALL)" == /dev/disk2s2 ] \
     && pass "Darwin resolves formatted partitions by volume name" \
