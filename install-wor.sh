@@ -53,7 +53,7 @@
 #        Report the macOS partition finalizer's exit status when its result file is unavailable.
 #        Require finalizer readiness before disk preparation and pre-create user-owned results.
 #        Launch the macOS finalizer from the authenticated parent for no-terminal sudo sessions.
-#        Reuse that worker for the late Pi3 GPT patch; macOS does not depend on sudo keepalive.
+#        Reuse that worker for the late Pi3 hybrid-MBR repair; macOS does not depend on sudo keepalive.
 #        Detach user-mounted macOS ISO images without requesting administrator access.
 #        Automatically choose Ignore for the exact macOS unreadable-disk alert during active GUI writes.
 #        Package source notices with each runtime and derive release versions from canonical JSON metadata.
@@ -841,12 +841,12 @@ darwin_partition_finalizer_is_running() { #Input: worker PID. sudo can become ro
   [ -n "$observed_pid" ]
 }
 
-darwin_start_partition_finalizer_or_die() { #Input: device, sgdisk path, optional Pi3 patch. Starts a root helper for late disk writes.
+darwin_start_partition_finalizer_or_die() { #Input: device, sgdisk path, optional Pi3 MBR helper. Starts a root helper for late disk writes.
   #Without a terminal, sudo caches credentials by parent PID. Launch the external command
   #directly so a background shell running the GUI sudo wrapper cannot change that parent.
-  local device="$1" sgdisk_bin="$2" raw_device="/dev/r${1#/dev/}" pi3_patch="${3:-}" diskutil_bin="${WOR_DISKUTIL_BIN:-/usr/sbin/diskutil}" finalizer_dir finalizer_script attempt output worker_status=0 worker_running=1
-  [ -z "$pi3_patch" ] || { [ -s "$pi3_patch" ] && [ -r "$pi3_patch" ]; } \
-    || error "The Pi3 GPT patch is missing or unreadable: $pi3_patch"
+  local device="$1" sgdisk_bin="$2" raw_device="/dev/r${1#/dev/}" pi3_mbr_helper="${3:-}" diskutil_bin="${WOR_DISKUTIL_BIN:-/usr/sbin/diskutil}" finalizer_dir finalizer_script attempt output worker_status=0 worker_running=1
+  [ -z "$pi3_mbr_helper" ] || { [ -s "$pi3_mbr_helper" ] && [ -r "$pi3_mbr_helper" ]; } \
+    || error "The Pi3 MBR helper is missing or unreadable: $pi3_mbr_helper"
   finalizer_dir="$(mktemp -d)" || error "Failed to create a partition-finalization workspace."
   DARWIN_FINALIZE_GO="$finalizer_dir/go"
   DARWIN_FINALIZE_DONE="$finalizer_dir/done"
@@ -856,7 +856,7 @@ darwin_start_partition_finalizer_or_die() { #Input: device, sgdisk path, optiona
   DARWIN_PI3_PATCH_DONE="$finalizer_dir/patch-done"
   : > "$DARWIN_FINALIZE_DONE" || error "Failed to create the partition-finalization result file."
   : > "$DARWIN_FINALIZE_READY" || error "Failed to create the partition-finalization readiness file."
-  : > "$DARWIN_PI3_PATCH_DONE" || error "Failed to create the Pi3 patch result file."
+  : > "$DARWIN_PI3_PATCH_DONE" || error "Failed to create the Pi3 hybrid-MBR result file."
   register_file_cleanup "$DARWIN_FINALIZE_GO"
   register_file_cleanup "$DARWIN_FINALIZE_DONE"
   register_file_cleanup "$DARWIN_FINALIZE_LOG"
@@ -872,7 +872,7 @@ go_file="$4"
 done_file="$5"
 parent_pid="$6"
 ready_file="$7"
-pi3_patch="$8"
+pi3_mbr_helper="$8"
 patch_go_file="$9"
 patch_done_file="${10}"
 diskutil_bin="${11}"
@@ -883,18 +883,18 @@ while [ ! -e "$go_file" ];do
     printf 'Partition finalizer stopped because installer process %s is unavailable.\n' "$parent_pid" >&2
     exit 1
   fi
-  if [ -n "$pi3_patch" ] && [ "$patch_completed" == 0 ] && [ -e "$patch_go_file" ];then
+  if [ -n "$pi3_mbr_helper" ] && [ "$patch_completed" == 0 ] && [ -e "$patch_go_file" ];then
     patch_status=0
     "$diskutil_bin" unmountDisk force "$device" || patch_status=$?
-    [ "$patch_status" != 0 ] || dd if="$pi3_patch" of="$raw_device" conv=fsync || patch_status=$?
+    [ "$patch_status" != 0 ] || python3 "$pi3_mbr_helper" "$raw_device" || patch_status=$?
     printf '%s\n' "$patch_status" > "$patch_done_file" || exit 1
     [ "$patch_status" == 0 ] || exit "$patch_status"
     patch_completed=1
   fi
   sleep 1
 done
-if [ -n "$pi3_patch" ] && [ "$patch_completed" != 1 ];then
-  printf 'Partition finalizer refused to retag before the Pi3 GPT patch completed.\n' >&2
+if [ -n "$pi3_mbr_helper" ] && [ "$patch_completed" != 1 ];then
+  printf 'Partition finalizer refused to retag before the Pi3 hybrid-MBR repair completed.\n' >&2
   exit 1
 fi
 finalize_status=0
@@ -904,7 +904,7 @@ finalize_status=0
 printf '%s\n' "$finalize_status" > "$done_file"
 ROOT_SCRIPT
   )"
-  command sudo -n bash -c "$finalizer_script" wor-partition-finalizer "$device" "$sgdisk_bin" "$raw_device" "$DARWIN_FINALIZE_GO" "$DARWIN_FINALIZE_DONE" "$$" "$DARWIN_FINALIZE_READY" "$pi3_patch" "$DARWIN_PI3_PATCH_GO" "$DARWIN_PI3_PATCH_DONE" "$diskutil_bin" \
+  command sudo -n bash -c "$finalizer_script" wor-partition-finalizer "$device" "$sgdisk_bin" "$raw_device" "$DARWIN_FINALIZE_GO" "$DARWIN_FINALIZE_DONE" "$$" "$DARWIN_FINALIZE_READY" "$pi3_mbr_helper" "$DARWIN_PI3_PATCH_GO" "$DARWIN_PI3_PATCH_DONE" "$diskutil_bin" \
     > "$DARWIN_FINALIZE_LOG" 2>&1 < /dev/null &
   DARWIN_FINALIZE_PID=$!
   for attempt in $(seq 1 10) ;do
@@ -930,21 +930,21 @@ ROOT_SCRIPT
   error "Partition finalizer failed to start for $device (worker exit $worker_status).${output:+ ($output)}"
 }
 
-darwin_apply_pi3_gpt_patch_or_die() { #Signals the already-authorized worker before written-image verification.
+darwin_apply_pi3_hybrid_mbr_or_die() { #Signals the already-authorized worker before written-image verification.
   local patch_status output worker_status=0
-  : > "$DARWIN_PI3_PATCH_GO" || error "Failed to signal the Pi3 GPT patch on $DEVICE."
+  : > "$DARWIN_PI3_PATCH_GO" || error "Failed to signal the Pi3 hybrid-MBR repair on $DEVICE."
   while [ ! -s "$DARWIN_PI3_PATCH_DONE" ] && darwin_partition_finalizer_is_running "$DARWIN_FINALIZE_PID" ;do
     sleep 1
   done
   patch_status="$(cat "$DARWIN_PI3_PATCH_DONE" 2>/dev/null)" \
-    || error "The Pi3 GPT patch did not leave a readable result on $DEVICE."
+    || error "The Pi3 hybrid-MBR repair did not leave a readable result on $DEVICE."
   [ "$patch_status" == 0 ] && return 0
   output="$(cat "$DARWIN_FINALIZE_LOG" 2>/dev/null)" || output='Partition-finalization log is unavailable.'
   if [ -z "$patch_status" ] && ! darwin_partition_finalizer_is_running "$DARWIN_FINALIZE_PID";then
     wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?
-    error "The Pi3 GPT patch worker exited with status $worker_status without a result on $DEVICE.${output:+ ($output)}"
+    error "The Pi3 hybrid-MBR worker exited with status $worker_status without a result on $DEVICE.${output:+ ($output)}"
   fi
-  error "Failed to apply the Pi3 GPT partition-table fix to $DEVICE (status $patch_status).${output:+ ($output)}"
+  error "Failed to apply the Pi3 hybrid-MBR partition-table fix to $DEVICE (status $patch_status).${output:+ ($output)}"
 }
 
 darwin_finalize_partition_types_or_die() { #Signals the pre-authorized root helper to retag the finished media, then waits for it.
@@ -989,6 +989,22 @@ darwin_require_mounted_volume_access() { #Input: mounted target and description.
     darwin_removable_volume_error "$description" "$user_output"
   fi
   error "Failed to $description.${user_output:+ ($user_output)}"
+}
+
+darwin_require_wimlib_volume_access() { #Input: WIM on the target volume. Prompt for wimlib access before the large installation copy.
+  local image="$1" user_output
+  status "  Checking wimlib removable-volume access"
+  emit_gui_task_progress 10 'Waiting for macOS removable-volume permission...'
+  if user_output="$(wiminfo "$image" 1 2>&1)";then
+    return 0
+  fi
+  if printf '%s' "$user_output" | grep -Eqi 'operation not permitted|not permitted';then
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders" >/dev/null 2>&1 \
+      || open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" >/dev/null 2>&1 \
+      || true
+    error "macOS denied wimlib access to the removable target. Choose Allow when macOS asks whether wiminfo may access files on a removable volume. If it was denied, enable Removable Volumes for wiminfo in System Settings > Privacy & Security > Files and Folders, then quit WoR-Flasher completely and try again.${user_output:+ ($user_output)}"
+  fi
+  error "Failed to inspect the copied startup image before continuing.${user_output:+ ($user_output)}"
 }
 
 darwin_report_copy_failure() { #Input: mounted target, operation description, and copy mode. Distinguishes volume access, sudo, and copy failures without prompting.
@@ -1084,7 +1100,7 @@ darwin_mount_point_or_die() { #Input: partition. Output: its mount point now, re
 
 darwin_flash_device() {
   is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk that is not the current boot drive."
-  local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device copy_attempt pi3_patch=''
+  local boot_payload_kb boot_size_mb install_size_mb sgdisk_bin raw_device copy_attempt pi3_mbr_helper=''
   sgdisk_bin="$(command -v sgdisk)" || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."
   #The GUI requests authorization at the write boundary through its native password dialog.
   if [ "$RUN_MODE" != gui ] && ! command sudo -n -v >/dev/null 2>&1 && ! sudo -v >/dev/null 2>&1;then
@@ -1098,13 +1114,13 @@ darwin_flash_device() {
   phase "Partitioning and formatting $DEVICE"
   PART1="${DEVICE}s1"
   PART2="${DEVICE}s2"
-  [ "$RPI_MODEL" != 3 ] || pi3_patch="$PWD/peinstaller/pi3/gptpatch.img"
+  [ "$RPI_MODEL" != 3 ] || pi3_mbr_helper="$PWD/src/lib/pi3-hybrid-mbr.py"
   #Authenticate in this shell before helpers capture their output in subshells; otherwise the
   #GUI prompt state does not survive to the final privileged disk operation.
   sudo -v || error "Administrator authentication failed or was canceled. Enter the macOS password in the WoR-Flasher dialog and try again."
   emit_gui_task_progress 0 'Preparing the target disk...'
   status "Administrator access granted."
-  darwin_start_partition_finalizer_or_die "$DEVICE" "$sgdisk_bin" "$pi3_patch"
+  darwin_start_partition_finalizer_or_die "$DEVICE" "$sgdisk_bin" "$pi3_mbr_helper"
   printf '  There is no turning back now.\n' 1>&2
   status "  Creating WOR_BOOT (${boot_size_mb} MB) and WOR_INSTALL (${install_size_mb} MB)"
   emit_gui_progress "DISK_WRITE"$'\t'"1"$'\t'"$DEVICE"
@@ -1128,6 +1144,7 @@ darwin_flash_device() {
   boot_mount="$(darwin_mount_point_or_die "$PART1")"
   copy_startup_environment_with_progress "$PWD/$winfiles/bootpart" "$boot_mount" device \
     || darwin_report_copy_failure "$boot_mount" "copy startup files to $boot_mount" user
+  darwin_require_wimlib_volume_access "$boot_mount/sources/boot.wim"
   report_copy_task 15 "Installation files"
   #fskitd unmounts an idle exFAT volume on its own ("Unmounting /Volumes/WOR_INSTALL how 02"), so
   #WOR_INSTALL can disappear while boot.wim is still being written to WOR_BOOT. Remount and retry.
@@ -1168,7 +1185,7 @@ darwin_flash_device() {
   report_copy_task 90 "UEFI firmware"
   cp -RX "$PWD/pi${RPI_MODEL}-uefipackage"/* "$boot_mount" || error "Failed to copy UEFI firmware to $boot_mount"
   [ -z "$CONFIG_TXT" ] || [ "$APPLY_CUSTOM_CONFIG_TXT" != 1 ] || printf '%s\n' "$CONFIG_TXT" > "$boot_mount/config.txt"
-  [ "$RPI_MODEL" != 3 ] || darwin_apply_pi3_gpt_patch_or_die
+  [ "$RPI_MODEL" != 3 ] || darwin_apply_pi3_hybrid_mbr_or_die
 
   if [ "$SKIP_IMAGE_VERIFICATION" == 1 ];then
     echo_red "Skipping written-image verification (SKIP_IMAGE_VERIFICATION=1). This is not recommended."
@@ -3662,10 +3679,11 @@ if [ ! -z "$CONFIG_TXT" ] && [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ];then
 fi
 
 if [ $RPI_MODEL == 3 ];then
-  status "Applying GPT partition-table fix for the Pi3/Pi2"
-  #According to @mariob, this patches the first sector of the disk to guide the bootloader into finding the fat32 partition
-  #there's no other way of doing it on the pi 3 - hardware limitation
-  sudo dd if=$PWD/peinstaller/pi3/gptpatch.img of="$DEVICE" conv=fsync || error "The 'dd' command failed to flash $PWD/peinstaller/pi3/gptpatch.img to $DEVICE"
+  status "Applying Pi3 hybrid-MBR partition-table fix"
+  pi3_mbr_device="$DEVICE"
+  [ "$(uname -s)" != Darwin ] || pi3_mbr_device="/dev/r${DEVICE#/dev/}"
+  sudo python3 "$PWD/src/lib/pi3-hybrid-mbr.py" "$pi3_mbr_device" \
+    || error "Failed to expose the FAT32 boot partition to the Pi3 first-stage loader on $DEVICE"
 fi
 
 if [ "$SKIP_IMAGE_VERIFICATION" == 1 ];then

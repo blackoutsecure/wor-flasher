@@ -87,6 +87,13 @@ static_checks() {
   for f in src/standalone-launcher.sh src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh 'src/macos-app/Contents/MacOS/WoR-Flasher' ;do
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
+  if command -v python3 >/dev/null ;then
+    python3 "$REPO_DIR/tests/test-pi3-hybrid-mbr.py" >/dev/null 2>&1 \
+      && pass "Pi 3 hybrid-MBR helper tests passed" \
+      || fail "Pi 3 hybrid-MBR helper tests failed"
+  else
+    skip "python3 is unavailable; cannot test the Pi 3 hybrid-MBR helper"
+  fi
   jq empty "$REPO_DIR/src/config/metadata.json" >/dev/null 2>&1 \
     && jq empty "$REPO_DIR/src/config/metadata.schema.json" >/dev/null 2>&1 \
     && pass "project metadata JSON and schema parse" \
@@ -1672,7 +1679,7 @@ printf 'worker\n' >> "$AUTH_TEST_DIR/calls"
 [ "$AUTH_TEST_SCENARIO" != early-exit ] || exit 0
 case "$AUTH_TEST_SCENARIO" in
   pi3-expired|pi3-failure|pi3-unmount-failure)
-    [ "$(type -P dd)" == "${AUTH_TEST_DIR%/*}/dd" ] || exit 99
+    [ "$(type -P python3)" == "${AUTH_TEST_DIR%/*}/python3" ] || exit 99
     exec "$@" </dev/null ;;
 esac
 #Simulate only the process handshake; never execute the privileged script or touch a disk.
@@ -1690,16 +1697,16 @@ fi
 printf 'mock finalizer timed out waiting for the test\n' >&2
 exit 124
 SH
-  cat > "$auth_dir/dd" <<'SH'
+  cat > "$auth_dir/python3" <<'SH'
 #!/bin/bash
-if [ "$#" != 3 ] || [ "$1" != "if=$AUTH_TEST_DIR/gptpatch.img" ] \
-  || [ "$2" != of=/dev/rdoes-not-exist ] || [ "$3" != conv=fsync ];then
-  printf 'mock dd: refusing unexpected patch arguments\n' >&2
+  if [ "$#" != 2 ] || [ "$1" != "$AUTH_TEST_DIR/pi3-hybrid-mbr.py" ] \
+    || [ "$2" != /dev/rdoes-not-exist ];then
+    printf 'mock python3: refusing unexpected patch arguments\n' >&2
   exit 99
 fi
-printf 'dd\n' >> "$AUTH_TEST_DIR/disk-commands"
+  printf 'hybrid-mbr\n' >> "$AUTH_TEST_DIR/disk-commands"
 if [ "$AUTH_TEST_SCENARIO" == pi3-failure ];then
-  printf 'mock dd failed\n' >&2
+    printf 'mock hybrid-MBR helper failed\n' >&2
   exit 42
 fi
 SH
@@ -1715,13 +1722,13 @@ if [ "$AUTH_TEST_SCENARIO" == pi3-unmount-failure ];then
   exit 43
 fi
 SH
-  chmod +x "$auth_dir/sudo" "$auth_dir/dd" "$auth_dir/diskutil" || die "Could not make the authorization mocks executable."
+  chmod +x "$auth_dir/sudo" "$auth_dir/python3" "$auth_dir/diskutil" || die "Could not make the authorization mocks executable."
   for scenario in fresh cached root-owned canceled unavailable early-exit expired-after-start pi3-expired pi3-failure pi3-unmount-failure ;do
     case_dir="$auth_dir/$scenario"
     mkdir -p "$case_dir/worker" || die "Could not create the authorization-test case."
     : > "$case_dir/calls"
     : > "$case_dir/disk-commands"
-    printf 'mock Pi3 GPT patch\n' > "$case_dir/gptpatch.img"
+    cp "$REPO_DIR/src/lib/pi3-hybrid-mbr.py" "$case_dir/pi3-hybrid-mbr.py"
     result_status=0
     result="$(PATH="$auth_dir:$PATH" AUTH_MOCK_SUDO="$auth_dir/sudo" AUTH_TEST_DIR="$case_dir" AUTH_TEST_SCENARIO="$scenario" run_in_engine '
       error() { printf "%s\n" "$*"; exit 1; }
@@ -1757,16 +1764,16 @@ SH
       [ "$AUTH_TEST_SCENARIO" != unavailable ] || rm -f "$AUTH_TEST_DIR/authorized-parent"
       patch=""
       case "$AUTH_TEST_SCENARIO" in
-        pi3-*) patch="$AUTH_TEST_DIR/gptpatch.img" ;;
+        pi3-*) patch="$AUTH_TEST_DIR/pi3-hybrid-mbr.py" ;;
       esac
       darwin_start_partition_finalizer_or_die /dev/does-not-exist /not-executed/sgdisk "$patch"
       [ -s "$DARWIN_FINALIZE_READY" ] && [ -O "$DARWIN_FINALIZE_DONE" ] \
         || error "Finalizer returned without readiness or a user-owned result file."
       if [ -n "$patch" ];then
-        [ ! -s "$AUTH_TEST_DIR/disk-commands" ] || error "Pi3 patch ran before its signal."
+        [ ! -s "$AUTH_TEST_DIR/disk-commands" ] || error "Pi3 hybrid-MBR repair ran before its signal."
         rm -f "$AUTH_TEST_DIR/authorized-parent"
-        darwin_apply_pi3_gpt_patch_or_die
-        darwin_apply_pi3_gpt_patch_or_die
+        darwin_apply_pi3_hybrid_mbr_or_die
+        darwin_apply_pi3_hybrid_mbr_or_die
         sleep 2
         kill -TERM "$DARWIN_FINALIZE_PID" || error "Could not stop the mock worker."
         wait "$DARWIN_FINALIZE_PID"
@@ -1820,18 +1827,18 @@ SH
         fi ;;
       pi3-expired)
         if [ "$result_status" == 0 ] && [ "$prompts" == 1 ] && grep -qFx patched <<<"$result" \
-          && [ -f "$case_dir/verify-reached" ] && [ "$(cat "$case_dir/disk-commands")" == $'unmount\ndd' ];then
-          pass "the Pi3 patch unmounts the disk and runs once after cached authorization expires"
+          && [ -f "$case_dir/verify-reached" ] && [ "$(cat "$case_dir/disk-commands")" == $'unmount\nhybrid-mbr' ];then
+          pass "the Pi3 hybrid-MBR repair unmounts the disk and runs once after cached authorization expires"
         else
-          fail "the Pi3 patch skipped unmounting, repeated, ran early, or needed fresh authorization: $result"
+          fail "the Pi3 hybrid-MBR repair skipped unmounting, repeated, ran early, or needed fresh authorization: $result"
         fi ;;
       pi3-failure)
         if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
-          && [[ "$result" == *'status 42'* ]] && [[ "$result" == *'mock dd failed'* ]] \
+          && [[ "$result" == *'status 42'* ]] && [[ "$result" == *'mock hybrid-MBR helper failed'* ]] \
           && [ ! -e "$case_dir/verify-reached" ];then
-          pass "a failed Pi3 patch preserves its error and prevents verification"
+          pass "a failed Pi3 hybrid-MBR repair preserves its error and prevents verification"
         else
-          fail "a failed Pi3 patch was hidden or prompted for authorization again: $result"
+          fail "a failed Pi3 hybrid-MBR repair was hidden or prompted for authorization again: $result"
         fi ;;
       pi3-unmount-failure)
         if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
@@ -1843,7 +1850,7 @@ SH
         fi ;;
     esac
     rm -f "$case_dir/authorized-parent" "$case_dir/calls" "$case_dir/prepare-reached" "$case_dir/verify-reached" \
-      "$case_dir/gptpatch.img" "$case_dir/disk-commands" "$case_dir/worker/go" "$case_dir/worker/done" \
+      "$case_dir/pi3-hybrid-mbr.py" "$case_dir/disk-commands" "$case_dir/worker/go" "$case_dir/worker/done" \
       "$case_dir/worker/log" "$case_dir/worker/ready" "$case_dir/worker/patch-go" "$case_dir/worker/patch-done"
     rmdir "$case_dir/worker" "$case_dir" || die "Could not clean the authorization-test case."
   done
@@ -1857,11 +1864,11 @@ SH
   [ "$cleanup_result" == 'user detach: detach /dev/mock-iso' ] \
     && pass "macOS detaches user-mounted ISO images without elevation" \
     || fail "macOS ISO cleanup requested fresh authorization: $cleanup_result"
-  grep -qF '[ "$RPI_MODEL" != 3 ] || darwin_apply_pi3_gpt_patch_or_die' "$REPO_DIR/install-wor.sh" \
+  grep -qF '[ "$RPI_MODEL" != 3 ] || darwin_apply_pi3_hybrid_mbr_or_die' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF '|| sudo dd if="$PWD/peinstaller/pi3/gptpatch.img"' "$REPO_DIR/install-wor.sh" \
     && pass "the macOS Pi3 flash path uses the pre-authorized patch worker" \
     || fail "the macOS Pi3 flash still depends on a late sudo timestamp"
-  rm -f "$auth_dir/sudo" "$auth_dir/dd" "$auth_dir/diskutil" "$auth_dir/cleanup-log"
+  rm -f "$auth_dir/sudo" "$auth_dir/python3" "$auth_dir/diskutil" "$auth_dir/cleanup-log"
   rmdir "$auth_dir" || die "Could not clean the authorization-test workspace."
 }
 
@@ -2094,6 +2101,32 @@ JSON
     && pass "cached WIM locale discovery decodes wiminfo UTF-16LE output before parsing" \
     || fail "cached WIM locale discovery cannot parse wiminfo XML: '$wim_locale_out'"
   rm -rf "$wim_locale_dir"
+
+  wim_access_out="$(run_in_engine '
+    status() { :; }
+    emit_gui_task_progress() { printf "progress:%s:%s\n" "$1" "$2"; }
+    wiminfo() { [ "$1" == /Volumes/WOR_BOOT/sources/boot.wim ] && [ "$2" == 1 ]; }
+    darwin_require_wimlib_volume_access /Volumes/WOR_BOOT/sources/boot.wim
+  ' 2>&1)"
+  wim_denied_status=0
+  wim_denied_out="$(run_in_engine '
+    status() { :; }
+    emit_gui_task_progress() { :; }
+    open() { :; }
+    error() { printf "%s\n" "$*"; return 1; }
+    wiminfo() { printf "Operation not permitted\n" >&2; return 1; }
+    darwin_require_wimlib_volume_access /Volumes/WOR_BOOT/sources/boot.wim
+  ' 2>&1)" || wim_denied_status=$?
+  [ "$wim_access_out" == 'progress:10:Waiting for macOS removable-volume permission...' ] \
+    && [ "$wim_denied_status" == 1 ] \
+    && [[ "$wim_denied_out" == *'macOS denied wimlib access to the removable target'* ]] \
+    && [[ "$wim_denied_out" == *'Choose Allow when macOS asks whether wiminfo may access files on a removable volume'* ]] \
+    && grep -qF 'darwin_require_wimlib_volume_access "$boot_mount/sources/boot.wim"' "$REPO_DIR/install-wor.sh" \
+    && awk '/^darwin_flash_device\(\)/ { in_function=1 }
+      in_function && /darwin_require_wimlib_volume_access/ { preflight=1 }
+      in_function && /report_copy_task 15 "Installation files"/ { exit preflight ? 0 : 1 }' "$REPO_DIR/install-wor.sh" \
+    && pass "macOS preflights wimlib removable-volume access before the large installation copy" \
+    || fail "macOS wimlib removable-volume preflight or denial guidance is incomplete"
 
   cached_locale_count="$(run_in_engine 'locale_test_dir="$(mktemp -d)"; DL_DIR="$locale_test_dir"; mkdir -p "$DL_DIR/winfiles_22631.2861_en-us"; : > "$DL_DIR/winfiles_22631.2861_en-us/install.wim"; list_wim_locale_codes() { printf "en-us\\n"; }; list_windows_locale_options | awk -F "\t" "\$1 == \"en-US\" { count++ } END { print count }"; rm -rf "$locale_test_dir"')"
   [ "$(run_in_engine 'windows_locale_from_language_code sr-latn-rs')" == 'sr-Latn-RS' ] \

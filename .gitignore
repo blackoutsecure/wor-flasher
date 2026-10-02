@@ -17,6 +17,12 @@ config.json
 !config-templates/*.config.json
 !config-templates/*.json
 
+# Local developer environment: Python virtualenv used by the test tooling, and
+# editor state. VS Code writes .vscode/settings.json pointing at this machine's
+# interpreter, so it is machine-specific rather than shared project config.
+.venv/
+.vscode/
+
 # Downloaded components, if DL_DIR is pointed inside the repo
 peinstaller/
 driverpackage/
