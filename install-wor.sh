@@ -834,6 +834,13 @@ darwin_mount_partition_or_die() { #Input: partition device. Waits for macOS to s
   error "Failed to mount $partition after formatting. macOS may still be settling the partition table or may have refused to mount the new volume.${output:+ Last mount output: $output}${info:+ diskutil info: $info}"
 }
 
+darwin_partition_finalizer_is_running() { #Input: worker PID. sudo can become root-owned, making user kill -0 fail with EPERM.
+  local worker_pid="$1" observed_pid
+  kill -0 "$worker_pid" 2>/dev/null && return 0
+  observed_pid="$(/bin/ps -p "$worker_pid" -o pid= 2>/dev/null)" || return 1
+  [ -n "$observed_pid" ]
+}
+
 darwin_start_partition_finalizer_or_die() { #Input: device, sgdisk path, optional Pi3 patch. Starts a root helper for late disk writes.
   #Without a terminal, sudo caches credentials by parent PID. Launch the external command
   #directly so a background shell running the GUI sudo wrapper cannot change that parent.
@@ -901,17 +908,19 @@ ROOT_SCRIPT
     > "$DARWIN_FINALIZE_LOG" 2>&1 < /dev/null &
   DARWIN_FINALIZE_PID=$!
   for attempt in $(seq 1 10) ;do
-    if [ -s "$DARWIN_FINALIZE_READY" ] && kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
+    if [ -s "$DARWIN_FINALIZE_READY" ] && darwin_partition_finalizer_is_running "$DARWIN_FINALIZE_PID";then
       return 0
     fi
-    if ! kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
+    if ! darwin_partition_finalizer_is_running "$DARWIN_FINALIZE_PID";then
       worker_running=0
       break
     fi
     sleep 1
   done
   if [ "$worker_running" == 1 ];then
-    kill -TERM "$DARWIN_FINALIZE_PID" 2>/dev/null || true
+    kill -TERM "$DARWIN_FINALIZE_PID" 2>/dev/null \
+      || command sudo -n kill -TERM "$DARWIN_FINALIZE_PID" 2>/dev/null \
+      || true
     wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?
     output="$(cat "$DARWIN_FINALIZE_LOG" 2>/dev/null)"
     error "Partition finalizer did not become ready after $attempt readiness checks for $device (worker exit $worker_status).${output:+ ($output)}"
@@ -924,14 +933,14 @@ ROOT_SCRIPT
 darwin_apply_pi3_gpt_patch_or_die() { #Signals the already-authorized worker before written-image verification.
   local patch_status output worker_status=0
   : > "$DARWIN_PI3_PATCH_GO" || error "Failed to signal the Pi3 GPT patch on $DEVICE."
-  while [ ! -s "$DARWIN_PI3_PATCH_DONE" ] && kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null ;do
+  while [ ! -s "$DARWIN_PI3_PATCH_DONE" ] && darwin_partition_finalizer_is_running "$DARWIN_FINALIZE_PID" ;do
     sleep 1
   done
   patch_status="$(cat "$DARWIN_PI3_PATCH_DONE" 2>/dev/null)" \
     || error "The Pi3 GPT patch did not leave a readable result on $DEVICE."
   [ "$patch_status" == 0 ] && return 0
   output="$(cat "$DARWIN_FINALIZE_LOG" 2>/dev/null)" || output='Partition-finalization log is unavailable.'
-  if [ -z "$patch_status" ] && ! kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
+  if [ -z "$patch_status" ] && ! darwin_partition_finalizer_is_running "$DARWIN_FINALIZE_PID";then
     wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?
     error "The Pi3 GPT patch worker exited with status $worker_status without a result on $DEVICE.${output:+ ($output)}"
   fi
@@ -941,7 +950,7 @@ darwin_apply_pi3_gpt_patch_or_die() { #Signals the already-authorized worker bef
 darwin_finalize_partition_types_or_die() { #Signals the pre-authorized root helper to retag the finished media, then waits for it.
   local output finalize_status worker_status=0
   : > "$DARWIN_FINALIZE_GO" || error "Failed to signal partition finalization on $DEVICE."
-  while [ ! -s "$DARWIN_FINALIZE_DONE" ] && kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null ;do
+  while [ ! -s "$DARWIN_FINALIZE_DONE" ] && darwin_partition_finalizer_is_running "$DARWIN_FINALIZE_PID" ;do
     sleep 1
   done
   wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?

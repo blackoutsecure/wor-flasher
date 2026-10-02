@@ -469,6 +469,7 @@ static_checks() {
 
   grep -qF 'Choose Windows and Raspberry Pi target' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "'Windows 11'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "'Windows 10'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Raspberry Pi model:' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'macos_choose_target()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows and Raspberry Pi target' "$REPO_DIR/install-wor-gui.sh" \
@@ -1715,7 +1716,7 @@ if [ "$AUTH_TEST_SCENARIO" == pi3-unmount-failure ];then
 fi
 SH
   chmod +x "$auth_dir/sudo" "$auth_dir/dd" "$auth_dir/diskutil" || die "Could not make the authorization mocks executable."
-  for scenario in fresh cached canceled unavailable early-exit expired-after-start pi3-expired pi3-failure pi3-unmount-failure ;do
+  for scenario in fresh cached root-owned canceled unavailable early-exit expired-after-start pi3-expired pi3-failure pi3-unmount-failure ;do
     case_dir="$auth_dir/$scenario"
     mkdir -p "$case_dir/worker" || die "Could not create the authorization-test case."
     : > "$case_dir/calls"
@@ -1736,6 +1737,12 @@ SH
       HOST_OS=Darwin RUN_MODE=gui MACOS_ASKPASS=/tmp/wor-unused-askpass WOR_DISKUTIL_BIN="${AUTH_TEST_DIR%/*}/diskutil"
       unset WOR_GUI_SUDO_KEEPALIVE_PID
       WOR_GUI_SUDO_PROMPTED=0 WOR_GUI_PROGRESS_FILE=""
+      if [ "$AUTH_TEST_SCENARIO" == root-owned ];then
+        kill() {
+          [ "${1:-}" != -0 ] || return 1
+          builtin kill "$@"
+        }
+      fi
       sudo -v || error "mock authentication was canceled"
       if [ -n "${WOR_GUI_SUDO_KEEPALIVE_PID:-}" ];then
         kill -STOP "$WOR_GUI_SUDO_KEEPALIVE_PID"
@@ -1779,10 +1786,11 @@ SH
       printf "ready\n"' 2>&1)" || result_status=$?
     prompts="$(awk '/^prompt$/ { count++ } END { print count + 0 }' "$case_dir/calls")"
     case "$scenario" in
-      fresh|cached|expired-after-start)
+      fresh|cached|root-owned|expired-after-start)
         if [ "$result_status" == 0 ] && grep -qFx ready <<<"$result" \
           && [ -f "$case_dir/prepare-reached" ] \
-          && { [ "$scenario:$prompts" == fresh:1 ] || [ "$scenario:$prompts" == cached:0 ] || [ "$scenario:$prompts" == expired-after-start:1 ]; };then
+          && { [ "$scenario:$prompts" == fresh:1 ] || [ "$scenario:$prompts" == cached:0 ] \
+            || [ "$scenario:$prompts" == root-owned:1 ] || [ "$scenario:$prompts" == expired-after-start:1 ]; };then
           pass "$scenario GUI authorization remains usable by the background finalizer"
         else
           fail "$scenario GUI authorization did not reach finalizer readiness (exit $result_status): $result"
