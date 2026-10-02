@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -16,6 +18,14 @@ HELPER_PATH = REPO_DIR / "src/lib/pi3-hybrid-mbr.py"
 
 SECTOR_SIZE = 512
 MBR_ENTRY_OFFSET = 446
+
+
+def load_helper_module():
+    #The helper filename is hyphenated, so it can only be imported through an explicit spec.
+    spec = importlib.util.spec_from_file_location("pi3_hybrid_mbr", HELPER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def create_gpt_image(path: Path, start_lba: int = 2048, sector_count: int = 65536) -> bytes:
@@ -111,6 +121,39 @@ class Pi3HybridMbrTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(image.read_bytes(), before)
             self.assertIn("valid GPT header", result.stderr)
+
+    def test_reads_whole_sectors_so_raw_devices_do_not_reject_the_request(self) -> None:
+        #Raw character devices such as /dev/rdiskN on macOS fail every read whose offset or
+        #length is not a sector multiple, and the regular-file fixtures above accept those
+        #reads happily, so assert on the arguments handed to os.pread rather than on bytes.
+        module = load_helper_module()
+        real_pread = os.pread
+        calls: list[tuple[int, int]] = []
+
+        def recording_pread(fd: int, length: int, offset: int) -> bytes:
+            calls.append((length, offset))
+            return real_pread(fd, length, offset)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image = Path(temp_dir) / "disk.img"
+            create_gpt_image(image)
+            expected_entry = image.read_bytes()[1024:1152]
+            expected_unaligned = image.read_bytes()[1030:1050]
+
+            handle = os.open(image, os.O_RDONLY)
+            try:
+                with unittest.mock.patch("os.pread", recording_pread):
+                    entry = module.read_at(handle, 1024, 128)
+                    unaligned = module.read_at(handle, 1030, 20)
+            finally:
+                os.close(handle)
+
+        self.assertEqual(entry, expected_entry)
+        self.assertEqual(unaligned, expected_unaligned)
+        self.assertTrue(calls)
+        for length, offset in calls:
+            self.assertEqual(offset % SECTOR_SIZE, 0)
+            self.assertEqual(length % SECTOR_SIZE, 0)
 
 
 if __name__ == "__main__":

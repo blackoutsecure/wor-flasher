@@ -18,10 +18,18 @@ MBR_SIGNATURE_OFFSET = 510
 
 
 def read_at(handle: int, offset: int, size: int) -> bytes:
-    data = os.pread(handle, size, offset)
-    if len(data) != size:
+    #Raw character devices (/dev/rdiskN on macOS) reject any read whose offset or length is
+    #not a whole number of sectors with EINVAL, so widen every request to sector boundaries
+    #and slice the caller's window back out in memory.
+    base = (offset // SECTOR_SIZE) * SECTOR_SIZE
+    leading = offset - base
+    span = leading + size
+    length = -(-span // SECTOR_SIZE) * SECTOR_SIZE
+    data = os.pread(handle, length, base)
+    window = data[leading : leading + size]
+    if len(window) != size:
         raise ValueError(f"short read at byte offset {offset}")
-    return data
+    return window
 
 
 def lba_to_chs(lba: int) -> bytes:
