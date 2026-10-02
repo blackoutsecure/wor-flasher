@@ -343,7 +343,18 @@ app.runModalForWindow(window)
 app.terminate(null)
 JXA
 )"
-    wor_osascript -l JavaScript - "$plain" "$icon_path" "$WOR_APP_TITLE" "$WOR_WINDOW_TITLE" <<<"$error_jxa" >/dev/null 2>&1
+    if ! wor_osascript -l JavaScript - "$plain" "$icon_path" "$WOR_APP_TITLE" "$WOR_WINDOW_TITLE" <<<"$error_jxa" >/dev/null 2>&1 ;then
+      #the custom window failed to show; never let an error end silently
+      if ! osascript - "$plain" "${WOR_WINDOW_TITLE:-WoR-Flasher}" >/dev/null 2>&1 <<'APPLESCRIPT'
+on run argv
+  display dialog (item 1 of argv) with title (item 2 of argv) buttons {"OK"} default button "OK" with icon stop
+end run
+APPLESCRIPT
+      then
+        #neither dialog appeared: hand error reporting back to the GUI
+        [ -n "$WOR_GUI_ERROR_MARKER" ] && rm -f "$WOR_GUI_ERROR_MARKER" 2>/dev/null
+      fi
+    fi
   elif command -v yad >/dev/null ;then
     yad --center --window-icon="$icon_path" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" --text="$plain"
   elif command -v zenity >/dev/null ;then
