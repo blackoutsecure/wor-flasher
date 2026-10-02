@@ -837,7 +837,7 @@ darwin_mount_partition_or_die() { #Input: partition device. Waits for macOS to s
 darwin_start_partition_finalizer_or_die() { #Input: device, sgdisk path, optional Pi3 patch. Starts a root helper for late disk writes.
   #Without a terminal, sudo caches credentials by parent PID. Launch the external command
   #directly so a background shell running the GUI sudo wrapper cannot change that parent.
-  local device="$1" sgdisk_bin="$2" raw_device="/dev/r${1#/dev/}" pi3_patch="${3:-}" finalizer_dir finalizer_script attempt output worker_status=0
+  local device="$1" sgdisk_bin="$2" raw_device="/dev/r${1#/dev/}" pi3_patch="${3:-}" diskutil_bin="${WOR_DISKUTIL_BIN:-/usr/sbin/diskutil}" finalizer_dir finalizer_script attempt output worker_status=0 worker_running=1
   [ -z "$pi3_patch" ] || { [ -s "$pi3_patch" ] && [ -r "$pi3_patch" ]; } \
     || error "The Pi3 GPT patch is missing or unreadable: $pi3_patch"
   finalizer_dir="$(mktemp -d)" || error "Failed to create a partition-finalization workspace."
@@ -868,6 +868,7 @@ ready_file="$7"
 pi3_patch="$8"
 patch_go_file="$9"
 patch_done_file="${10}"
+diskutil_bin="${11}"
 patch_completed=0
 printf 'ready\n' > "$ready_file" || exit 1
 while [ ! -e "$go_file" ];do
@@ -877,7 +878,8 @@ while [ ! -e "$go_file" ];do
   fi
   if [ -n "$pi3_patch" ] && [ "$patch_completed" == 0 ] && [ -e "$patch_go_file" ];then
     patch_status=0
-    dd if="$pi3_patch" of="$raw_device" conv=fsync || patch_status=$?
+    "$diskutil_bin" unmountDisk force "$device" || patch_status=$?
+    [ "$patch_status" != 0 ] || dd if="$pi3_patch" of="$raw_device" conv=fsync || patch_status=$?
     printf '%s\n' "$patch_status" > "$patch_done_file" || exit 1
     [ "$patch_status" == 0 ] || exit "$patch_status"
     patch_completed=1
@@ -889,24 +891,30 @@ if [ -n "$pi3_patch" ] && [ "$patch_completed" != 1 ];then
   exit 1
 fi
 finalize_status=0
-/usr/sbin/diskutil unmountDisk force "$device" >/dev/null 2>&1 || true
+"$diskutil_bin" unmountDisk force "$device" >/dev/null 2>&1 || true
 "$sgdisk_bin" -t 1:ef00 -c 1:WOR_BOOT -t 2:0700 -c 2:WOR_INSTALL "$raw_device" || finalize_status=$?
 [ "$finalize_status" != 0 ] || "$sgdisk_bin" -A 1:clear:63 -A 2:clear:63 "$raw_device" || finalize_status=$?
 printf '%s\n' "$finalize_status" > "$done_file"
 ROOT_SCRIPT
   )"
-  command sudo -n bash -c "$finalizer_script" wor-partition-finalizer "$device" "$sgdisk_bin" "$raw_device" "$DARWIN_FINALIZE_GO" "$DARWIN_FINALIZE_DONE" "$$" "$DARWIN_FINALIZE_READY" "$pi3_patch" "$DARWIN_PI3_PATCH_GO" "$DARWIN_PI3_PATCH_DONE" \
+  command sudo -n bash -c "$finalizer_script" wor-partition-finalizer "$device" "$sgdisk_bin" "$raw_device" "$DARWIN_FINALIZE_GO" "$DARWIN_FINALIZE_DONE" "$$" "$DARWIN_FINALIZE_READY" "$pi3_patch" "$DARWIN_PI3_PATCH_GO" "$DARWIN_PI3_PATCH_DONE" "$diskutil_bin" \
     > "$DARWIN_FINALIZE_LOG" 2>&1 < /dev/null &
   DARWIN_FINALIZE_PID=$!
   for attempt in $(seq 1 10) ;do
     if [ -s "$DARWIN_FINALIZE_READY" ] && kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
       return 0
     fi
-    kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null || break
+    if ! kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
+      worker_running=0
+      break
+    fi
     sleep 1
   done
-  if kill -0 "$DARWIN_FINALIZE_PID" 2>/dev/null;then
-    error "Partition finalizer did not become ready after $attempt readiness checks for $device."
+  if [ "$worker_running" == 1 ];then
+    kill -TERM "$DARWIN_FINALIZE_PID" 2>/dev/null || true
+    wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?
+    output="$(cat "$DARWIN_FINALIZE_LOG" 2>/dev/null)"
+    error "Partition finalizer did not become ready after $attempt readiness checks for $device (worker exit $worker_status).${output:+ ($output)}"
   fi
   wait "$DARWIN_FINALIZE_PID" 2>/dev/null || worker_status=$?
   output="$(cat "$DARWIN_FINALIZE_LOG" 2>/dev/null)"

@@ -70,7 +70,8 @@ parent=''
 [ "$*" != '-n -v' ] || exit 0
 [ "$1" == -n ] || exit 99
 shift
-[ "$#" == 14 ] && [ "$1" == bash ] && [ "$2" == -c ] && [ "$4" == wor-partition-finalizer ] || exit 99
+[ "$#" == 15 ] && [ "$1" == bash ] && [ "$2" == -c ] && [ "$4" == wor-partition-finalizer ] \
+  && [ "\${15}" == /usr/sbin/diskutil ] || exit 99
 #Simulate only the worker handshake; never execute its privileged command argument.
 printf 'ready\\n' > "\${11}"
 for attempt in {1..100};do

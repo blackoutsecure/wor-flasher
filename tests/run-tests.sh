@@ -1058,15 +1058,25 @@ SH
   cat > "$finalizer_dir/sudo" <<'SH'
 #!/bin/bash
 [ "${FINALIZER_EXIT_EARLY:-0}" == 1 ] && exit 0
+[ "${FINALIZER_NEVER_READY:-0}" != 1 ] || {
+  printf 'mock finalizer startup stalled\n' >&2
+  trap 'printf "stopped\n" > "$FINALIZER_STOPPED"; exit 143' TERM
+  while :;do sleep 1;done
+}
 while [ "$1" == -n ];do shift; done
 [ "$1" == -v ] && exit 0
 exec "$@" </dev/null
+SH
+  cat > "$finalizer_dir/seq" <<'SH'
+#!/bin/bash
+[ "${FINALIZER_ONE_CHECK:-0}" != 1 ] || { printf '1\n'; exit 0; }
+exec /usr/bin/seq "$@"
 SH
   cat > "$finalizer_dir/sgdisk" <<'SH'
 #!/bin/bash
 printf 'sgdisk %s\n' "$*" >> "$FINALIZER_LOG"
 SH
-  chmod +x "$finalizer_dir/sudo" "$finalizer_dir/sgdisk"
+  chmod +x "$finalizer_dir/sudo" "$finalizer_dir/seq" "$finalizer_dir/sgdisk"
   finalizer_log="$finalizer_dir/calls"
   finalizer_result="$(PATH="$finalizer_dir:$PATH" FINALIZER_LOG="$finalizer_log" run_in_engine '
     HOST_OS=Darwin RUN_MODE=gui MACOS_ASKPASS=/tmp/wor-unused-askpass WOR_GUI_SUDO_KEEPALIVE_PID=mock
@@ -1097,6 +1107,16 @@ SH
     && [[ "$finalizer_start_result" != *'unexpected success'* ]] \
     && pass "a worker exiting without readiness fails before disk preparation" \
     || fail "finalizer startup accepts a worker that never became ready: '$finalizer_start_result'"
+  finalizer_timeout_result="$(PATH="$finalizer_dir:$PATH" FINALIZER_NEVER_READY=1 FINALIZER_ONE_CHECK=1 FINALIZER_STOPPED="$finalizer_dir/stopped" run_in_engine '
+    error() { printf "%s\n" "$*"; exit 1; }
+    darwin_start_partition_finalizer_or_die /dev/disk99 "$(command -v sgdisk)"
+    printf "unexpected success\n"' 2>&1)"
+  [[ "$finalizer_timeout_result" == *'did not become ready after 1 readiness checks for /dev/disk99 (worker exit 143)'* ]] \
+    && [[ "$finalizer_timeout_result" == *'mock finalizer startup stalled'* ]] \
+    && [[ "$finalizer_timeout_result" != *'unexpected success'* ]] \
+    && [ -s "$finalizer_dir/stopped" ] \
+    && pass "a stalled finalizer is stopped, reaped, and reports its diagnostics" \
+    || fail "a stalled finalizer was left running or hid its diagnostics: '$finalizer_timeout_result'"
   rm -rf "$finalizer_dir"
 
   finalizer_failure_dir="$(mktemp -d)"
@@ -1641,15 +1661,16 @@ if [ "$authorized_parent" != "$PPID" ];then
   exit 1
 fi
 [ "$*" == -v ] && exit 0
-if [ "$#" != 14 ] || [ "$1" != bash ] || [ "$2" != -c ] || [ "$4" != wor-partition-finalizer ] \
-  || [ "${11}" != "$AUTH_TEST_DIR/worker/ready" ];then
-  printf 'mock sudo: refusing unexpected command or readiness path\n' >&2
+if [ "$#" != 15 ] || [ "$1" != bash ] || [ "$2" != -c ] || [ "$4" != wor-partition-finalizer ] \
+  || [ "${11}" != "$AUTH_TEST_DIR/worker/ready" ] || [ "${15}" != "${AUTH_TEST_DIR%/*}/diskutil" ];then
+  printf 'mock sudo: refusing unexpected command (argc=%s, ready=%s, diskutil=%s)\n' \
+    "$#" "${11:-missing}" "${15:-missing}" >&2
   exit 99
 fi
 printf 'worker\n' >> "$AUTH_TEST_DIR/calls"
 [ "$AUTH_TEST_SCENARIO" != early-exit ] || exit 0
 case "$AUTH_TEST_SCENARIO" in
-  pi3-expired|pi3-failure)
+  pi3-expired|pi3-failure|pi3-unmount-failure)
     [ "$(type -P dd)" == "${AUTH_TEST_DIR%/*}/dd" ] || exit 99
     exec "$@" </dev/null ;;
 esac
@@ -1681,8 +1702,20 @@ if [ "$AUTH_TEST_SCENARIO" == pi3-failure ];then
   exit 42
 fi
 SH
-  chmod +x "$auth_dir/sudo" "$auth_dir/dd" || die "Could not make the authorization mocks executable."
-  for scenario in fresh cached canceled unavailable early-exit expired-after-start pi3-expired pi3-failure ;do
+  cat > "$auth_dir/diskutil" <<'SH'
+#!/bin/bash
+if [ "$*" != 'unmountDisk force /dev/does-not-exist' ];then
+  printf 'mock diskutil: refusing unexpected arguments: %s\n' "$*" >&2
+  exit 99
+fi
+printf 'unmount\n' >> "$AUTH_TEST_DIR/disk-commands"
+if [ "$AUTH_TEST_SCENARIO" == pi3-unmount-failure ];then
+  printf 'mock diskutil unmount failed\n' >&2
+  exit 43
+fi
+SH
+  chmod +x "$auth_dir/sudo" "$auth_dir/dd" "$auth_dir/diskutil" || die "Could not make the authorization mocks executable."
+  for scenario in fresh cached canceled unavailable early-exit expired-after-start pi3-expired pi3-failure pi3-unmount-failure ;do
     case_dir="$auth_dir/$scenario"
     mkdir -p "$case_dir/worker" || die "Could not create the authorization-test case."
     : > "$case_dir/calls"
@@ -1700,7 +1733,7 @@ SH
         [ "$*" == -d ] || return 1
         printf "%s\n" "$AUTH_TEST_DIR/worker"
       }
-      HOST_OS=Darwin RUN_MODE=gui MACOS_ASKPASS=/tmp/wor-unused-askpass
+      HOST_OS=Darwin RUN_MODE=gui MACOS_ASKPASS=/tmp/wor-unused-askpass WOR_DISKUTIL_BIN="${AUTH_TEST_DIR%/*}/diskutil"
       unset WOR_GUI_SUDO_KEEPALIVE_PID
       WOR_GUI_SUDO_PROMPTED=0 WOR_GUI_PROGRESS_FILE=""
       sudo -v || error "mock authentication was canceled"
@@ -1779,10 +1812,10 @@ SH
         fi ;;
       pi3-expired)
         if [ "$result_status" == 0 ] && [ "$prompts" == 1 ] && grep -qFx patched <<<"$result" \
-          && [ -f "$case_dir/verify-reached" ] && [ "$(wc -l < "$case_dir/disk-commands" | tr -d ' ')" == 1 ];then
-          pass "the Pi3 patch runs once at its signal after cached authorization expires"
+          && [ -f "$case_dir/verify-reached" ] && [ "$(cat "$case_dir/disk-commands")" == $'unmount\ndd' ];then
+          pass "the Pi3 patch unmounts the disk and runs once after cached authorization expires"
         else
-          fail "the Pi3 patch repeated, ran early, or needed fresh authorization: $result"
+          fail "the Pi3 patch skipped unmounting, repeated, ran early, or needed fresh authorization: $result"
         fi ;;
       pi3-failure)
         if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
@@ -1791,6 +1824,14 @@ SH
           pass "a failed Pi3 patch preserves its error and prevents verification"
         else
           fail "a failed Pi3 patch was hidden or prompted for authorization again: $result"
+        fi ;;
+      pi3-unmount-failure)
+        if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
+          && [[ "$result" == *'status 43'* ]] && [[ "$result" == *'mock diskutil unmount failed'* ]] \
+          && [ "$(cat "$case_dir/disk-commands")" == unmount ] && [ ! -e "$case_dir/verify-reached" ];then
+          pass "a failed Pi3 disk unmount prevents the raw patch and preserves its error"
+        else
+          fail "a failed Pi3 disk unmount was hidden or allowed a raw patch: $result"
         fi ;;
     esac
     rm -f "$case_dir/authorized-parent" "$case_dir/calls" "$case_dir/prepare-reached" "$case_dir/verify-reached" \
@@ -1812,7 +1853,7 @@ SH
     && ! grep -qF '|| sudo dd if="$PWD/peinstaller/pi3/gptpatch.img"' "$REPO_DIR/install-wor.sh" \
     && pass "the macOS Pi3 flash path uses the pre-authorized patch worker" \
     || fail "the macOS Pi3 flash still depends on a late sudo timestamp"
-  rm -f "$auth_dir/sudo" "$auth_dir/dd" "$auth_dir/cleanup-log"
+  rm -f "$auth_dir/sudo" "$auth_dir/dd" "$auth_dir/diskutil" "$auth_dir/cleanup-log"
   rmdir "$auth_dir" || die "Could not clean the authorization-test workspace."
 }
 
