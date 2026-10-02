@@ -1868,6 +1868,12 @@ SH
     && ! grep -qF '|| sudo dd if="$PWD/peinstaller/pi3/gptpatch.img"' "$REPO_DIR/install-wor.sh" \
     && pass "the macOS Pi3 flash path uses the pre-authorized patch worker" \
     || fail "the macOS Pi3 flash still depends on a late sudo timestamp"
+  #the engine chdirs into the download directory long before the Pi3 helper is resolved, so a
+  #$PWD-relative path silently points at downloaded assets instead of the shipped source tree
+  grep -qF 'pi3_mbr_helper="$DIRECTORY/src/lib/pi3-hybrid-mbr.py"' "$REPO_DIR/install-wor.sh" \
+    && ! grep -qF '$PWD/src/lib/' "$REPO_DIR/install-wor.sh" \
+    && pass "the Pi3 MBR helper resolves from the script directory, not the working directory" \
+    || fail "the Pi3 MBR helper is resolved relative to \$PWD and will be missing at flash time"
   rm -f "$auth_dir/sudo" "$auth_dir/python3" "$auth_dir/diskutil" "$auth_dir/cleanup-log"
   rmdir "$auth_dir" || die "Could not clean the authorization-test workspace."
 }

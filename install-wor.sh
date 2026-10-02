@@ -1114,7 +1114,9 @@ darwin_flash_device() {
   phase "Partitioning and formatting $DEVICE"
   PART1="${DEVICE}s1"
   PART2="${DEVICE}s2"
-  [ "$RPI_MODEL" != 3 ] || pi3_mbr_helper="$PWD/src/lib/pi3-hybrid-mbr.py"
+  #The helper ships with this script, so resolve it from $DIRECTORY; $PWD is the download
+  #directory by this point and never contains repository sources.
+  [ "$RPI_MODEL" != 3 ] || pi3_mbr_helper="$DIRECTORY/src/lib/pi3-hybrid-mbr.py"
   #Authenticate in this shell before helpers capture their output in subshells; otherwise the
   #GUI prompt state does not survive to the final privileged disk operation.
   sudo -v || error "Administrator authentication failed or was canceled. Enter the macOS password in the WoR-Flasher dialog and try again."
@@ -3682,7 +3684,7 @@ if [ $RPI_MODEL == 3 ];then
   status "Applying Pi3 hybrid-MBR partition-table fix"
   pi3_mbr_device="$DEVICE"
   [ "$(uname -s)" != Darwin ] || pi3_mbr_device="/dev/r${DEVICE#/dev/}"
-  sudo python3 "$PWD/src/lib/pi3-hybrid-mbr.py" "$pi3_mbr_device" \
+  sudo python3 "$DIRECTORY/src/lib/pi3-hybrid-mbr.py" "$pi3_mbr_device" \
     || error "Failed to expose the FAT32 boot partition to the Pi3 first-stage loader on $DEVICE"
 fi
 
