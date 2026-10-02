@@ -364,18 +364,63 @@ installer_showed_own_error() { #Exit 0 if install-wor.sh already displayed its o
   [ -e "$error_marker" ]
 }
 
-gui_save_failure_log() { #Output: where the installer log was kept. The dialog only shows a tail, and the GUI has no terminal to fall back on.
-  local saved_log last_log
-  saved_log="$(wor_log_file)"
-  mkdir -p "$(dirname "$saved_log")" 2>/dev/null
-  mv "$output_log" "$saved_log" 2>/dev/null || saved_log="$output_log"
+gui_update_last_log() { #Input: saved log. Keep the support shortcut current after dialog diagnostics are appended.
+  local last_log
   last_log="$(wor_last_log_file)"
-  if [ "$saved_log" != "$last_log" ];then
-    mkdir -p "$(dirname "$last_log")" 2>/dev/null
-    cp "$saved_log" "$last_log" 2>/dev/null || true
+  if [ "$1" != "$last_log" ];then
+    mkdir -p "$(dirname "$last_log")" && cp "$1" "$last_log" \
+      || warning "Could not refresh $last_log. The full log remains at $1."
   fi
+}
+
+gui_save_installer_log() { #Output: where the installer log was kept, even when a result window cannot open.
+  local saved_log
+  saved_log="$(wor_log_file)"
+  if ! mkdir -p "$(dirname "$saved_log")" || ! mv "$output_log" "$saved_log";then
+    warning "Could not save the installer log to $saved_log. Keeping $output_log instead."
+    saved_log="$output_log"
+  fi
+  gui_update_last_log "$saved_log"
   echo "Installer log saved to $saved_log" 1>&2
   echo "$saved_log"
+}
+
+macos_show_result_dialog() { #Input: message, success image, settings URL, saved log and optional success sound.
+  local message="$1" image="$2" settings_url="$3" saved_log="$4" sound="${5:-}" dialog_status button=OK
+  [ -z "$image" ] || button=Complete
+  if wor_osascript -l JavaScript - "$message" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$image" "$WOR_WINDOW_TITLE" "$sound" "$settings_url" \
+    <<<"$completion_jxa" >/dev/null 2>>"$saved_log";then
+    printf '\nResult dialog closed normally.\n' >> "$saved_log"
+    gui_update_last_log "$saved_log"
+    return 0
+  else
+    dialog_status=$?
+  fi
+  printf '\nCustom result dialog failed (status %s); opening the fallback dialog.\n' "$dialog_status" >> "$saved_log"
+  warning "The custom result window failed to open. Using the fallback dialog. Log: $saved_log"
+  if osascript - "$message" "$WOR_WINDOW_TITLE" "$button" >/dev/null 2>>"$saved_log" <<'APPLESCRIPT'
+on run argv
+  activate
+  if item 3 of argv is "Complete" then
+    display dialog (item 1 of argv) with title (item 2 of argv) buttons {"Complete"} default button "Complete" with icon note
+  else
+    display dialog (item 1 of argv) with title (item 2 of argv) buttons {"OK"} default button "OK" with icon caution
+  end if
+end run
+APPLESCRIPT
+  then
+    printf 'Fallback result dialog closed normally.\n' >> "$saved_log"
+    gui_update_last_log "$saved_log"
+    return 0
+  else
+    dialog_status=$?
+  fi
+  printf 'Fallback result dialog failed (status %s); opening the saved log.\n' "$dialog_status" >> "$saved_log"
+  warning "Neither result dialog could be displayed. Opening the full log: $saved_log"
+  open -t "$saved_log" 2>>"$saved_log" \
+    || { printf 'Could not open the saved log automatically.\n' >> "$saved_log"; warning "Open $saved_log to see the installer result."; }
+  gui_update_last_log "$saved_log"
+  return 1
 }
 
 gui_log_tail() { #Input: log path. Output: the last lines, with terminal escapes and carriage returns removed.
@@ -1862,7 +1907,7 @@ JXA
 }
 
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice privacy_guidance privacy_settings_url progress_file progress_jxa resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning
+  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice privacy_guidance privacy_settings_url progress_file progress_jxa progress_status progress_diagnostics progress_failed resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning
 
   current_windows_ver='Windows 11'
   current_rpi_model=''
@@ -1936,13 +1981,16 @@ macos_start_cli() {
 ObjC.import('AppKit')
 ObjC.import('stdlib')
 const args = $.NSProcessInfo.processInfo.arguments
+function optionalArgument(index, fallback) {
+  return Number(args.count) > index ? ObjC.unwrap(args.objectAtIndex(index)) : fallback
+}
 const message = ObjC.unwrap(args.objectAtIndex(4))
 const iconPath = ObjC.unwrap(args.objectAtIndex(5))
 const appTitle = ObjC.unwrap(args.objectAtIndex(6))
-const imagePath = ObjC.unwrap(args.objectAtIndex(7) || '')
-const windowTitle = ObjC.unwrap(args.objectAtIndex(8) || appTitle)
-const successSound = ObjC.unwrap(args.objectAtIndex(9) || '')
-const settingsUrl = ObjC.unwrap(args.objectAtIndex(10) || '')
+const imagePath = optionalArgument(7, '')
+const windowTitle = optionalArgument(8, appTitle)
+const successSound = optionalArgument(9, '')
+const settingsUrl = optionalArgument(10, '')
 
 $.NSProcessInfo.processInfo.processName = appTitle
 const app = $.NSApplication.sharedApplication
@@ -2473,38 +2521,57 @@ JXA
 
     gui_start_installer
 
-    wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$abort_marker" "$WOR_WINDOW_TITLE" "$disk_alert_status" "$disk_alert_done" <<<"$progress_jxa" >/dev/null 2>&1
+    progress_status=0
+    progress_failed=0
+    progress_diagnostics="$(wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$abort_marker" "$WOR_WINDOW_TITLE" "$disk_alert_status" "$disk_alert_done" <<<"$progress_jxa" 2>&1)" \
+      || progress_status=$?
 
     #Command-Q or a crashed/killed osascript can bypass the JXA abort handler. Never leave the flash unattended.
-    [ -f "$done_marker" ] || touch "$abort_marker"
+    if [ ! -f "$done_marker" ] && [ ! -e "$abort_marker" ];then
+      progress_failed=1
+      touch "$abort_marker"
+    fi
 
     if [ -e "$abort_marker" ];then
-      status "Aborting at your request"
+      if [ "$progress_failed" == 1 ];then
+        status "The progress window closed unexpectedly; stopping the installer"
+      else
+        status "Aborting at your request"
+      fi
       #most of the work runs under sudo, so the tree has to come down with the credential we already hold
       kill_process_tree "$installer_pid"
-      wait "$installer_pid" 2>/dev/null
-      gui_stop_disk_alert_handler
+    fi
+    wait "$installer_pid" 2>/dev/null
+    gui_stop_disk_alert_handler
+    printf '\nProgress window exit status: %s\n' "$progress_status" >> "$output_log"
+    [ -z "$progress_diagnostics" ] || printf '%s\n' "$progress_diagnostics" >> "$output_log"
+
+    if [ -e "$abort_marker" ];then
+      completion_text="Flashing was stopped before it finished."
+      if [ "$progress_failed" == 1 ];then
+        completion_text="The progress window closed unexpectedly. The installer was stopped before it finished."
+      fi
+      printf '%s\nInstaller exit status: 1 (interrupted).\n' "$completion_text" >> "$output_log"
       rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker" "$error_marker"
-      saved_log="$(gui_save_failure_log)"
+      saved_log="$(gui_save_installer_log)"
       wor_show_result_notification failure
-      wor_osascript -l JavaScript - "Flashing was stopped before it finished.
+      macos_show_result_dialog "$completion_text
 
 $DEVICE is now in an unusable state and has to be flashed again before it can boot.
 
-  Full log: $saved_log" "$WOR_ICON_PATH" "$WOR_APP_TITLE" '' "$WOR_WINDOW_TITLE" '' <<<"$completion_jxa" >/dev/null 2>&1
+Full log: $saved_log" '' '' "$saved_log"
       exit 1
     fi
 
-    #the window can disappear while the flash is still going; wait for the real status instead of
-    #assuming failure, which would report a bogus error and leave the flash running unattended
-    wait "$installer_pid" 2>/dev/null
-    gui_stop_disk_alert_handler
-
     installer_status="$(cat "$done_marker" 2>/dev/null)"
-    [ -z "$installer_status" ] && installer_status=1
+    if ! [[ "$installer_status" =~ ^[0-9]+$ ]];then
+      printf 'The installer did not leave a valid exit status; success cannot be confirmed.\n' >> "$output_log"
+      installer_status=1
+    fi
+    printf 'Installer exit status: %s\n' "$installer_status" >> "$output_log"
+    saved_log="$(gui_save_installer_log)"
     password_retry_choice=''
     if [ "$installer_status" != 0 ];then
-      saved_log="$(gui_save_failure_log)"
       if ! installer_showed_own_error;then
         password_retry_choice="$(macos_password_retry_dialog "$saved_log" "$progress_file")" || password_retry_choice=''
       fi
@@ -2514,11 +2581,12 @@ $DEVICE is now in an unusable state and has to be flashed again before it can bo
     privacy_guidance=''
     privacy_settings_url=''
     if [ "$installer_status" == 0 ];then
-      rm -f "$output_log" "$error_marker"
+      rm -f "$error_marker"
       completion_text="Process completed successfully.
 
     It is now safe to remove your USB drive."
       [ -z "$disk_alert_warning" ] || completion_text="$completion_text"$'\n\n'"$disk_alert_warning"
+      completion_text="$completion_text"$'\n\n'"Full log: $saved_log"
     else
       #installer writes the error_marker before showing its own error dialog; if it exists, skip the completion dialog
       if installer_showed_own_error ;then
@@ -2551,7 +2619,7 @@ Full log: $saved_log"
     [ "$installer_status" == 0 ] && completion_image="$WOR_ASSETS_DIR/next-steps.png"
     #posted before the window opens, so it lands while the app is still in the background
     [ "$installer_status" == 0 ] && wor_show_result_notification success || wor_show_result_notification failure
-    wor_osascript -l JavaScript - "$completion_text" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$completion_image" "$WOR_WINDOW_TITLE" "$([ "${PLAY_SOUND:-1}" == 1 ] && wor_completion_sound)" "$privacy_settings_url" <<<"$completion_jxa" >/dev/null 2>&1
+    macos_show_result_dialog "$completion_text" "$completion_image" "$privacy_settings_url" "$saved_log" "$([ "${PLAY_SOUND:-1}" == 1 ] && wor_completion_sound)"
     exit "$installer_status"
   done
 }
@@ -3346,7 +3414,7 @@ if [ "$progress_aborted" == 1 ];then
   kill "$tail_pid" 2>/dev/null
   wait "$tail_pid" 2>/dev/null
   rm -f "$progress_fifo" "$progress_file" "$done_marker" "$auth_marker" "$abort_marker" "$error_marker"
-  saved_log="$(gui_save_failure_log)"
+  saved_log="$(gui_save_installer_log)"
   wor_play_result_sound failure
   wor_show_result_notification failure
   yad "${yadflags[@]}" --text="Flashing was stopped before it finished.\n\n$DEVICE is now in an unusable state and has to be flashed again before it can boot.\n\nFull log: $saved_log"
@@ -3376,7 +3444,7 @@ if [ "$exitcode" == 0 ];then
     --field="It is now safe to remove your USB drive.":LBL '' --button=Close:0 >/dev/null
 else
   #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
-  saved_log="$(gui_save_failure_log)"
+  saved_log="$(gui_save_installer_log)"
   wor_play_result_sound failure
   wor_show_result_notification failure
   if installer_showed_own_error ;then

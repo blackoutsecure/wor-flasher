@@ -88,11 +88,11 @@ static_checks() {
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
   if command -v python3 >/dev/null ;then
-    python3 "$REPO_DIR/tests/test-pi3-hybrid-mbr.py" >/dev/null 2>&1 \
-      && pass "Pi 3 hybrid-MBR helper tests passed" \
-      || fail "Pi 3 hybrid-MBR helper tests failed"
+    python3 "$REPO_DIR/tests/test-pi3-gpt-bootstrap.py" >/dev/null 2>&1 \
+      && pass "Pi 3 GPT bootstrap helper tests passed" \
+      || fail "Pi 3 GPT bootstrap helper tests failed"
   else
-    skip "python3 is unavailable; cannot test the Pi 3 hybrid-MBR helper"
+    skip "python3 is unavailable; cannot test the Pi 3 GPT bootstrap helper"
   fi
   jq empty "$REPO_DIR/src/config/metadata.json" >/dev/null 2>&1 \
     && jq empty "$REPO_DIR/src/config/metadata.schema.json" >/dev/null 2>&1 \
@@ -502,7 +502,7 @@ static_checks() {
     && grep -qF '[ "$confirmation" == Cancel ] && exit 0' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'macos_advanced_options' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'display alert' "$REPO_DIR/install-wor-gui.sh" \
-    && ! grep -qF 'display dialog' "$REPO_DIR/install-wor-gui.sh" \
+    && ! sed '/^macos_show_result_dialog() {/,/^}$/d' "$REPO_DIR/install-wor-gui.sh" | grep -qF 'display dialog' \
     && grep -qF 'All data on the target drive will be erased.' "$REPO_DIR/install-wor-gui.sh" \
     && pass "the macOS wizard collects every choice and confirms before flashing" \
     || fail "a macOS wizard step, the drive refresh, or the flash confirmation is missing"
@@ -564,9 +564,9 @@ disk5 Second drive"
   rm -f "$chooser_called"
 
   grep -qF "name: 'WorCompletionController'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'wor_osascript -l JavaScript - "$completion_text"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'macos_show_result_dialog "$completion_text"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'next-steps.png' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'const imagePath = ObjC.unwrap(args.objectAtIndex(7)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "const imagePath = optionalArgument(7, '')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'exit "$installer_status"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'WOR_GUI_ERROR_MARKER="$error_marker"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).' "$REPO_DIR/install-wor-gui.sh" \
@@ -1145,7 +1145,7 @@ SH
   #a failed flash must leave the log behind; the GUI has no terminal to fall back on
   grep -qF 'saved_log="$(wor_log_file)"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Installer log saved to $saved_log' "$REPO_DIR/install-wor-gui.sh" \
-    && [ "$(grep -cF 'saved_log="$(gui_save_failure_log)"' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
+    && [ "$(grep -cF 'saved_log="$(gui_save_installer_log)"' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
     && pass "a failed run keeps its installer log for diagnosis" \
     || fail "a failed run deletes the only record of what went wrong"
 
@@ -1510,7 +1510,8 @@ SH
   ! printf '%s' "$progress_block" | grep -qF '$.exit(0)' \
     && printf '%s' "$progress_block" | grep -qF 'if (confirmAbort()) app.stopModalWithCode($.NSCancelButton)' \
     && [ "$(grep -c '        \$.exit(0)' "$REPO_DIR/install-wor-gui.sh")" == 4 ] \
-    && grep -qF '[ -f "$done_marker" ] || touch "$abort_marker"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if [ ! -f "$done_marker" ] && [ ! -e "$abort_marker" ];then' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'progress_failed=1' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'wait "$installer_pid" 2>/dev/null' "$REPO_DIR/install-wor-gui.sh" \
     && pass "quitting mid-flash confirms first and any unexpected window exit stops the installer" \
     || fail "quitting mid-flash reports a bogus failure or leaves the installer running"
@@ -1678,7 +1679,7 @@ fi
 printf 'worker\n' >> "$AUTH_TEST_DIR/calls"
 [ "$AUTH_TEST_SCENARIO" != early-exit ] || exit 0
 case "$AUTH_TEST_SCENARIO" in
-  pi3-expired|pi3-failure|pi3-unmount-failure)
+  pi3-expired|pi3-failure|pi3-unmount-failure|pi3-finalize|pi3-finalize-failure)
     [ "$(type -P python3)" == "${AUTH_TEST_DIR%/*}/python3" ] || exit 99
     exec "$@" </dev/null ;;
 esac
@@ -1699,16 +1700,37 @@ exit 124
 SH
   cat > "$auth_dir/python3" <<'SH'
 #!/bin/bash
-  if [ "$#" != 2 ] || [ "$1" != "$AUTH_TEST_DIR/pi3-hybrid-mbr.py" ] \
-    || [ "$2" != /dev/rdoes-not-exist ];then
-    printf 'mock python3: refusing unexpected patch arguments\n' >&2
+if [ "${1:-}" != "$AUTH_TEST_DIR/pi3-gpt-bootstrap.py" ];then
+  printf 'mock python3: refusing unexpected helper\n' >&2
   exit 99
 fi
-  printf 'hybrid-mbr\n' >> "$AUTH_TEST_DIR/disk-commands"
+if [ "$#" == 3 ] && [ "$2" == --check ] && [ "$3" == /dev/rdoes-not-exist ];then
+  printf 'bootstrap-check\n' >> "$AUTH_TEST_DIR/disk-commands"
+  if [ "$AUTH_TEST_SCENARIO" == pi3-finalize-failure ];then
+    printf 'mock GPT bootstrap verification failed\n' >&2
+    exit 44
+  fi
+  exit 0
+fi
+if [ "$#" != 2 ] || [ "$2" != /dev/rdoes-not-exist ];then
+  printf 'mock python3: refusing unexpected patch arguments\n' >&2
+  exit 99
+fi
+printf 'gpt-bootstrap\n' >> "$AUTH_TEST_DIR/disk-commands"
 if [ "$AUTH_TEST_SCENARIO" == pi3-failure ];then
-    printf 'mock hybrid-MBR helper failed\n' >&2
+  printf 'mock GPT bootstrap helper failed\n' >&2
   exit 42
 fi
+SH
+  cat > "$auth_dir/sgdisk" <<'SH'
+#!/bin/bash
+case "$*" in
+  '-t 1:ef00 -c 1:WOR_BOOT -t 2:0700 -c 2:WOR_INSTALL /dev/rdoes-not-exist')
+    printf 'retag\n' >> "$AUTH_TEST_DIR/disk-commands" ;;
+  '-A 1:clear:63 -A 2:clear:63 /dev/rdoes-not-exist')
+    printf 'attributes\n' >> "$AUTH_TEST_DIR/disk-commands" ;;
+  *) printf 'mock sgdisk: refusing unexpected arguments\n' >&2; exit 99 ;;
+esac
 SH
   cat > "$auth_dir/diskutil" <<'SH'
 #!/bin/bash
@@ -1722,13 +1744,13 @@ if [ "$AUTH_TEST_SCENARIO" == pi3-unmount-failure ];then
   exit 43
 fi
 SH
-  chmod +x "$auth_dir/sudo" "$auth_dir/python3" "$auth_dir/diskutil" || die "Could not make the authorization mocks executable."
-  for scenario in fresh cached root-owned canceled unavailable early-exit expired-after-start pi3-expired pi3-failure pi3-unmount-failure ;do
+  chmod +x "$auth_dir/sudo" "$auth_dir/python3" "$auth_dir/diskutil" "$auth_dir/sgdisk" || die "Could not make the authorization mocks executable."
+  for scenario in fresh cached root-owned canceled unavailable early-exit expired-after-start pi3-expired pi3-failure pi3-unmount-failure pi3-finalize pi3-finalize-failure ;do
     case_dir="$auth_dir/$scenario"
     mkdir -p "$case_dir/worker" || die "Could not create the authorization-test case."
     : > "$case_dir/calls"
     : > "$case_dir/disk-commands"
-    cp "$REPO_DIR/src/lib/pi3-hybrid-mbr.py" "$case_dir/pi3-hybrid-mbr.py"
+    cp "$REPO_DIR/src/lib/pi3-hybrid-mbr.py" "$case_dir/pi3-gpt-bootstrap.py"
     result_status=0
     result="$(PATH="$auth_dir:$PATH" AUTH_MOCK_SUDO="$auth_dir/sudo" AUTH_TEST_DIR="$case_dir" AUTH_TEST_SCENARIO="$scenario" run_in_engine '
       error() { printf "%s\n" "$*"; exit 1; }
@@ -1764,20 +1786,24 @@ SH
       [ "$AUTH_TEST_SCENARIO" != unavailable ] || rm -f "$AUTH_TEST_DIR/authorized-parent"
       patch=""
       case "$AUTH_TEST_SCENARIO" in
-        pi3-*) patch="$AUTH_TEST_DIR/pi3-hybrid-mbr.py" ;;
+        pi3-*) patch="$AUTH_TEST_DIR/pi3-gpt-bootstrap.py" ;;
       esac
-      darwin_start_partition_finalizer_or_die /dev/does-not-exist /not-executed/sgdisk "$patch"
+      darwin_start_partition_finalizer_or_die /dev/does-not-exist "${AUTH_TEST_DIR%/*}/sgdisk" "$patch"
       [ -s "$DARWIN_FINALIZE_READY" ] && [ -O "$DARWIN_FINALIZE_DONE" ] \
         || error "Finalizer returned without readiness or a user-owned result file."
       if [ -n "$patch" ];then
-        [ ! -s "$AUTH_TEST_DIR/disk-commands" ] || error "Pi3 hybrid-MBR repair ran before its signal."
+        [ ! -s "$AUTH_TEST_DIR/disk-commands" ] || error "Pi3 GPT bootstrap repair ran before its signal."
         rm -f "$AUTH_TEST_DIR/authorized-parent"
-        darwin_apply_pi3_hybrid_mbr_or_die
-        darwin_apply_pi3_hybrid_mbr_or_die
-        sleep 2
-        kill -TERM "$DARWIN_FINALIZE_PID" || error "Could not stop the mock worker."
-        wait "$DARWIN_FINALIZE_PID"
-        [ "$?" == 143 ] || error "Mock worker did not stop as requested."
+        darwin_apply_pi3_gpt_bootstrap_or_die
+        darwin_apply_pi3_gpt_bootstrap_or_die
+        case "$AUTH_TEST_SCENARIO" in
+          pi3-finalize*) darwin_finalize_partition_types_or_die ;;
+          *)
+            sleep 2
+            kill -TERM "$DARWIN_FINALIZE_PID" || error "Could not stop the mock worker."
+            wait "$DARWIN_FINALIZE_PID"
+            [ "$?" == 143 ] || error "Mock worker did not stop as requested." ;;
+        esac
         : > "$AUTH_TEST_DIR/verify-reached"
         printf "patched\n"
         exit 0
@@ -1827,18 +1853,18 @@ SH
         fi ;;
       pi3-expired)
         if [ "$result_status" == 0 ] && [ "$prompts" == 1 ] && grep -qFx patched <<<"$result" \
-          && [ -f "$case_dir/verify-reached" ] && [ "$(cat "$case_dir/disk-commands")" == $'unmount\nhybrid-mbr' ];then
-          pass "the Pi3 hybrid-MBR repair unmounts the disk and runs once after cached authorization expires"
+          && [ -f "$case_dir/verify-reached" ] && [ "$(cat "$case_dir/disk-commands")" == $'unmount\ngpt-bootstrap' ];then
+          pass "the Pi3 GPT bootstrap repair unmounts the disk and runs once after cached authorization expires"
         else
-          fail "the Pi3 hybrid-MBR repair skipped unmounting, repeated, ran early, or needed fresh authorization: $result"
+          fail "the Pi3 GPT bootstrap repair skipped unmounting, repeated, ran early, or needed fresh authorization: $result"
         fi ;;
       pi3-failure)
         if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
-          && [[ "$result" == *'status 42'* ]] && [[ "$result" == *'mock hybrid-MBR helper failed'* ]] \
+          && [[ "$result" == *'status 42'* ]] && [[ "$result" == *'mock GPT bootstrap helper failed'* ]] \
           && [ ! -e "$case_dir/verify-reached" ];then
-          pass "a failed Pi3 hybrid-MBR repair preserves its error and prevents verification"
+          pass "a failed Pi3 GPT bootstrap repair preserves its error and prevents verification"
         else
-          fail "a failed Pi3 hybrid-MBR repair was hidden or prompted for authorization again: $result"
+          fail "a failed Pi3 GPT bootstrap repair was hidden or prompted for authorization again: $result"
         fi ;;
       pi3-unmount-failure)
         if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] \
@@ -1848,9 +1874,23 @@ SH
         else
           fail "a failed Pi3 disk unmount was hidden or allowed a raw patch: $result"
         fi ;;
+      pi3-finalize)
+        if [ "$result_status" == 0 ] && [ "$prompts" == 1 ] && [ -f "$case_dir/verify-reached" ] \
+          && [ "$(cat "$case_dir/disk-commands")" == $'unmount\ngpt-bootstrap\nunmount\nretag\nattributes\nbootstrap-check' ];then
+          pass "the Pi3 bootstrap is checked read-only after both final partition updates"
+        else
+          fail "the Pi3 final bootstrap check was skipped, reordered, or requested new authorization: $result"
+        fi ;;
+      pi3-finalize-failure)
+        if [ "$result_status" == 1 ] && [ "$prompts" == 1 ] && [ ! -e "$case_dir/verify-reached" ] \
+          && [[ "$result" == *'status 44'* ]] && [[ "$result" == *'mock GPT bootstrap verification failed'* ]];then
+          pass "a failed final Pi3 bootstrap check prevents a successful flash result"
+        else
+          fail "a final Pi3 bootstrap failure was hidden or requested new authorization: $result"
+        fi ;;
     esac
     rm -f "$case_dir/authorized-parent" "$case_dir/calls" "$case_dir/prepare-reached" "$case_dir/verify-reached" \
-      "$case_dir/pi3-hybrid-mbr.py" "$case_dir/disk-commands" "$case_dir/worker/go" "$case_dir/worker/done" \
+      "$case_dir/pi3-gpt-bootstrap.py" "$case_dir/disk-commands" "$case_dir/worker/go" "$case_dir/worker/done" \
       "$case_dir/worker/log" "$case_dir/worker/ready" "$case_dir/worker/patch-go" "$case_dir/worker/patch-done"
     rmdir "$case_dir/worker" "$case_dir" || die "Could not clean the authorization-test case."
   done
@@ -1864,17 +1904,17 @@ SH
   [ "$cleanup_result" == 'user detach: detach /dev/mock-iso' ] \
     && pass "macOS detaches user-mounted ISO images without elevation" \
     || fail "macOS ISO cleanup requested fresh authorization: $cleanup_result"
-  grep -qF '[ "$RPI_MODEL" != 3 ] || darwin_apply_pi3_hybrid_mbr_or_die' "$REPO_DIR/install-wor.sh" \
+  grep -qF '[ "$RPI_MODEL" != 3 ] || darwin_apply_pi3_gpt_bootstrap_or_die' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF '|| sudo dd if="$PWD/peinstaller/pi3/gptpatch.img"' "$REPO_DIR/install-wor.sh" \
     && pass "the macOS Pi3 flash path uses the pre-authorized patch worker" \
     || fail "the macOS Pi3 flash still depends on a late sudo timestamp"
   #the engine chdirs into the download directory long before the Pi3 helper is resolved, so a
   #$PWD-relative path silently points at downloaded assets instead of the shipped source tree
-  grep -qF 'pi3_mbr_helper="$DIRECTORY/src/lib/pi3-hybrid-mbr.py"' "$REPO_DIR/install-wor.sh" \
+  grep -qF 'pi3_bootstrap_helper="$DIRECTORY/src/lib/pi3-hybrid-mbr.py"' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF '$PWD/src/lib/' "$REPO_DIR/install-wor.sh" \
-    && pass "the Pi3 MBR helper resolves from the script directory, not the working directory" \
-    || fail "the Pi3 MBR helper is resolved relative to \$PWD and will be missing at flash time"
-  rm -f "$auth_dir/sudo" "$auth_dir/python3" "$auth_dir/diskutil" "$auth_dir/cleanup-log"
+    && pass "the Pi3 GPT bootstrap helper resolves from the script directory, not the working directory" \
+    || fail "the Pi3 GPT bootstrap helper is resolved relative to \$PWD and will be missing at flash time"
+  rm -f "$auth_dir/sudo" "$auth_dir/python3" "$auth_dir/diskutil" "$auth_dir/sgdisk" "$auth_dir/cleanup-log"
   rmdir "$auth_dir" || die "Could not clean the authorization-test workspace."
 }
 
@@ -2330,7 +2370,8 @@ rc=1" ] \
     && [[ "$(run_in_engine 'DL_DIR=/tmp/moved-later; wor_log_file')" == /tmp/moved-later/logs/wor-flasher-*.log ]] \
     && grep -qF 'WOR_RUN_ID' "$REPO_DIR/install-wor.sh" \
     && [ "$(run_in_engine 'WOR_RUN_ID=shared-log-id; settings_summary | sed -n "s/^Log file\t//p"')" == '/tmp/wor-test-dl/logs/wor-flasher-shared-log-id.log' ] \
-    && grep -qF 'cp "$saved_log" "$last_log"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'gui_update_last_log "$saved_log"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'cp "$1" "$last_log"' "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(grep -cF 'last-run.log' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
     && pass "one variable decides where the timestamped run log goes, with last-run kept for support" \
     || fail "the log path is hardcoded, does not follow DL_DIR/WOR_LOG_FILE, or loses last-run"

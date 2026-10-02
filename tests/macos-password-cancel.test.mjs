@@ -137,7 +137,7 @@ describe("Canceled macOS administrator password", () => {
 
   it("classifies the saved log before deleting progress and preserves retry resume", () => {
     const status = gui.indexOf('installer_status="$(cat "$done_marker"');
-    const save = gui.indexOf('saved_log="$(gui_save_failure_log)"', status);
+    const save = gui.indexOf('saved_log="$(gui_save_installer_log)"', status);
     const retry = gui.indexOf('macos_password_retry_dialog "$saved_log" "$progress_file"', save);
     const cleanup = gui.indexOf('rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker"', retry);
     assert.ok(status >= 0 && status < save && save < retry && retry < cleanup);

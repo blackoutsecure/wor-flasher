@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const gui = readFileSync(join(root, "install-wor-gui.sh"), "utf8");
-const functions = ["gui_start_installer", "gui_save_failure_log", "macos_password_retry_dialog"].map((name) => {
+const functions = ["gui_start_installer", "gui_update_last_log", "gui_save_installer_log", "macos_password_retry_dialog"].map((name) => {
   const match = gui.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m"));
   assert.ok(match, `Missing ${name}`);
   return match[0];
@@ -114,7 +114,7 @@ darwin_flash_device
           wait "$installer_pid"
           first_status="$(cat "$done_marker")"
           cp "$progress_file" "$WOR_TEST_DIR/first-progress"
-          saved_log="$(gui_save_failure_log)"
+          saved_log="$(gui_save_installer_log)"
           cp "$saved_log" "$WOR_TEST_DIR/first-log"
           choice="$(macos_password_retry_dialog "$saved_log" "$progress_file")"
           [ "$choice" == retry ] || exit 97
