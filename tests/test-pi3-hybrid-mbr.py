@@ -56,6 +56,11 @@ def unpack_entry(sector: bytes, slot: int) -> tuple[int, int, int]:
     return entry[4], *struct.unpack_from("<II", entry, 8)
 
 
+def unpack_chs_end(sector: bytes, slot: int) -> bytes:
+    offset = MBR_ENTRY_OFFSET + (slot * 16)
+    return sector[offset + 5 : offset + 8]
+
+
 class Pi3HybridMbrTests(unittest.TestCase):
     def test_writes_pi_boot_entry_before_bounded_protective_entry(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -74,6 +79,21 @@ class Pi3HybridMbrTests(unittest.TestCase):
             self.assertEqual(sector[MBR_ENTRY_OFFSET + 32 : MBR_ENTRY_OFFSET + 64], b"\0" * 32)
             self.assertEqual(sector[510:512], b"\x55\xaa")
             self.assertEqual(gpt_header[:8], b"EFI PART")
+
+    def test_caps_chs_fields_when_the_partition_end_exceeds_the_chs_ceiling(self) -> None:
+        #CHS can only address 1024*255*63 = 16450560 sectors, so anything past that must be
+        #pinned to the maximum triplet while the 32-bit LBA fields stay exact.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image = Path(temp_dir) / "disk.img"
+            create_gpt_image(image, start_lba=2048, sector_count=16_500_000)
+
+            subprocess.run([sys.executable, str(HELPER_PATH), str(image)], check=True)
+
+            with image.open("rb") as handle:
+                sector = handle.read(SECTOR_SIZE)
+
+            self.assertEqual(unpack_entry(sector, 0), (0x0C, 2048, 16_500_000))
+            self.assertEqual(unpack_chs_end(sector, 0), b"\xfe\xff\xff")
 
     def test_rejects_non_gpt_target_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
