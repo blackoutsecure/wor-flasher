@@ -193,7 +193,7 @@ describe("macOS startup Accessibility preflight", () => {
     const branch = guiSource.match(/^if is_macos ;then\n  command -v osascript[\s\S]*?^fi$/m);
     assert.ok(branch);
     const preflight = branch[0].indexOf("macos_check_accessibility || exit 0");
-    const setup = branch[0].indexOf("setup || exit 1");
+    const setup = branch[0].indexOf("setup gui || exit 1");
     const announcement = branch[0].indexOf("macos_show_announcement");
     const wizard = branch[0].indexOf("macos_start_cli");
     assert.ok(preflight >= 0 && preflight < setup && setup < announcement && announcement < wizard);
@@ -373,11 +373,12 @@ describe("macOS unreadable-disk alert policy", () => {
 
   it("receives authorization only after authentication and finalizer readiness", () => {
     const engine = readFileSync(join(root, "install-wor.sh"), "utf8");
-    const authenticate = engine.indexOf('sudo -v || error "Administrator authentication failed or was canceled. Enter the macOS password');
+    const flash = engine.indexOf("darwin_flash_device() {");
+    const authenticate = engine.indexOf("  authenticate_flash", flash);
     const finalizer = engine.indexOf('darwin_start_partition_finalizer_or_die "$DEVICE"', authenticate);
     const begin = engine.indexOf('emit_gui_progress "DISK_WRITE"', finalizer);
     const prepare = engine.indexOf('darwin_prepare_disk_or_die "$DEVICE"', begin);
-    assert.ok(authenticate >= 0 && authenticate < finalizer && finalizer < begin && begin < prepare);
+    assert.ok(flash >= 0 && flash < authenticate && authenticate < finalizer && finalizer < begin && begin < prepare);
     assert.match(engine.slice(prepare), /emit_gui_progress "DISK_WRITE"\$'\\t'"0"/);
   });
 });

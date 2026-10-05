@@ -11,7 +11,39 @@
 #Ordering stays with each front-end: yad parses its results positionally, so its field order is load-bearing.
 
 wor_rpi_board_options() { #Output: separate board labels shared by the macOS and Linux target pickers.
+	if [ "${1:-desktop}" == iot-core ];then
+		printf '%s\n' 'Raspberry Pi 3 Model B' 'Raspberry Pi 2 v1.2' 'Raspberry Pi 2 v1.1'
+		return
+	fi
 	printf '%s\n' 'Raspberry Pi 5' 'Raspberry Pi 4 / Pi 400' 'Raspberry Pi 3' 'Raspberry Pi 2 v1.2'
+}
+
+wor_iot_option_label() { #Input: IoT option key. Labels shared by both Advanced Options forms.
+	case "$1" in
+		official) printf 'Official Microsoft Image' ;;
+		recommended) printf 'Recommended' ;;
+		local) printf 'Custom Image' ;;
+		source) printf 'Image source' ;;
+		file) printf 'Custom Image file' ;;
+		cache) printf 'Download folder' ;;
+		dryrun) printf 'Inspect only; do not write the drive' ;;
+		playSound) printf 'Play a completion sound' ;;
+		sound) printf 'Completion sound' ;;
+		notification) printf 'Show a completion notification' ;;
+		hdmi) printf 'HDMI display' ;;
+		editHdmi) printf 'View / Edit config.txt (video only)' ;;
+		hdmiHelp) printf 'Boot config.txt video settings only. Required IoT boot settings stay protected; Windows may select its own display mode.' ;;
+		hdmiEditorHelp) printf 'These HDMI key=value lines are merged into the existing IoT boot config.txt. Required Windows boot, memory and framebuffer settings are preserved. Use hdmi_group and hdmi_mode; optional: hdmi_force_hotplug and hdmi_drive. Save Advanced Options to apply them to newly flashed media.' ;;
+		accountSetup) printf 'Change IoT administrator after first boot' ;;
+		accountUsername) printf 'IoT administrator username' ;;
+		accountPassword) printf 'New IoT password' ;;
+		accountHelp) printf 'Optional post-boot SSH step; not desktop unattended setup. Boot the Pi, confirm its SSH identity and enter its current password. Account changes stay Pending until the new login is verified.' ;;
+		languageSetup) printf 'Apply IoT language after first boot' ;;
+		language) printf 'IoT language' ;;
+		languageHelp) printf 'Defaults to the host language, like desktop Windows. The selected language must already be installed in IoT Core; it is applied under DefaultAccount and remains Pending until verified.' ;;
+		verification) printf 'Download/import and full image verification begin after Flash. Package and FFU integrity, board compatibility and written-image read-back are required; these checks cannot be disabled.' ;;
+		*) warning "Unknown IoT option label: $1"; return 1 ;;
+	esac
 }
 
 #Output: key<TAB>label<TAB>caution<TAB>recommended for every Advanced Options toggle.
@@ -205,6 +237,33 @@ function worAnnotateCheckbox(checkbox, label, note, color) {
   checkbox.attributedTitle = title
 }
 
+function worEditText(value, title, message, iconPath, defaults) {
+  const editorScroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(0, 0, 560, 320))
+  editorScroll.borderType = $.NSBezelBorder
+  editorScroll.hasVerticalScroller = true
+  const editor = $.NSTextView.alloc.initWithFrame(editorScroll.bounds)
+  editor.font = $.NSFont.userFixedPitchFontOfSize(12)
+  editor.string = $(value)
+  editor.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
+  editorScroll.documentView = editor
+  const dialog = $.NSAlert.alloc.init
+  dialog.messageText = $(title)
+  dialog.informativeText = $(message)
+  dialog.alertStyle = $.NSAlertStyleInformational
+  const icon = $.NSImage.alloc.initWithContentsOfFile($(iconPath))
+  if (!icon.isNil()) dialog.icon = icon
+  dialog.accessoryView = editorScroll
+  dialog.addButtonWithTitle('Save')
+  dialog.addButtonWithTitle('Cancel')
+  if (typeof defaults === 'string') dialog.addButtonWithTitle('Reset to 720p defaults')
+  while (true) {
+    const response = dialog.runModal
+    if (response === $.NSAlertFirstButtonReturn) return { saved: true, text: ObjC.unwrap(editor.string) }
+    if (response !== $.NSAlertThirdButtonReturn || typeof defaults !== 'string') return { saved: false, text: value }
+    editor.string = $(defaults)
+  }
+}
+
 //the Dock Quit item sends an aevt/quit Apple Event that a modal session would otherwise never see,
 //and a modal session starves the default run loop, so events have to be pumped by hand
 function worInstallWindowHandlers(controller) {
@@ -307,7 +366,9 @@ wor_show_result_notification() { #Input: success or failure, optional Windows fa
 	#desktop with no notification daemon never turns a finished flash into a failed run
 	[ "${SHOW_NOTIFICATION:-1}" == 1 ] || return 0
 	local title="${WOR_APP_TITLE:-WoR-Flasher}" body windows_name="${2:-Windows}"
-	if [ "$1" == success ];then
+	if [ "$1" == success ] && [ "${WOR_IMAGE_FAMILY:-desktop}" == iot-core ] && [ "${DRY_RUN:-0}" == 1 ];then
+		body="Verified the Windows 10 IoT Core image. No drive was written; hardware boot has not been assessed."
+	elif [ "$1" == success ];then
 		body="Finished preparing $windows_name media on ${DEVICE:-the drive}. It is ready to boot on your Raspberry Pi."
 	else
 		body="Preparing $windows_name media stopped before it finished. Open ${title} for details."

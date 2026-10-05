@@ -10,6 +10,7 @@ import vm from "node:vm";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const gui = readFileSync(join(root, "install-wor-gui.sh"), "utf8");
 const engine = readFileSync(join(root, "install-wor.sh"), "utf8");
+const iotHelpers = readFileSync(join(root, "src/lib/iot-core.sh"), "utf8");
 const engineHelpers = ["select_rpi_board", "get_os_name", "windows_version_label"].map((name) => {
   const match = engine.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m"));
   assert.ok(match, `Missing shared ${name} helper`);
@@ -18,6 +19,7 @@ const engineHelpers = ["select_rpi_board", "get_os_name", "windows_version_label
 const helpers = [
   "gui_start_installer", "installer_showed_own_error", "gui_update_last_log",
   "gui_save_installer_log", "gui_log_tail", "macos_password_retry_dialog", "macos_show_result_dialog",
+  "gui_iot_validate_target",
 ].map((name) => {
   const match = gui.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m"));
   assert.ok(match, `Missing ${name}`);
@@ -30,11 +32,11 @@ const flow = gui.slice(start, end);
 const completion = gui.match(/^  completion_jxa="\$\(wor_jxa_window_lib; cat <<'JXA'\n([\s\S]*?)\nJXA$/m);
 assert.ok(completion, "Missing completion JXA");
 
-function runFlow({ installerStatus = 0, dialogStatus = 0, fallbackStatus = 0, abort = false, progressStatus = 0, ownError = false } = {}) {
+function runFlow({ installerStatus = 0, dialogStatus = 0, fallbackStatus = 0, abort = false, progressStatus = 0, ownError = false, iot = false } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "wor-completion-"));
   try {
     for (const path of ["bin", "tmp", "logs"]) mkdirSync(join(directory, path));
-    writeFileSync(join(directory, "functions.sh"), `${helpers}\n${engineHelpers}\n${flow}\n`);
+    writeFileSync(join(directory, "functions.sh"), `${helpers}\n${iotHelpers}\n${engineHelpers}\n${flow}\n`);
     writeFileSync(join(directory, "bin/mktemp"), `#!/bin/bash
 if [ "$#" == 0 ];then
   exec /usr/bin/mktemp "$TEST_DIRECTORY/tmp/tmp.XXXXXX"
@@ -55,8 +57,9 @@ exit "$TEST_INSTALLER_STATUS"
     const result = spawnSync("bash", ["-c", `
       source "$TEST_DIRECTORY/functions.sh"
       cli_script="$TEST_DIRECTORY/installer.sh"
-      WOR_ICON_PATH=mock-icon WOR_APP_TITLE=WoR-Flasher WOR_WINDOW_TITLE="WoR-Flasher test"
+      WOR_ICON_PATH=mock-icon WOR_LOGO_PATH=mock-logo WOR_APP_TITLE=WoR-Flasher WOR_WINDOW_TITLE="WoR-Flasher test"
       WOR_ASSETS_DIR="$TEST_DIRECTORY/assets" WIN_LANG=en-us GUI_PROGRESS_EARLY=1 PLAY_SOUND=0 WIN11_MIN_BUILD=22000
+      IOT_CORE_LANGUAGE_SETUP=0
       is_macos() { return 0; }
       error() { printf "error: %s\\n" "$*" >&2; exit 1; }
       warning() { printf "warning: %s\\n" "$*" >&2; }
@@ -69,7 +72,11 @@ exit "$TEST_INSTALLER_STATUS"
       wor_jxa_window_lib() { :; }
       wor_show_result_notification() { printf '%s\\n' "$1" >> "$TEST_DIRECTORY/notifications"; }
       kill_process_tree() { printf '%s\\n' "$1" > "$TEST_DIRECTORY/stopped"; }
-      macos_choose_target() { printf 'Windows 10\\tRaspberry Pi 3\\n'; }
+      macos_choose_target() {
+        if [ "$TEST_IOT" == 1 ];then printf 'Windows 10 IoT Core (ARM32, legacy)\\tRaspberry Pi 3 Model B\\n';else printf 'Windows 10\\tRaspberry Pi 3\\n';fi
+      }
+      gui_iot_plan_source() { :; }
+      iot_core_validate_device() { :; }
       list_bids() { :; }
       get_bid() { printf '19045.3803\\n'; }
       set_default_config_txt() { :; }
@@ -120,7 +127,7 @@ exit "$TEST_INSTALLER_STATUS"
         ...process.env, TEST_DIRECTORY: directory, TEST_INSTALLER_STATUS: String(installerStatus),
         TEST_DIALOG_STATUS: String(dialogStatus), TEST_FALLBACK_STATUS: String(fallbackStatus),
         TEST_ABORT: abort ? "1" : "0", TEST_PROGRESS_STATUS: String(progressStatus),
-        TEST_OWN_ERROR: ownError ? "1" : "0", PATH: `${directory}/bin:${process.env.PATH}`,
+        TEST_OWN_ERROR: ownError ? "1" : "0", TEST_IOT: iot ? "1" : "0", PATH: `${directory}/bin:${process.env.PATH}`,
       },
     });
     const read = (name) => existsSync(join(directory, name)) ? readFileSync(join(directory, name), "utf8") : "";
@@ -137,6 +144,16 @@ exit "$TEST_INSTALLER_STATUS"
 }
 
 describe("macOS progress-to-result handoff", () => {
+  it("uses the same success dialog, log and notification for IoT with accurate image-specific next steps", () => {
+    const result = runFlow({ iot: true });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.dialog[3], /Process completed successfully/);
+    assert.match(result.dialog[3], /IoT Core default app, not Windows desktop setup/);
+    assert.equal(result.dialog[6], "mock-logo");
+    assert.match(result.dialog[3], /Full log:/);
+    assert.equal(result.notifications, "success\n");
+    assert.match(result.log, /Installer exit status: 0/);
+  });
   it("keeps a successful run log and passes every completion argument", () => {
     const result = runFlow();
     assert.equal(result.status, 0, result.stderr);

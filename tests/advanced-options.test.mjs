@@ -29,6 +29,7 @@ const firmwareStart = engine.indexOf('phase "Preparing Pi${RPI_MODEL} UEFI firmw
 const firmwareEnd = engine.indexOf("{ #Download Windows ESD", firmwareStart);
 assert.ok(firmwareStart >= 0 && firmwareEnd > firmwareStart);
 const firmware = engine.slice(firmwareStart, firmwareEnd);
+const sharedNative = readFileSync(join(root, "src/lib/gui.sh"), "utf8");
 
 const fixtureSetup = `
 source "$TEST_ROOT/install-wor.sh" source >/dev/null || exit 90
@@ -178,6 +179,47 @@ function renderedMacCheckboxes(spec, setupTitle) {
 
 describe("Advanced Options Windows/model/mode matrix", () => {
   for (const version of [10, 11]) {
+    it(`keeps Linux Windows ${version} completion notifications available without a sound catalog`, () => {
+      const result = run(`wor_sound_options() { :; }\n${linuxProbe}\nprintf '%s\\n' "$SHOW_NOTIFICATION"`, { version, edit: true });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /0\n$/);
+      assert.ok(result.args.includes("--field=Show a completion notification:CHK"));
+      assert.ok(!result.args.includes("--field=Completion sound:CB"));
+    });
+
+    it(`saves native Windows ${version} completion notifications without a sound catalog`, () => {
+      const result = run(`wor_sound_options() { :; }\n${macosProbe}\nprintf '%s\\n' "$SHOW_NOTIFICATION"`, { version, edit: true });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /0\n$/);
+      assert.equal(result.args[19], "");
+    });
+  }
+
+  it("keeps the native notification checkbox independent of unavailable sound options", () => {
+    const start = jxa[1].indexOf("addSectionHeader('Notifications')");
+    const end = jxa[1].indexOf("addSectionHeader('Windows account')", start);
+    const created = [];
+    const context = vm.createContext({
+      soundOptions: [], width: 640, y: 200, rowHeight: 26, showNotificationDefault: "0",
+      notificationCheckbox: null, addSectionHeader() {}, content: { addSubview(value) { created.push(value); } },
+      $: {
+        NSButton: { checkboxWithTitleTargetAction: (label) => ({ label }) },
+        NSMakeRect: () => ({}), NSViewWidthSizable: 1, NSViewMinYMargin: 2,
+      },
+    });
+    vm.runInContext(jxa[1].slice(start, end), context);
+    assert.equal(created.length, 1);
+    assert.equal(created[0].label, "Show a completion notification");
+    assert.equal(created[0].state, 0);
+    const serializedNotification = jxa[1].match(/^out.push\(notificationCheckbox\.state[^\n]*/m);
+    assert.ok(serializedNotification);
+    vm.runInContext(`const out=[]; notificationCheckbox.state=1; ${serializedNotification[0]};
+      notificationCheckbox.state=0; ${serializedNotification[0]}`, context);
+    assert.equal(vm.runInContext("out[0]", context), "1");
+    assert.equal(vm.runInContext("out[1]", context), "0");
+  });
+
+  for (const version of [10, 11]) {
     for (const model of [3, 4, 5]) {
       for (const mode of [0, 1]) {
         it(`shows applicable options for Windows ${version}, Pi ${model}, mode ${mode}`, () => {
@@ -219,6 +261,43 @@ describe("Advanced Options Windows/model/mode matrix", () => {
         });
       }
     }
+  }
+});
+
+describe("Shared native configuration editor", () => {
+  const start = sharedNative.indexOf("function worEditText(");
+  const end = sharedNative.indexOf("\n//the Dock Quit", start);
+  assert.ok(start >= 0 && end > start);
+  for (const action of ["save", "cancel", "reset"]) {
+    it(`supports ${action} without changing desktop configuration editor behavior`, () => {
+      const buttons = [], editor = {};
+      const responses = action === "reset" ? [1002, 1000] : [action === "save" ? 1000 : 1001];
+      const dialog = {
+        addButtonWithTitle(title) { buttons.push(title); },
+        get runModal() {
+          const response = responses.shift();
+          if (action === "save") editor.string = "edited settings";
+          return response;
+        },
+      };
+      const dollar = Object.assign((value) => value, {
+        NSMakeRect: () => ({}), NSBezelBorder: 1,
+        NSScrollView: { alloc: { initWithFrame: () => ({ bounds: {} }) } },
+        NSTextView: { alloc: { initWithFrame: () => editor } },
+        NSFont: { userFixedPitchFontOfSize: () => ({}) },
+        NSViewWidthSizable: 1, NSViewHeightSizable: 2,
+        NSAlert: { alloc: { init: dialog } }, NSAlertStyleInformational: 1,
+        NSImage: { alloc: { initWithContentsOfFile: () => ({ isNil: () => true }) } },
+        NSAlertFirstButtonReturn: 1000, NSAlertThirdButtonReturn: 1002,
+      });
+      const context = vm.createContext({ $: dollar, ObjC: { unwrap: (value) => value } });
+      vm.runInContext(sharedNative.slice(start, end), context);
+      const result = vm.runInContext(`worEditText("original settings", "Edit", "Message", "", ${action === "reset" ? '"720p defaults"' : "undefined"})`, context);
+      assert.equal(result.saved, action !== "cancel");
+      assert.equal(result.text, action === "reset" ? "720p defaults" : action === "save" ? "edited settings" : "original settings");
+      assert.deepEqual(buttons, action === "reset" ? ["Save", "Cancel", "Reset to 720p defaults"] : ["Save", "Cancel"]);
+      assert.match(jxa[1], /const result = worEditText\(configTxtValue/);
+    });
   }
 });
 

@@ -439,10 +439,13 @@ macos_password_retry_dialog() { #Input: saved log and progress file. Output: ret
   #Any write marker rules out a no-changes claim, even if a later marker says writing stopped.
   awk -F '\t' '
     $1 == "DISK_WRITE" && $2 == "1" { written = 1 }
-    $1 == "STEP" { step = $2; total = $3; label = $4 }
+    $1 == "STEP" { step = $2; total = $3; label = $4; awaiting_password = 0 }
+    $1 == "TASK" { awaiting_password = ($2 == "0" && $3 == "Waiting for administrator access...") }
     END {
-      exit written || label !~ /^Partitioning and formatting / ||
-        !((total == 8 && step == 5) || (total == 7 && step == 4))
+      valid_step = step ~ /^[1-9][0-9]*$/ && total ~ /^[1-9][0-9]*$/ && step <= total && label != ""
+      partition_auth = label ~ /^Partitioning and formatting / &&
+        ((total == 8 && step == 5) || (total == 7 && step == 4))
+      exit written || !valid_step || !(awaiting_password || partition_auth)
     }
   ' "$progress_path" || return 1
   if ! grep -qF 'Administrator authentication failed or was canceled.' "$saved_log" \
@@ -451,7 +454,7 @@ macos_password_retry_dialog() { #Input: saved log and progress file. Output: ret
   fi
   if grep -qF '(-128)' "$saved_log";then
     password_retry_reason='Administrator password entry was canceled.'
-  elif grep -qF 'incorrect password attempts' "$saved_log" \
+  elif grep -qF 'incorrect password attempt' "$saved_log" \
     || grep -qF 'Administrator password was not accepted.' "$saved_log";then
     password_retry_reason='The administrator password was not accepted.'
   elif grep -qF 'no password was provided' "$saved_log";then
@@ -463,7 +466,7 @@ macos_password_retry_dialog() { #Input: saved log and progress file. Output: ret
 
 Flashing has not started. No changes have been made to $DEVICE.
 
-Your prepared downloads have been kept. Try Again returns to the administrator password step.
+Your prepared downloads have been kept. Try Again rechecks the prepared image and returns to the administrator password step.
 
 Log: $saved_log" retry Close '' '' '' 'Try Again' "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE | Administrator access")" || choice=close
   case "$choice" in
@@ -1117,6 +1120,9 @@ target.frame = $.NSMakeRect(24, height - 80, width - 48, 20)
 content.addSubview(target)
 
 const warning = $.NSTextField.labelWithString('All data on the target drive will be erased.')
+if (rows.some(function (row) { return row.label === 'Dry run' && row.value.indexOf('Yes') === 0 })) {
+  warning.stringValue = 'Inspection only. No target drive will be modified.'
+}
 warning.font = $.NSFont.systemFontOfSizeWeight(13, $.NSFontWeightSemibold)
 warning.textColor = $.NSColor.systemRedColor
 warning.frame = $.NSMakeRect(24, height - 114, width - 48, 22)
@@ -1147,7 +1153,7 @@ for (let i = 0; i < rows.length; i++) {
 documentView.scrollPoint($.NSMakePoint(0, Math.max(0, documentHeight - Number(scrollView.contentSize.height))))
 scrollView.reflectScrolledClipView(scrollView.contentView)
 
-const guidance = $.NSTextField.labelWithString('Flash begins immediately after administrator approval. Use Advanced to change these settings.')
+const guidance = $.NSTextField.labelWithString('Flash starts image preparation. Disk writing follows verification and administrator approval.')
 guidance.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightRegular)
 guidance.textColor = $.NSColor.secondaryLabelColor
 guidance.frame = $.NSMakeRect(24, 58, width - 48, 18)
@@ -1269,6 +1275,10 @@ restore_advanced_preferences() {
 }
 
 macos_advanced_options() { #Collects customization and explicit release versions without changing them on Back.
+  if is_iot_core;then
+    macos_iot_options
+    return
+  fi
   local advanced_jxa checkbox_spec result status line i uefi_pinned oobe_applicable pi4_applicable drivers_applicable windows_family config_scope lang_spec locale_spec l_code l_name sel_win_lang sound_spec sel_sound LC_ALL
   local uefi_versions driver_versions='' uefi_version_warning driver_version_warning='' selected_uefi selected_driver
   local uefi_dropdown_default driver_dropdown_default="$DRIVER_VER" uefi_version_labels driver_version_labels=''
@@ -1424,27 +1434,8 @@ function updateConfigEditableState() {
 }
 
 function editConfigTxt() {
-  const editorScroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(0, 0, 560, 320))
-  editorScroll.borderType = $.NSBezelBorder
-  editorScroll.hasVerticalScroller = true
-  const editor = $.NSTextView.alloc.initWithFrame(editorScroll.bounds)
-  editor.font = $.NSFont.userFixedPitchFontOfSize(12)
-  editor.string = $(configTxtValue)
-  editor.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
-  editorScroll.documentView = editor
-
-  const dialog = $.NSAlert.alloc.init
-  dialog.messageText = $('View / Edit config.txt')
-  dialog.informativeText = $('These settings control Raspberry Pi firmware and boot behavior.')
-  dialog.alertStyle = $.NSAlertStyleInformational
-  const dialogIcon = $.NSImage.alloc.initWithContentsOfFile($(iconPath))
-  if (!dialogIcon.isNil()) dialog.icon = dialogIcon
-  dialog.accessoryView = editorScroll
-  dialog.addButtonWithTitle('Save')
-  dialog.addButtonWithTitle('Cancel')
-  if (dialog.runModal == $.NSAlertFirstButtonReturn) {
-    configTxtValue = ObjC.unwrap(editor.string)
-  }
+  const result = worEditText(configTxtValue, 'View / Edit config.txt', 'These settings control Raspberry Pi firmware and boot behavior.', iconPath)
+  if (result.saved) configTxtValue = result.text
 }
 
 function updateAccountEditableState() {
@@ -1710,8 +1701,8 @@ if (langOptions.length > 0) {
   y -= rowHeight + 8
 }
 
+addSectionHeader('Notifications')
 if (soundOptions.length > 0) {
-  addSectionHeader('Notifications')
   playSoundCheckbox = $.NSButton.checkboxWithTitleTargetAction('Play a sound when the flash finishes', controller, 'playSoundToggled:')
   playSoundCheckbox.frame = $.NSMakeRect(20, y, width - 40, 20)
   playSoundCheckbox.state = playSoundDefault === '0' ? 0 : 1
@@ -1737,13 +1728,13 @@ if (soundOptions.length > 0) {
   updateSoundEnabledState()
   y -= rowHeight + 8
 
-  notificationCheckbox = $.NSButton.checkboxWithTitleTargetAction('Show a notification when the flash finishes', undefined, undefined)
-  notificationCheckbox.frame = $.NSMakeRect(20, y, width - 40, 20)
-  notificationCheckbox.state = showNotificationDefault === '0' ? 0 : 1
-  notificationCheckbox.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
-  content.addSubview(notificationCheckbox)
-  y -= rowHeight
 }
+notificationCheckbox = $.NSButton.checkboxWithTitleTargetAction('Show a completion notification', undefined, undefined)
+notificationCheckbox.frame = $.NSMakeRect(20, y, width - 40, 20)
+notificationCheckbox.state = showNotificationDefault === '0' ? 0 : 1
+notificationCheckbox.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+content.addSubview(notificationCheckbox)
+y -= rowHeight
 
 addSectionHeader('Windows account')
 accountCheckbox = $.NSButton.checkboxWithTitleTargetAction('Create a local Windows administrator account', controller, 'accountToggled:')
@@ -1960,7 +1951,7 @@ if (soundPopup && soundOptions.length > 0) {
   }
 }
 out.push(selectedSound)
-out.push(notificationCheckbox && soundOptions.length > 0 ? (notificationCheckbox.state == 1 ? '1' : '0') : showNotificationDefault)
+out.push(notificationCheckbox.state == 1 ? '1' : '0')
 function selectedVersion(index, fallback) {
   const item = versionRows.find(function(row) { return row.checkboxIndex === index })
   if (!item || item.popup.indexOfSelectedItem < 0) return fallback
@@ -2042,6 +2033,7 @@ macos_choose_target() { #Input: current-run Windows/Pi defaults. Output: selecte
     4 | 'Raspberry Pi 4 / Pi 400') default_pi_label='Raspberry Pi 4 / Pi 400' ;;
     3 | 'Raspberry Pi 3') default_pi_label='Raspberry Pi 3' ;;
     'Raspberry Pi 2 v1.2') default_pi_label='Raspberry Pi 2 v1.2' ;;
+    'Raspberry Pi 2 v1.1' | 'Raspberry Pi 3 Model B') default_pi_label="$2" ;;
     *) default_pi_label='Raspberry Pi 5' ;;
   esac
   target_jxa="$(wor_jxa_window_lib; cat <<'JXA'
@@ -2056,12 +2048,14 @@ const appTitle = ObjC.unwrap(args.objectAtIndex(6))
 const defaultWindows = ObjC.unwrap(args.objectAtIndex(7) || 'Windows 11')
 const defaultPiModel = ObjC.unwrap(args.objectAtIndex(8) || 'Raspberry Pi 5')
 const app = $.NSApplication.sharedApplication
-const windows = ['Windows 11', 'Windows 10']
+const windows = ['Windows 11', 'Windows 10', 'Windows 10 IoT Core (ARM32, legacy)']
 const piModels = ObjC.unwrap(args.objectAtIndex(9)).split('\n').filter(Boolean)
+const iotModels = ObjC.unwrap(args.objectAtIndex(10)).split('\n').filter(Boolean)
 const defaultWindowsIdx = Math.max(0, windows.indexOf(defaultWindows))
-const defaultPiIdx = Math.max(0, piModels.indexOf(defaultPiModel))
+let activeModels = defaultWindowsIdx === 2 ? iotModels : piModels
+const defaultPiIdx = Math.max(0, activeModels.indexOf(defaultPiModel))
 let window
-let selectedValue = windows[defaultWindowsIdx] + '\t' + piModels[defaultPiIdx]
+let selectedValue = windows[defaultWindowsIdx] + '\t' + activeModels[defaultPiIdx]
 let allowTermination = false
 
 function writeResult(value) {
@@ -2083,9 +2077,19 @@ const Controller = ObjC.registerSubclass({
       implementation: function() {
         const windowsIdx = windowsPopup.indexOfSelectedItem
         const piIdx = piPopup.indexOfSelectedItem
-        selectedValue = windows[windowsIdx] + '\t' + piModels[piIdx]
+        selectedValue = windows[windowsIdx] + '\t' + activeModels[piIdx]
         app.stopModalWithCode($.NSOKButton)
         window.orderOut(null)
+      }
+    },
+    'familyChanged:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        const previous = ObjC.unwrap(piPopup.titleOfSelectedItem)
+        activeModels = Number(windowsPopup.indexOfSelectedItem) === 2 ? iotModels : piModels
+        piPopup.removeAllItems
+        for (let i = 0; i < activeModels.length; i++) piPopup.addItemWithTitle($(activeModels[i]))
+        piPopup.selectItemAtIndex(Math.max(0, activeModels.indexOf(previous)))
       }
     },
     'cancelClicked:': {
@@ -2137,7 +2141,7 @@ worSetAppIcon(app, iconPath)
 app.setDelegate(controller)
 const screenFrame = $.NSScreen.mainScreen.visibleFrame
 const width = Math.min(640, screenFrame.size.width - 40)
-const height = Math.min(250, screenFrame.size.height - 60)
+const height = Math.min(350, screenFrame.size.height - 60)
 window = worMakeWindow({ width: width, height: height, title: windowTitle, delegate: controller })
 const content = window.contentView
 content.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
@@ -2153,15 +2157,21 @@ content.addSubview(windowsLabel)
 const windowsPopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(190, height - 116, width - 214, 30))
 for (let i = 0; i < windows.length; i++) windowsPopup.addItemWithTitle($(windows[i]))
 windowsPopup.selectItemAtIndex(defaultWindowsIdx)
+windowsPopup.target = controller
+windowsPopup.action = 'familyChanged:'
 content.addSubview(windowsPopup)
 
 const piLabel = $.NSTextField.labelWithString('Raspberry Pi model:')
 piLabel.frame = $.NSMakeRect(24, height - 158, 170, 24)
 content.addSubview(piLabel)
 const piPopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(190, height - 162, width - 214, 30))
-for (let i = 0; i < piModels.length; i++) piPopup.addItemWithTitle($(piModels[i]))
+for (let i = 0; i < activeModels.length; i++) piPopup.addItemWithTitle($(activeModels[i]))
 piPopup.selectItemAtIndex(defaultPiIdx)
 content.addSubview(piPopup)
+const imageGuidance = $.NSTextField.wrappingLabelWithString('IoT Core uses the official Microsoft ARM32 image, even on Pi 3. Download and verification start only after Flash; local imports are in Advanced Options. This legacy image does not support Pi 3B+, Pi 4 or Pi 5. Desktop Windows uses ARM64.')
+imageGuidance.frame = $.NSMakeRect(24, 62, width - 48, 76)
+imageGuidance.textColor = $.NSColor.secondaryLabelColor
+content.addSubview(imageGuidance)
 
 const cancelButton = $.NSButton.buttonWithTitleTargetAction('Cancel', controller, 'cancelClicked:')
 cancelButton.bezelStyle = $.NSBezelStyleRounded
@@ -2183,7 +2193,7 @@ allowTermination = true
 $.exit(0)
 JXA
 )"
-  result="$(wor_osascript -l JavaScript - "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" "$WOR_APP_TITLE" "$default_windows_label" "$default_pi_label" "$(wor_rpi_board_options)" <<<"$target_jxa")"
+  result="$(wor_osascript -l JavaScript - "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" "$WOR_APP_TITLE" "$default_windows_label" "$default_pi_label" "$(wor_rpi_board_options)" "$(wor_rpi_board_options iot-core)" <<<"$target_jxa")"
   result="$(printf '%s\n' "$result" | awk 'index($0, "\t") { print; exit }')"
   result="${result%%__WOR_CANCEL__*}"
   result="$(printf '%s' "$result" | tr -d '\r')"
@@ -2192,25 +2202,924 @@ JXA
   printf '%s\n' "$result"
 }
 
+gui_iot_validate_target() { #Keep validation in this shell so successful device binding is preserved.
+  local diagnostic_file diagnostic result=0 choice response=0
+  diagnostic_file="$(mktemp)" || { warning "Could not create the IoT target-validation diagnostics."; return 1; }
+  iot_core_validate_device preview > "$diagnostic_file" 2>&1 || result=$?
+  cat "$diagnostic_file" >&2
+  if [ "$result" == 0 ];then
+    rm -f "$diagnostic_file"
+    return 0
+  fi
+  diagnostic="$(gui_log_tail "$diagnostic_file")"
+  rm -f "$diagnostic_file"
+  [ -n "$diagnostic" ] || diagnostic="Target validation failed without further diagnostics. Check the app startup log; no drive was modified."
+  diagnostic="Cannot use $DEVICE for Windows 10 IoT Core.
+
+$diagnostic
+
+No image was downloaded and no drive was modified. Choose another suitable drive or cancel."
+  if is_macos;then
+    choice="$(macos_choose '' "$diagnostic" __RETRY__ Cancel '' '' '' 'Choose another drive' "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" '' 0 "$WOR_APP_TITLE")" || return 1
+    [ "$choice" == __RETRY__ ] && return 2
+  else
+    yad "${yadflags[@]}" --no-markup --width="$(wor_yad_width 700)" \
+      --text="$diagnostic" --button=Cancel:1 --button='Choose another drive':0 >/dev/null || response=$?
+    [ "$response" != 0 ] || return 2
+  fi
+  return 1
+}
+
+linux_iot_validate_selection() {
+  local validation_status
+  while true;do
+    validation_status=0
+    gui_iot_validate_target || validation_status=$?
+    case "$validation_status" in
+      0) return 0 ;;
+      2)
+        DEVICE=''
+        linux_choose_flash_device
+        iot_core_clear_target_approval
+        ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
+gui_iot_plan_source() { #Queue the source choice; only the post-Flash installer prepares image bytes.
+  iot_core_load_profile || return 1
+  if [ -z "$SOURCE_FILE" ];then
+    WOR_IOT_DOWNLOAD=1
+    GUI_IOT_SOURCE_MODE=official
+    GUI_IOT_LOCAL_SOURCE=''
+  elif [ "${WOR_IOT_DOWNLOAD:-0}" == 0 ] && [ -z "${GUI_IOT_SOURCE_MODE:-}" ];then
+    GUI_IOT_SOURCE_MODE=local
+    GUI_IOT_LOCAL_SOURCE="$SOURCE_FILE"
+  fi
+  return 0
+}
+
+gui_iot_options_state() { #Output: current IoT-only options, without changing a prepared source.
+  local mode="${GUI_IOT_SOURCE_MODE:-official}" source='' hdmi
+  hdmi="$(iot_core_hdmi_state)" || return 1
+  if [ -z "${GUI_IOT_SOURCE_MODE:-}" ] && [ -n "$SOURCE_FILE" ] && [ "${WOR_IOT_DOWNLOAD:-0}" == 0 ];then mode=local;fi
+  [ "$mode" != local ] || source="${GUI_IOT_LOCAL_SOURCE:-$SOURCE_FILE}"
+  WOR_IOT_ACCOUNT_PASSWORD="${IOT_CORE_ACCOUNT_PASSWORD:-}" jq -n --arg mode "$mode" --arg source "$source" --arg downloadDir "$DL_DIR" \
+    --arg dryRun "$DRY_RUN" --arg playSound "$PLAY_SOUND" --arg completionSound "$(wor_completion_sound)" \
+    --arg showNotification "$SHOW_NOTIFICATION" \
+    --arg hdmiMode "$(iot_core_hdmi_mode)" --arg hdmiConfig "${IOT_CORE_HDMI_CONFIG:-}" --argjson hdmi "$hdmi" \
+    --argjson sounds "$(wor_sound_options | jq -Rn '[inputs | split("\t") | {value: .[0], label: .[1]}]')" \
+    --arg official "$(wor_iot_option_label official)" --arg local "$(wor_iot_option_label local)" \
+    --arg recommended "$(wor_iot_option_label recommended)" \
+    --arg sourceLabel "$(wor_iot_option_label source)" --arg fileLabel "$(wor_iot_option_label file)" \
+    --arg cacheLabel "$(wor_iot_option_label cache)" --arg dryRunLabel "$(wor_iot_option_label dryrun)" \
+    --arg playSoundLabel "$(wor_iot_option_label playSound)" --arg soundLabel "$(wor_iot_option_label sound)" \
+    --arg notificationLabel "$(wor_iot_option_label notification)" --arg verification "$(wor_iot_option_label verification)" \
+    --arg hdmiLabel "$(wor_iot_option_label hdmi)" --arg hdmiEdit "$(wor_iot_option_label editHdmi)" --arg hdmiHelp "$(wor_iot_option_label hdmiHelp)" \
+    --arg hdmiEditorHelp "$(wor_iot_option_label hdmiEditorHelp)" \
+    --arg accountSetup "${IOT_CORE_ACCOUNT_SETUP:-0}" --arg accountUsername "${IOT_CORE_ACCOUNT_USERNAME:-Administrator}" \
+    --arg accountLabel "$(wor_iot_option_label accountSetup)" --arg usernameLabel "$(wor_iot_option_label accountUsername)" \
+    --arg passwordLabel "$(wor_iot_option_label accountPassword)" --arg accountHelp "$(wor_iot_option_label accountHelp)" \
+    --arg languageSetup "${IOT_CORE_LANGUAGE_SETUP:-1}" --arg language "$(iot_core_language)" \
+    --argjson languages "$(iot_core_language_options | jq -Rn '[inputs | split("\t") | {value: .[0], label: .[1]}]')" \
+    --arg languageSetupLabel "$(wor_iot_option_label languageSetup)" --arg languageLabel "$(wor_iot_option_label language)" \
+    --arg languageHelp "$(wor_iot_option_label languageHelp)" \
+    '{mode: $mode, source: $source, downloadDir: $downloadDir, dryRun: ($dryRun == "1"),
+      playSound: ($playSound == "1"), completionSound: $completionSound, showNotification: ($showNotification == "1"),
+      hdmiMode: $hdmiMode, hdmiConfig: $hdmiConfig, hdmi: $hdmi,
+      accountSetup: ($accountSetup == "1"), accountUsername: $accountUsername,
+      accountPassword: env.WOR_IOT_ACCOUNT_PASSWORD,
+      languageSetup: ($languageSetup == "1"), language: $language, languages: $languages,
+      sounds: $sounds, labels: {official: $official, recommended: $recommended, local: $local, source: $sourceLabel, file: $fileLabel,
+        cache: $cacheLabel, dryRun: $dryRunLabel, playSound: $playSoundLabel, sound: $soundLabel,
+        notification: $notificationLabel, verification: $verification, hdmi: $hdmiLabel,
+        editHdmi: $hdmiEdit, hdmiHelp: $hdmiHelp, hdmiEditorHelp: $hdmiEditorHelp,
+        accountSetup: $accountLabel, accountUsername: $usernameLabel, accountPassword: $passwordLabel,
+        accountHelp: $accountHelp, languageSetup: $languageSetupLabel, language: $languageLabel,
+        languageHelp: $languageHelp}}'
+}
+
+gui_iot_apply_options() { #Input: saved form JSON. Queue source changes without importing or downloading.
+  local options="$1" current mode source download_dir sound hdmi_mode hdmi_config changed=0
+  if ! jq -e '
+    type == "object" and (.mode == "official" or .mode == "local")
+    and (.source | type == "string" and (test("[\r\n]") | not))
+    and (.downloadDir | type == "string" and startswith("/") and (test("[\r\n]") | not))
+    and (.dryRun | type == "boolean") and (.playSound | type == "boolean")
+    and (.completionSound | type == "string") and (.showNotification | type == "boolean")
+    and (.hdmiMode | type == "string") and (.hdmiConfig | type == "string")
+    and (.accountSetup | type == "boolean") and (.accountUsername | type == "string")
+    and (.accountPassword | type == "string")
+    and (.languageSetup | type == "boolean") and (.language | type == "string")
+    and (.mode != "local" or (.source | startswith("/") and length > 1))
+  ' >/dev/null <<<"$options";then
+    warning "Invalid IoT Advanced Options. No preferences were changed."
+    return 1
+  fi
+  mode="$(jq -r .mode <<<"$options")"
+  source="$(jq -r .source <<<"$options")"
+  download_dir="$(jq -r .downloadDir <<<"$options")"
+  sound="$(jq -r .completionSound <<<"$options")"
+  hdmi_mode="$(jq -r .hdmiMode <<<"$options")"
+  hdmi_config="$(jq -r .hdmiConfig <<<"$options")"
+  printf '%s' "$options" | python3 "$DIRECTORY/src/lib/iot-account.py" preferences >/dev/null || return 1
+  iot_core_language_options | cut -f1 | grep -qiFx "$(jq -r .language <<<"$options")" \
+    || { warning "Select a language from the shared Windows language catalog. No preferences were changed."; return 1; }
+  iot_core_hdmi_state "$hdmi_mode" "$hdmi_config" >/dev/null || return 1
+  if ! wor_sound_options | awk -F'\t' -v value="$sound" '$1 == value {found=1} END {exit !found}';then
+    warning "The selected IoT completion sound is not available on this host. No preferences were changed."
+    return 1
+  fi
+  if [ "$mode" == local ];then
+    case "$source" in
+      *.[fF][fF][uU] | *.[iI][sS][oO] | *.[mM][sS][iI]) ;;
+      *) warning "Choose the official IoT FFU, ISO or MSI in Advanced Options. No preferences were changed."; return 1 ;;
+    esac
+  fi
+  current="$(gui_iot_options_state)" || return 1
+  if [ "$mode" != "$(jq -r .mode <<<"$current")" ] || [ "$download_dir" != "$DL_DIR" ] \
+    || { [ "$mode" == local ] && [ "$source" != "$(jq -r .source <<<"$current")" ]; } \
+    || [ -z "${IOT_CORE_SHA256:-}" ];then changed=1;fi
+  GUI_IOT_SOURCE_MODE="$mode"
+  GUI_IOT_LOCAL_SOURCE=''
+  [ "$mode" != local ] || GUI_IOT_LOCAL_SOURCE="$source"
+  DL_DIR="$download_dir"
+  DRY_RUN="$(jq -r 'if .dryRun then "1" else "0" end' <<<"$options")"
+  PLAY_SOUND="$(jq -r 'if .playSound then "1" else "0" end' <<<"$options")"
+  COMPLETION_SOUND="$sound"
+  SHOW_NOTIFICATION="$(jq -r 'if .showNotification then "1" else "0" end' <<<"$options")"
+  IOT_CORE_HDMI_MODE="$hdmi_mode"
+  IOT_CORE_HDMI_CONFIG="$hdmi_config"
+  IOT_CORE_ACCOUNT_SETUP="$(jq -r 'if .accountSetup then "1" else "0" end' <<<"$options")"
+  IOT_CORE_ACCOUNT_USERNAME="$(jq -r .accountUsername <<<"$options")"
+  IOT_CORE_ACCOUNT_PASSWORD=''
+  [ "$IOT_CORE_ACCOUNT_SETUP" != 1 ] || IOT_CORE_ACCOUNT_PASSWORD="$(jq -r .accountPassword <<<"$options")"
+  IOT_CORE_LANGUAGE_SETUP="$(jq -r 'if .languageSetup then "1" else "0" end' <<<"$options")"
+  IOT_CORE_LANGUAGE="$(windows_locale_from_language_code "$(jq -r .language <<<"$options")")"
+  WOR_IOT_CONFIRM_ERASE=0
+  if [ "$changed" == 1 ];then
+    IOT_CORE_BUILD='' IOT_CORE_MINIMUM_BYTES='' IOT_CORE_SHA256='' IOT_CORE_ACQUISITION='' IOT_CORE_INSPECTION_JSON=''
+    SOURCE_FILE="$GUI_IOT_LOCAL_SOURCE" WOR_IOT_DOWNLOAD=0
+    [ "$mode" != official ] || WOR_IOT_DOWNLOAD=1
+    BID=''
+  fi
+  return 0
+}
+
+gui_iot_private_json() { #Input: JSON and caller variable name. Secrets stay out of native process arguments.
+  local private_file
+  private_file="$(umask 077; mktemp)" || { warning "Cannot create private IoT dialog state."; return 1; }
+  chmod 600 "$private_file" || { rm -f "$private_file"; warning "Cannot protect private IoT dialog state."; return 1; }
+  register_file_cleanup "$private_file"
+  printf '%s' "$1" > "$private_file" || { rm -f "$private_file"; warning "Cannot write private IoT dialog state."; return 1; }
+  printf -v "$2" '%s' "$private_file"
+}
+
+gui_iot_account_connection() { #Output: local device address and current login, with the password only on stdout.
+  local response fields connection_jxa
+  if ! is_macos;then
+    fields="$(yad "${yadflags[@]}" --form --width="$(wor_yad_width 690)" --height="$(wor_yad_height 420)" \
+      --title="$WOR_WINDOW_TITLE | IoT personalization" \
+      --text="The media is verified. Move the card to the Pi, boot it and connect it to the same isolated network.\n\nEnter the Pi's address and CURRENT IoT login. No account change occurs until you confirm its SSH identity." \
+      --field="Pi local address":TXT '' --field="Current IoT username":TXT Administrator \
+      --field="Current IoT password":H '' --button=Skip:1 --button=Connect:0)" || return 2
+    WOR_IOT_CURRENT_PASSWORD="$(sed -n '3p' <<<"$fields")" jq -n \
+      --arg host "$(sed -n '1p' <<<"$fields")" --arg currentUsername "$(sed -n '2p' <<<"$fields")" \
+      '{host: $host, currentUsername: $currentUsername, currentPassword: env.WOR_IOT_CURRENT_PASSWORD}'
+    return
+  fi
+  connection_jxa="$(cat <<'JXA'
+ObjC.import('AppKit')
+ObjC.import('Foundation')
+const args = $.NSProcessInfo.processInfo.arguments
+const app = $.NSApplication.sharedApplication
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+const dialog = $.NSAlert.alloc.init
+dialog.messageText = 'Finish IoT personalization'
+dialog.informativeText = 'The media is verified. Move the card to the Pi, boot it and connect it to the same isolated network. Enter its address and CURRENT IoT login. You will confirm the SSH identity before any account change.'
+const view = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, 520, 146))
+function field(label, value, y, secure) {
+  const text = $.NSTextField.labelWithString($(label))
+  text.frame = $.NSMakeRect(0, y, 170, 26)
+  view.addSubview(text)
+  const input = secure ? $.NSSecureTextField.alloc.init : $.NSTextField.alloc.init
+  input.frame = $.NSMakeRect(182, y, 338, 26)
+  input.stringValue = $(value)
+  view.addSubview(input)
+  return input
+}
+const host = field('Pi local address', '', 108, false)
+const username = field('Current IoT username', 'Administrator', 62, false)
+const password = field('Current IoT password', '', 16, true)
+dialog.accessoryView = view
+const icon = $.NSImage.alloc.initWithContentsOfFile(ObjC.unwrap(args.objectAtIndex(4)))
+if (!icon.isNil()) dialog.icon = icon
+dialog.addButtonWithTitle('Connect')
+dialog.addButtonWithTitle('Skip')
+app.activateIgnoringOtherApps(true)
+const result = dialog.runModal === $.NSAlertFirstButtonReturn
+  ? JSON.stringify({host: ObjC.unwrap(host.stringValue), currentUsername: ObjC.unwrap(username.stringValue), currentPassword: ObjC.unwrap(password.stringValue)})
+  : '__WOR_CANCEL__'
+$.NSFileHandle.fileHandleWithStandardOutput.writeData($(result + '\n').dataUsingEncoding($.NSUTF8StringEncoding))
+JXA
+)"
+  response="$(wor_osascript -l JavaScript - "$WOR_ICON_PATH" <<<"$connection_jxa")" || return 1
+  [ "$response" != __WOR_CANCEL__ ] || return 2
+  printf '%s\n' "$response"
+}
+
+gui_iot_account_setup() { #Shared post-boot account/language personalization after device-identity confirmation.
+  is_iot_core && iot_core_personalization_requested && [ "$DRY_RUN" != 1 ] || return 0
+  local connection pairing request result diagnostic message choice response=0
+  IOT_CORE_ACCOUNT_STATUS=pending
+  IOT_CORE_LANGUAGE_STATUS=pending
+  connection="$(gui_iot_account_connection)" || response=$?
+  if [ "$response" != 0 ];then
+    IOT_CORE_ACCOUNT_PASSWORD=''
+    warning "IoT personalization remains Pending; no verified account or language change was reported."
+    [ "$response" != 2 ] || return 0
+    return 1
+  fi
+  diagnostic="$(umask 077; mktemp)" || { warning "Cannot create a private IoT account diagnostic."; return 1; }
+  register_file_cleanup "$diagnostic"
+  if ! pairing="$(printf '%s' "$connection" | jq '{host: .host}' | python3 "$DIRECTORY/src/lib/iot-account.py" probe 2>"$diagnostic")";then
+    message="IoT personalization remains Pending.
+
+$(gui_log_tail "$diagnostic")
+
+The verified media was not changed."
+    response=1
+  else
+    message="Confirm this SSH identity belongs to your Raspberry Pi before continuing.
+
+Device: $(jq -r .address <<<"$pairing")
+Fingerprint: $(jq -r .fingerprint <<<"$pairing")
+
+Administrator change: $([ "${IOT_CORE_ACCOUNT_SETUP:-0}" == 1 ] && printf '%s' "${IOT_CORE_ACCOUNT_USERNAME:-Administrator}" || printf 'Not requested')
+UI language: $([ "${IOT_CORE_LANGUAGE_SETUP:-1}" == 1 ] && iot_core_language || printf 'Not requested')
+
+Only confirm for your own Pi on an isolated local network. The app checks installed language support under DefaultAccount before applying language preferences, and verifies a fresh login if administrator changes were requested."
+    if is_macos;then
+      choice="$(macos_choose '' "$message" apply Cancel '' '' '' 'Confirm and Apply' "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE | IoT SSH identity" '' 0 "$WOR_APP_TITLE")" || choice=cancel
+    else
+      choice=apply
+      yad "${yadflags[@]}" --question --width="$(wor_yad_width 690)" --height="$(wor_yad_height 440)" \
+        --title="$WOR_WINDOW_TITLE | IoT SSH identity" --text="$message" --button=Cancel:1 --button='Confirm and Apply':0 || choice=cancel
+    fi
+    if [ "$choice" != apply ];then
+      IOT_CORE_ACCOUNT_PASSWORD=''
+      rm -f "$diagnostic"
+      warning "IoT SSH identity was not confirmed. Personalization remains Pending."
+      return 0
+    fi
+    request="$(WOR_IOT_ACCOUNT_PASSWORD="${IOT_CORE_ACCOUNT_PASSWORD:-}" jq --argjson pairing "$pairing" \
+      --arg accountUsername "${IOT_CORE_ACCOUNT_USERNAME:-Administrator}" \
+      --arg accountSetup "${IOT_CORE_ACCOUNT_SETUP:-0}" --arg languageSetup "${IOT_CORE_LANGUAGE_SETUP:-1}" \
+      --arg language "$(iot_core_language)" \
+      '. + {pairing: $pairing, confirmIdentity: true, accountSetup: ($accountSetup == "1"),
+        accountUsername: $accountUsername, accountPassword: env.WOR_IOT_ACCOUNT_PASSWORD,
+        languageSetup: ($languageSetup == "1"), language: $language}' <<<"$connection")" || return 1
+    status "Applying and verifying IoT language/account preferences"
+    if result="$(printf '%s' "$request" | python3 "$DIRECTORY/src/lib/iot-account.py" configure 2>"$diagnostic")";then
+      if jq -e --arg username "${IOT_CORE_ACCOUNT_USERNAME:-Administrator}" \
+        --arg accountSetup "${IOT_CORE_ACCOUNT_SETUP:-0}" --arg languageSetup "${IOT_CORE_LANGUAGE_SETUP:-1}" \
+        --arg language "$(iot_core_language)" '
+          (.state == "verified" or .state == "pending-reboot")
+          and (if $accountSetup == "1" then .accountState == "verified" and .username == $username
+            and (.sid | type == "string" and endswith("-500")) else .accountState == "not-assessed" end)
+          and (if $languageSetup == "1" then .language == $language
+            and (.languageState == "verified" or .languageState == "pending-reboot") else .languageState == "not-assessed" end)
+        ' >/dev/null <<<"$result";then
+        IOT_CORE_ACCOUNT_STATUS="$(jq -r .accountState <<<"$result")"
+        IOT_CORE_LANGUAGE_STATUS="$(jq -r .languageState <<<"$result")"
+        message="IoT personalization result:
+
+Administrator: $IOT_CORE_ACCOUNT_STATUS$([ "$IOT_CORE_ACCOUNT_STATUS" == verified ] && printf ' (%s); fresh SSH login verified' "${IOT_CORE_ACCOUNT_USERNAME:-Administrator}")
+UI language: $IOT_CORE_LANGUAGE_STATUS$([ "$IOT_CORE_LANGUAGE_STATUS" != not-assessed ] && printf ' (%s)' "$(iot_core_language)")
+
+$([ "$IOT_CORE_LANGUAGE_STATUS" == pending-reboot ] && printf 'The language change was accepted but is not yet active. Restart the Pi and verify its displayed language; do not treat it as complete yet.')
+
+Passwords are not displayed or saved in the log. The original FFU and service accounts were not changed."
+      else
+        message="The helper did not return verified personalization results. Language or credentials may have changed; verify the device before retrying."
+        response=1
+      fi
+    else
+      message="IoT personalization was not verified.
+
+$(gui_log_tail "$diagnostic")
+
+The media remains verified, but account credentials may have changed. Check the old/new login before retrying."
+      response=1
+    fi
+  fi
+  IOT_CORE_ACCOUNT_PASSWORD=''
+  connection='' request=''
+  rm -f "$diagnostic"
+  [ "$response" == 0 ] || { IOT_CORE_ACCOUNT_STATUS=failed; IOT_CORE_LANGUAGE_STATUS=failed; }
+  [ "$response" != 0 ] && warning "$message" || status "IoT personalization result: account=$IOT_CORE_ACCOUNT_STATUS; language=$IOT_CORE_LANGUAGE_STATUS."
+  if is_macos;then
+    macos_show_result_dialog "$message" '' '' ''
+  else
+    yad "${yadflags[@]}" --info --width="$(wor_yad_width 690)" --height="$(wor_yad_height 380)" \
+      --title="$WOR_WINDOW_TITLE | IoT personalization" --text="$message"
+  fi
+  return "$response"
+}
+
+gui_iot_save_options() { #Apply in this shell; invalid edited settings stay pending until corrected or canceled.
+  local diagnostic message choice response=0
+  diagnostic="$(mktemp)" || { warning "Cannot create the Advanced Options validation diagnostic."; return 2; }
+  if gui_iot_apply_options "$1" 2>"$diagnostic";then
+    rm -f "$diagnostic"
+    return 0
+  fi
+  message="$(gui_log_tail "$diagnostic")"
+  rm -f "$diagnostic"
+  warning "$message"
+  message="$message
+
+No preferences were changed. Correct the settings or go back."
+  if is_macos;then
+    choice="$(macos_choose '' "$message" edit Back '' '' '' 'Edit Again' "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE | Advanced Options" '' 0 "$WOR_APP_TITLE")" || return 2
+    [ "$choice" == edit ] && return 1
+    return 2
+  fi
+  yad "${yadflags[@]}" --warning --width="$(wor_yad_width 620)" --height="$(wor_yad_height 240)" \
+    --title="$WOR_WINDOW_TITLE | Advanced Options" --text="$message" --button=Back:1 --button='Edit Again':0 || response=$?
+  [ "$response" != 0 ] || return 1
+  return 2
+}
+
+macos_iot_options() {
+  local state options options_jxa saved state_file
+  state="$(gui_iot_options_state)" || return 1
+  options_jxa="$(wor_jxa_window_lib; cat <<'JXA'
+ObjC.import('AppKit')
+ObjC.import('Foundation')
+ObjC.import('stdlib')
+const args = $.NSProcessInfo.processInfo.arguments
+const statePath = ObjC.unwrap(args.objectAtIndex(4))
+const stateText = $.NSString.stringWithContentsOfFileEncodingError($(statePath), $.NSUTF8StringEncoding, null)
+if (stateText.isNil()) throw new Error('Cannot read private IoT options state')
+const state = JSON.parse(ObjC.unwrap(stateText))
+if (!$.NSFileManager.defaultManager.removeItemAtPathError($(statePath), null)) throw new Error('Cannot discard private IoT options state')
+const iconPath = ObjC.unwrap(args.objectAtIndex(5))
+const windowTitle = ObjC.unwrap(args.objectAtIndex(6))
+const appTitle = ObjC.unwrap(args.objectAtIndex(7))
+const app = $.NSApplication.sharedApplication
+let window, sourcePopup, sourceField, browseSourceButton, directoryField, dryRunCheckbox, soundCheckbox, soundPopup, notificationCheckbox
+let sourceLabel, customLabel, recommendedBadge
+let hdmiPopup, hdmiLabel, editHdmiButton, hdmiRecommendedBadge
+let accountCheckbox, accountUsernameField, accountPasswordField, accountUsernameLabel, accountPasswordLabel, accountHelp
+let accountRows = []
+let languageCheckbox, languagePopup, languageLabel, languageHelp
+let hdmiConfig = state.hdmiConfig || state.hdmi.custom
+let hdmiEdited = state.hdmiConfig.length > 0
+let previousHdmi = state.hdmiMode
+let confirmed = false
+function closeOptions() {
+  app.stopModalWithCode($.NSCancelButton)
+  window.orderOut(null)
+}
+function updateSourceControls() {
+  const local = Number(sourcePopup.indexOfSelectedItem) === 1
+  sourceField.enabled = local
+  browseSourceButton.enabled = local
+  sourceField.hidden = !local
+  browseSourceButton.hidden = !local
+  customLabel.hidden = !local
+  recommendedBadge.hidden = local
+  layoutSourceRows(local)
+}
+function layoutSourceRows(local) {
+  const accountHeight = Number(accountCheckbox.state) === 1 ? 220 : 128
+  const languageHeight = 154
+  const documentHeight = (local ? 536 : 490) + accountHeight + languageHeight
+  const height = Math.min(documentHeight + 130, screen.size.height - 60)
+  const previousFrame = window.frame
+  window.setContentSize($.NSMakeSize(width, height))
+  const resizedFrame = window.frame
+  window.setFrameOrigin($.NSMakePoint(previousFrame.origin.x, previousFrame.origin.y + previousFrame.size.height - resizedFrame.size.height))
+  heading.frame = $.NSMakeRect(24, height - 48, width - 48, 28)
+  const viewportHeight = height - 130
+  scroll.frame = $.NSMakeRect(24, 72, width - 48, viewportHeight)
+  scroll.hasVerticalScroller = documentHeight > viewportHeight
+  innerWidth = scroll.contentSize.width
+  content.frame = $.NSMakeRect(0, 0, innerWidth, documentHeight)
+  for (const row of accountRows) row.view.setFrameOrigin($.NSMakePoint(row.view.frame.origin.x, row.y + accountHeight + languageHeight))
+  const sourceY = documentHeight - 34
+  sourceLabel.frame = $.NSMakeRect(0, sourceY, 188, 26)
+  const badgeWidth = 112
+  sourcePopup.frame = $.NSMakeRect(198, sourceY - 4, innerWidth - 198 - (local ? 0 : badgeWidth + 8), 32)
+  recommendedBadge.frame = $.NSMakeRect(innerWidth - badgeWidth, sourceY + 1, badgeWidth, 22)
+  accountCheckbox.frame = $.NSMakeRect(0, accountHeight - 36 + languageHeight, innerWidth, 28)
+  accountUsernameLabel.frame = $.NSMakeRect(0, 136 + languageHeight, 188, 26)
+  accountUsernameField.frame = $.NSMakeRect(198, 136 + languageHeight, innerWidth - 198, 26)
+  accountPasswordLabel.frame = $.NSMakeRect(0, 90 + languageHeight, 188, 26)
+  accountPasswordField.frame = $.NSMakeRect(198, 90 + languageHeight, innerWidth - 198, 26)
+  accountHelp.frame = $.NSMakeRect(0, 10 + languageHeight, innerWidth, 64)
+  languageCheckbox.frame = $.NSMakeRect(0, 116, innerWidth, 28)
+  languageLabel.frame = $.NSMakeRect(0, 78, 188, 26)
+  languagePopup.frame = $.NSMakeRect(198, 74, innerWidth - 198, 32)
+  languageHelp.frame = $.NSMakeRect(0, 8, innerWidth, 58)
+  updateHdmiControls()
+  content.scrollPoint($.NSMakePoint(0, Math.max(0, documentHeight - viewportHeight)))
+  scroll.reflectScrolledClipView(scroll.contentView)
+}
+function updateHdmiControls() {
+  const selected = state.hdmi.choices[Number(hdmiPopup.indexOfSelectedItem)]
+  const custom = selected.value === 'custom'
+  const recommended = selected.recommended === true
+  const editWidth = 140
+  const badgeWidth = 112
+  const accessoryWidth = custom ? editWidth + 8 : (recommended ? badgeWidth + 8 : 0)
+  const popupX = Math.max(124, Math.min(198, innerWidth - accessoryWidth - Math.ceil(hdmiPopup.fittingSize.width)))
+  const offset = (Number(accountCheckbox.state) === 1 ? 220 : 128) + 154
+  hdmiLabel.frame = $.NSMakeRect(0, 358 + offset, popupX - 10, 26)
+  hdmiPopup.frame = $.NSMakeRect(popupX, 354 + offset, innerWidth - popupX - accessoryWidth, 32)
+  editHdmiButton.frame = $.NSMakeRect(innerWidth - editWidth, 354 + offset, editWidth, 32)
+  editHdmiButton.hidden = !custom
+  editHdmiButton.enabled = custom
+  hdmiRecommendedBadge.frame = $.NSMakeRect(innerWidth - badgeWidth, 359 + offset, badgeWidth, 22)
+  hdmiRecommendedBadge.hidden = !recommended
+}
+function updateAccountControls() {
+  const enabled = Number(accountCheckbox.state) === 1
+  accountUsernameField.hidden = !enabled
+  accountPasswordField.hidden = !enabled
+  accountUsernameLabel.hidden = !enabled
+  accountPasswordLabel.hidden = !enabled
+  layoutSourceRows(Number(sourcePopup.indexOfSelectedItem) === 1)
+}
+function updateLanguageControls() {
+  languagePopup.enabled = Number(languageCheckbox.state) === 1
+}
+function hdmiChanged() {
+  const selected = state.hdmi.choices[Number(hdmiPopup.indexOfSelectedItem)].value
+  if (selected === 'custom' && !hdmiEdited) {
+    const previous = state.hdmi.choices.find(function (choice) { return choice.value === previousHdmi })
+    hdmiConfig = previous.settings || state.hdmi.custom
+    hdmiEdited = true
+  }
+  previousHdmi = selected
+  updateHdmiControls()
+}
+function editHdmi() {
+  const defaults = state.hdmi.choices.find(function (choice) { return choice.value === '720p60' }).settings
+  const result = worEditText(hdmiConfig, state.labels.editHdmi, state.labels.hdmiEditorHelp, iconPath, defaults)
+  if (result.saved) {
+    hdmiConfig = result.text
+    hdmiEdited = true
+  }
+}
+function choosePath(directory) {
+  const panel = $.NSOpenPanel.openPanel
+  panel.canChooseDirectories = directory
+  panel.canChooseFiles = !directory
+  panel.allowsMultipleSelection = false
+  if (!directory) panel.allowedFileTypes = $(['ffu', 'iso', 'msi'])
+  if (panel.runModal === $.NSModalResponseOK) {
+    const field = directory ? directoryField : sourceField
+    field.stringValue = panel.URL.path
+  }
+}
+const Controller = ObjC.registerSubclass({
+  name: 'WorIotOptionsController',
+  superclass: 'NSObject',
+  methods: {
+    'saveClicked:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        const local = Number(sourcePopup.indexOfSelectedItem) === 1
+        if ((local && ObjC.unwrap(sourceField.stringValue).length === 0) || ObjC.unwrap(directoryField.stringValue).length === 0) {
+          const alert = $.NSAlert.alloc.init
+          alert.messageText = 'Complete the image settings'
+          alert.informativeText = 'Choose an official FFU, ISO or MSI when Custom Image is selected, and a download folder.'
+          alert.addButtonWithTitle('OK')
+          alert.runModal
+          return
+        }
+        confirmed = true
+        closeOptions()
+      }
+    },
+    'cancelClicked:': { types: ['void', ['id']], implementation: closeOptions },
+    'windowWillClose:': { types: ['void', ['id']], implementation: closeOptions },
+    'sourceChanged:': { types: ['void', ['id']], implementation: updateSourceControls },
+    'hdmiChanged:': { types: ['void', ['id']], implementation: hdmiChanged },
+    'editHdmi:': { types: ['void', ['id']], implementation: editHdmi },
+    'accountChanged:': { types: ['void', ['id']], implementation: updateAccountControls },
+    'languageChanged:': { types: ['void', ['id']], implementation: updateLanguageControls },
+    'browseSource:': { types: ['void', ['id']], implementation: function() { choosePath(false) } },
+    'browseDirectory:': { types: ['void', ['id']], implementation: function() { choosePath(true) } },
+    'soundChanged:': { types: ['void', ['id']], implementation: function() { soundPopup.enabled = Number(soundCheckbox.state) === 1 } },
+    'handleQuitEvent:withReplyEvent:': { types: ['void', ['id', 'id']], implementation: closeOptions },
+    'handleReopenEvent:withReplyEvent:': {
+      types: ['void', ['id', 'id']],
+      implementation: function() {
+        if (window.isMiniaturized) window.deminiaturize(null)
+        window.makeKeyAndOrderFront(null)
+        app.activateIgnoringOtherApps(true)
+      }
+    },
+    'pumpEvents:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        $.NSRunLoop.currentRunLoop.runModeBeforeDate($.NSDefaultRunLoopMode, $.NSDate.dateWithTimeIntervalSinceNow(0.01))
+      }
+    },
+    'applicationShouldTerminate:': { types: ['NSUInteger', ['id']], implementation: function() { closeOptions(); return $.NSTerminateCancel } }
+  }
+})
+const controller = $.WorIotOptionsController.alloc.init
+app.setActivationPolicy($.NSApplicationActivationPolicyRegular)
+app.setDelegate(controller)
+const mainMenu = worInstallAppMenu(app, appTitle, windowTitle, iconPath)
+const editMenuItem = $.NSMenuItem.alloc.init
+mainMenu.addItem(editMenuItem)
+const editMenu = $.NSMenu.alloc.initWithTitle('Edit')
+editMenuItem.submenu = editMenu
+editMenu.addItemWithTitleActionKeyEquivalent('Cut', 'cut:', 'x')
+editMenu.addItemWithTitleActionKeyEquivalent('Copy', 'copy:', 'c')
+editMenu.addItemWithTitleActionKeyEquivalent('Paste', 'paste:', 'v')
+editMenu.addItemWithTitleActionKeyEquivalent('Select All', 'selectAll:', 'a')
+worSetAppIcon(app, iconPath)
+const screen = $.NSScreen.mainScreen.visibleFrame
+const width = Math.min(760, screen.size.width - 40)
+const height = Math.min(886, screen.size.height - 60)
+window = worMakeWindow({ width: width, height: height, title: windowTitle + ' | IoT Core Advanced Options', delegate: controller })
+const heading = $.NSTextField.labelWithString('Windows 10 IoT Core Advanced Options')
+heading.font = $.NSFont.systemFontOfSizeWeight(18, $.NSFontWeightSemibold)
+heading.frame = $.NSMakeRect(24, height - 48, width - 48, 28)
+window.contentView.addSubview(heading)
+const scroll = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(24, 72, width - 48, height - 130))
+scroll.hasVerticalScroller = false
+scroll.autohidesScrollers = false
+scroll.scrollerStyle = $.NSScrollerStyleLegacy
+let innerWidth = scroll.contentSize.width
+const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, innerWidth, 536))
+scroll.documentView = content
+window.contentView.addSubview(scroll)
+function addLabel(text, y) {
+  const label = $.NSTextField.labelWithString($(text))
+  label.frame = $.NSMakeRect(0, y, 188, 26)
+  content.addSubview(label)
+  return label
+}
+function addRecommendedBadge() {
+  const badge = $.NSTextField.labelWithString($(state.labels.recommended))
+  badge.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightSemibold)
+  badge.textColor = $.NSColor.systemGreenColor
+  content.addSubview(badge)
+  return badge
+}
+function addPathField(text, y, action) {
+  const field = $.NSTextField.alloc.initWithFrame($.NSMakeRect(198, y, innerWidth - 300, 26))
+  field.stringValue = $(text)
+  field.autoresizingMask = $.NSViewWidthSizable
+  content.addSubview(field)
+  const button = $.NSButton.buttonWithTitleTargetAction('Browse...', controller, action)
+  button.bezelStyle = $.NSBezelStyleRounded
+  button.frame = $.NSMakeRect(innerWidth - 94, y - 2, 94, 30)
+  button.autoresizingMask = $.NSViewMinXMargin
+  content.addSubview(button)
+  return {field: field, button: button}
+}
+function addCheckbox(label, value, y, action) {
+  const checkbox = $.NSButton.checkboxWithTitleTargetAction($(label), controller, action || $())
+  checkbox.frame = $.NSMakeRect(0, y, innerWidth, 28)
+  checkbox.state = value ? 1 : 0
+  checkbox.autoresizingMask = $.NSViewWidthSizable
+  content.addSubview(checkbox)
+  return checkbox
+}
+sourceLabel = addLabel(state.labels.source, 502)
+sourcePopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(198, 498, innerWidth - 198, 32))
+sourcePopup.addItemWithTitle($(state.labels.official))
+sourcePopup.addItemWithTitle($(state.labels.local))
+sourcePopup.selectItemAtIndex(state.mode === 'local' ? 1 : 0)
+sourcePopup.target = controller
+sourcePopup.action = 'sourceChanged:'
+content.addSubview(sourcePopup)
+recommendedBadge = addRecommendedBadge()
+customLabel = addLabel(state.labels.file, 456)
+const sourceControls = addPathField(state.source, 456, 'browseSource:')
+sourceField = sourceControls.field
+sourceField.placeholderString = 'Official FFU, ISO or MSI'
+browseSourceButton = sourceControls.button
+addLabel(state.labels.cache, 410)
+directoryField = addPathField(state.downloadDir, 410, 'browseDirectory:').field
+hdmiLabel = addLabel(state.labels.hdmi, 358)
+hdmiPopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(198, 354, innerWidth - 198, 32))
+for (const choice of state.hdmi.choices) hdmiPopup.addItemWithTitle($(choice.label))
+hdmiPopup.selectItemAtIndex(state.hdmi.choices.findIndex(function (choice) { return choice.value === state.hdmiMode }))
+hdmiPopup.target = controller
+hdmiPopup.action = 'hdmiChanged:'
+content.addSubview(hdmiPopup)
+hdmiRecommendedBadge = addRecommendedBadge()
+editHdmiButton = $.NSButton.buttonWithTitleTargetAction('View / Edit…', controller, 'editHdmi:')
+editHdmiButton.bezelStyle = $.NSBezelStyleRounded
+content.addSubview(editHdmiButton)
+const hdmiHelp = $.NSTextField.wrappingLabelWithString($(state.labels.hdmiHelp))
+hdmiHelp.frame = $.NSMakeRect(0, 292, innerWidth, 54)
+hdmiHelp.textColor = $.NSColor.secondaryLabelColor
+hdmiHelp.autoresizingMask = $.NSViewWidthSizable
+content.addSubview(hdmiHelp)
+dryRunCheckbox = addCheckbox(state.labels.dryRun, state.dryRun, 264)
+const verification = $.NSTextField.wrappingLabelWithString($(state.labels.verification))
+verification.textColor = $.NSColor.secondaryLabelColor
+verification.frame = $.NSMakeRect(0, 184, innerWidth, 64)
+verification.autoresizingMask = $.NSViewWidthSizable
+content.addSubview(verification)
+soundCheckbox = addCheckbox(state.labels.playSound, state.playSound, 132, 'soundChanged:')
+addLabel(state.labels.sound, 94)
+soundPopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(198, 90, innerWidth - 198, 32))
+for (let i = 0; i < state.sounds.length; i++) soundPopup.addItemWithTitle($(state.sounds[i].label))
+soundPopup.selectItemAtIndex(Math.max(0, state.sounds.findIndex(function (sound) { return sound.value === state.completionSound })))
+soundPopup.enabled = state.playSound
+soundPopup.autoresizingMask = $.NSViewWidthSizable
+content.addSubview(soundPopup)
+notificationCheckbox = addCheckbox(state.labels.notification, state.showNotification, 48)
+for (let i = 0; i < content.subviews.count; i++) {
+  const view = content.subviews.objectAtIndex(i)
+  const frame = view.frame
+  accountRows.push({view: view, x: frame.origin.x, y: frame.origin.y, width: frame.size.width, height: frame.size.height})
+}
+accountCheckbox = addCheckbox(state.labels.accountSetup, state.accountSetup, 184, 'accountChanged:')
+accountUsernameLabel = addLabel(state.labels.accountUsername, 136)
+accountUsernameField = $.NSTextField.alloc.initWithFrame($.NSMakeRect(198, 136, innerWidth - 198, 26))
+accountUsernameField.stringValue = $(state.accountUsername)
+content.addSubview(accountUsernameField)
+accountPasswordLabel = addLabel(state.labels.accountPassword, 90)
+accountPasswordField = $.NSSecureTextField.alloc.initWithFrame($.NSMakeRect(198, 90, innerWidth - 198, 26))
+accountPasswordField.stringValue = $(state.accountPassword)
+content.addSubview(accountPasswordField)
+accountHelp = $.NSTextField.wrappingLabelWithString($(state.labels.accountHelp))
+accountHelp.textColor = $.NSColor.secondaryLabelColor
+content.addSubview(accountHelp)
+languageCheckbox = addCheckbox(state.labels.languageSetup, state.languageSetup, 116, 'languageChanged:')
+languageLabel = addLabel(state.labels.language, 78)
+languagePopup = $.NSPopUpButton.alloc.initWithFrame($.NSMakeRect(198, 74, innerWidth - 198, 32))
+for (const language of state.languages) languagePopup.addItemWithTitle($(language.label))
+languagePopup.selectItemAtIndex(state.languages.findIndex(function (language) { return language.value.toLowerCase() === state.language.toLowerCase() }))
+content.addSubview(languagePopup)
+languageHelp = $.NSTextField.wrappingLabelWithString($(state.labels.languageHelp))
+languageHelp.textColor = $.NSColor.secondaryLabelColor
+content.addSubview(languageHelp)
+updateLanguageControls()
+const back = $.NSButton.buttonWithTitleTargetAction('Back', controller, 'cancelClicked:')
+back.bezelStyle = $.NSBezelStyleRounded
+back.keyEquivalent = '\u001b'
+back.frame = $.NSMakeRect(width - 224, 22, 92, 32)
+window.contentView.addSubview(back)
+const save = $.NSButton.buttonWithTitleTargetAction('Save', controller, 'saveClicked:')
+save.bezelStyle = $.NSBezelStyleRounded
+save.keyEquivalent = '\r'
+save.frame = $.NSMakeRect(width - 116, 22, 92, 32)
+window.contentView.addSubview(save)
+updateAccountControls()
+updateSourceControls()
+const pumpTimer = worInstallWindowHandlers(controller)
+window.makeKeyAndOrderFront(null)
+app.activateIgnoringOtherApps(true)
+app.runModalForWindow(window)
+pumpTimer.invalidate
+const result = confirmed ? JSON.stringify({
+  mode: Number(sourcePopup.indexOfSelectedItem) === 1 ? 'local' : 'official',
+  source: ObjC.unwrap(sourceField.stringValue), downloadDir: ObjC.unwrap(directoryField.stringValue),
+  dryRun: Number(dryRunCheckbox.state) === 1, playSound: Number(soundCheckbox.state) === 1,
+  completionSound: state.sounds[Number(soundPopup.indexOfSelectedItem)].value,
+  showNotification: Number(notificationCheckbox.state) === 1,
+  hdmiMode: state.hdmi.choices[Number(hdmiPopup.indexOfSelectedItem)].value,
+  hdmiConfig: hdmiEdited || previousHdmi === 'custom' ? hdmiConfig : state.hdmiConfig,
+  accountSetup: Number(accountCheckbox.state) === 1,
+  accountUsername: ObjC.unwrap(accountUsernameField.stringValue),
+  accountPassword: ObjC.unwrap(accountPasswordField.stringValue),
+  languageSetup: Number(languageCheckbox.state) === 1,
+  language: state.languages[Number(languagePopup.indexOfSelectedItem)].value
+}) : '__WOR_CANCEL__'
+$.NSFileHandle.fileHandleWithStandardOutput.writeData($(result + '\n').dataUsingEncoding($.NSUTF8StringEncoding))
+$.exit(0)
+JXA
+)"
+  while true;do
+    gui_iot_private_json "$state" state_file || return 1
+    options="$(wor_osascript -l JavaScript - "$state_file" "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" "$WOR_APP_TITLE" <<<"$options_jxa")" || { rm -f "$state_file"; return 1; }
+    rm -f "$state_file"
+    [ "$options" != __WOR_CANCEL__ ] || return 0
+    saved=0
+    gui_iot_save_options "$options" || saved=$?
+    [ "$saved" != 0 ] || return 0
+    [ "$saved" != 2 ] || return 0
+    state="$(jq --argjson options "$options" '. + $options' <<<"$state")" || return 1
+  done
+}
+
+linux_iot_options() {
+  local state mode source_choices selected_label official_label selected_sound sound_choices options
+  local source download_dir dry_run play_sound sound notification settings refresh_file refresh_requested response changed_action height
+  local source_field folder_field dryrun_field play_field sound_field notification_field hdmi_field
+  local hdmi_mode hdmi_label hdmi_choices hdmi_config hdmi_edit_file hdmi_editor hdmi_defaults saved
+  local account_field account_username_field account_password_field account_setup account_username account_password
+  local language_setup_field language_field language_setup language language_label language_choices
+  local fields=() scrolling=()
+  state="$(gui_iot_options_state)" || return 1
+  official_label="$(wor_iot_option_label official) ($(wor_iot_option_label recommended))"
+  while true;do
+    mode="$(jq -r .mode <<<"$state")"
+    selected_label="$official_label"
+    [ "$mode" != local ] || selected_label="$(wor_iot_option_label local)"
+    source_choices="$official_label!$(wor_iot_option_label local)"
+    [ "$mode" != local ] || source_choices="$(wor_iot_option_label local)!$official_label"
+    selected_sound="$(jq -r '.completionSound as $selected | .sounds[] | select(.value == $selected) | .label' <<<"$state")"
+    sound_choices="$(printf '%s\n' "$selected_sound"; jq -r '.sounds[].label' <<<"$state")"
+    sound_choices="$(awk 'NF && !seen[$0]++' <<<"$sound_choices" | paste -sd '!' -)"
+    fields=("--field=$(wor_iot_option_label source):CB" "$source_choices")
+    source_field=0
+    source="$(jq -r .source <<<"$state")"
+    height=540
+    if [ "$mode" == local ];then
+      source_field=$((${#fields[@]} / 2 + 1))
+      fields+=("--field=$(wor_iot_option_label file):FL" "$source")
+      height=586
+    fi
+    folder_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label cache):DIR" "$(jq -r .downloadDir <<<"$state")")
+    hdmi_mode="$(jq -r .hdmiMode <<<"$state")"
+    hdmi_config="$(jq -r .hdmiConfig <<<"$state")"
+    hdmi_label="$(jq -r --arg mode "$hdmi_mode" '.hdmi.choices[] | select(.value == $mode) | .menu_label' <<<"$state")"
+    hdmi_choices="$(jq -r --arg mode "$hdmi_mode" \
+      '[.hdmi.choices[] | select(.value == $mode)] + [.hdmi.choices[] | select(.value != $mode)] | map(.menu_label) | join("!")' <<<"$state")"
+    hdmi_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label hdmi):CB" "$hdmi_choices")
+    hdmi_edit_file=''
+    if [ "$hdmi_mode" == custom ];then
+      hdmi_edit_file="$(mktemp)" || { warning "Cannot create the pending HDMI editor file."; return 1; }
+      register_file_cleanup "$hdmi_edit_file"
+      printf '%s' "$hdmi_config" > "$hdmi_edit_file" \
+        || { rm -f "$hdmi_edit_file"; warning "Cannot initialize the pending HDMI editor."; return 1; }
+      hdmi_editor="@yad --center --no-markup --width=$(wor_yad_width 700) --height=$(wor_yad_height 520) --title=$(printf '%q' "$WOR_WINDOW_TITLE | $(wor_iot_option_label editHdmi)") --window-icon=$(printf '%q' "$WOR_LOGO_PATH") --class=$(printf '%q' "$WOR_ICON_NAME") --text=$(printf '%q' "$(wor_iot_option_label hdmiEditorHelp)") --text-info --editable --in-place --confirm-save='Save video settings?' --filename=$(printf '%q' "$hdmi_edit_file") --button=Close:0 >/dev/null"
+      fields+=("--field=$(wor_iot_option_label editHdmi):BT" "$hdmi_editor")
+      hdmi_defaults="$(jq -r '.hdmi.choices[] | select(.value == "720p60") | .settings' <<<"$state")"
+      fields+=("--field=Reset to 720p defaults:BT" "@bash -c $(printf '%q' "printf '%s\n' $(printf '%q' "$hdmi_defaults") > $(printf '%q' "$hdmi_edit_file")")")
+      height=$((height+70))
+    fi
+    dryrun_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label dryrun):CHK" "$(jq -r 'if .dryRun then "TRUE" else "FALSE" end' <<<"$state")")
+    play_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label playSound):CHK" "$(jq -r 'if .playSound then "TRUE" else "FALSE" end' <<<"$state")")
+    sound_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label sound):CB" "$sound_choices")
+    notification_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label notification):CHK" "$(jq -r 'if .showNotification then "TRUE" else "FALSE" end' <<<"$state")")
+    account_setup="$(jq -r 'if .accountSetup then "TRUE" else "FALSE" end' <<<"$state")"
+    account_username="$(jq -r .accountUsername <<<"$state")"
+    account_password="$(jq -r .accountPassword <<<"$state")"
+    account_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label accountSetup):CHK" "$account_setup")
+    account_username_field=$((${#fields[@]} / 2 + 1))
+    [ "$account_setup" == TRUE ] && fields+=("--field=$(wor_iot_option_label accountUsername):TXT" "$account_username") \
+      || fields+=("--field=$(wor_iot_option_label accountUsername):TXT" '@disabled@')
+    account_password_field=$((${#fields[@]} / 2 + 1))
+    [ "$account_setup" == TRUE ] && fields+=("--field=$(wor_iot_option_label accountPassword):H" '') \
+      || fields+=("--field=$(wor_iot_option_label accountPassword):H" '@disabled@')
+    height=$((height+132))
+    language_setup="$(jq -r 'if .languageSetup then "TRUE" else "FALSE" end' <<<"$state")"
+    language="$(jq -r .language <<<"$state")"
+    language_label="$(jq -r --arg language "$language" '.languages[] | select((.value | ascii_downcase) == ($language | ascii_downcase)) | .label' <<<"$state")"
+    language_choices="$(jq -r --arg language "$language" \
+      '[.languages[] | select((.value | ascii_downcase) == ($language | ascii_downcase))] + [.languages[] | select((.value | ascii_downcase) != ($language | ascii_downcase))] | map(.label) | join("!")' <<<"$state")"
+    language_setup_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label languageSetup):CHK" "$language_setup")
+    language_field=$((${#fields[@]} / 2 + 1))
+    fields+=("--field=$(wor_iot_option_label language):CB" "$language_choices")
+    height=$((height+78))
+    scrolling=()
+    [ "$(wor_yad_height "$height")" -ge "$height" ] || scrolling=(--scroll)
+    refresh_file="$(mktemp)" || { warning "Could not create the IoT options refresh marker."; return 1; }
+    changed_action="if { [ \"\$1\" == 1 ] && [ \"\$2\" != $(printf '%q' "$selected_label") ]; } \
+      || { [ \"\$1\" == $hdmi_field ] && [ \"\$2\" != $(printf '%q' "$hdmi_label") ]; } \
+      || { [ \"\$1\" == $account_field ] && [ \"\$2\" != $(printf '%q' "$account_setup") ]; };then
+      printf 'refresh\n' > $(printf '%q' "$refresh_file")
+      kill -USR1 \"\$YAD_PID\"
+    fi"
+    response=0
+    options="$(yad "${yadflags[@]}" --response=0 --changed-action="$changed_action" \
+      --width="$(wor_yad_width 740)" --height="$(wor_yad_height "$height")" \
+      --title="$WOR_WINDOW_TITLE | IoT Core Advanced Options" --form "${scrolling[@]}" \
+      --text="$(wor_iot_option_label verification)
+
+$(wor_iot_option_label hdmiHelp)
+
+$(wor_iot_option_label accountHelp)
+Leave the new password blank to keep a value entered earlier in this dialog.
+
+$(wor_iot_option_label languageHelp)" "${fields[@]}" \
+      --button=Back:1 --button=Save:0)" || response=$?
+    refresh_requested=0
+    [ ! -s "$refresh_file" ] || refresh_requested=1
+    rm -f "$refresh_file"
+    if [ -n "$hdmi_edit_file" ];then
+      hdmi_config="$(cat "$hdmi_edit_file")" \
+        || { rm -f "$hdmi_edit_file"; warning "Cannot read the pending HDMI editor."; return 1; }
+      rm -f "$hdmi_edit_file"
+    fi
+    [ "$response" == 0 ] || return 0
+    mode="$(sed -n '1p' <<<"$options")"
+    case "$mode" in
+      "$official_label") mode=official ;;
+      "$(wor_iot_option_label local)") mode=local ;;
+      *) warning "Invalid IoT image-source selection. No preferences were changed."; return 1 ;;
+    esac
+    [ "$source_field" == 0 ] || source="$(sed -n "${source_field}p" <<<"$options")"
+    download_dir="$(sed -n "${folder_field}p" <<<"$options")"
+    dry_run="$(sed -n "${dryrun_field}p" <<<"$options")"
+    play_sound="$(sed -n "${play_field}p" <<<"$options")"
+    sound="$(sed -n "${sound_field}p" <<<"$options")"
+    notification="$(sed -n "${notification_field}p" <<<"$options")"
+    account_setup="$(sed -n "${account_field}p" <<<"$options")"
+    language_setup="$(sed -n "${language_setup_field}p" <<<"$options")"
+    language_label="$(sed -n "${language_field}p" <<<"$options")"
+    language="$(jq -er --arg label "$language_label" '.languages[] | select(.label == $label) | .value' <<<"$state")" \
+      || { warning "Invalid IoT language selection. No preferences were changed."; return 1; }
+    if [ "$(jq -r .accountSetup <<<"$state")" == true ];then
+      account_username="$(sed -n "${account_username_field}p" <<<"$options")"
+      settings="$(sed -n "${account_password_field}p" <<<"$options")"
+      [ -z "$settings" ] || account_password="$settings"
+    fi
+    [ "$account_setup" == TRUE ] || account_password=''
+    hdmi_label="$(sed -n "${hdmi_field}p" <<<"$options")"
+    hdmi_mode="$(jq -er --arg label "$hdmi_label" '.hdmi.choices[] | select(.menu_label == $label) | .value' <<<"$state")" \
+      || { warning "Invalid IoT HDMI mode. No preferences were changed."; return 1; }
+    if [ "$hdmi_mode" == custom ] && [ -z "$hdmi_config" ] && [ "$(jq -r .hdmiMode <<<"$state")" != custom ];then
+      hdmi_config="$(jq -r '.hdmiMode as $mode | .hdmi.choices[] | select(.value == $mode) | .settings' <<<"$state")"
+      [ -n "$hdmi_config" ] || hdmi_config="$(jq -r .hdmi.custom <<<"$state")"
+    fi
+    for settings in "$dry_run" "$play_sound" "$notification" "$account_setup" "$language_setup";do
+      case "$settings" in TRUE | FALSE) ;; *) warning "Invalid IoT checkbox value. No preferences were changed."; return 1 ;; esac
+    done
+    sound="$(jq -er --arg label "$sound" '.sounds[] | select(.label == $label) | .value' <<<"$state")" \
+      || { warning "Invalid IoT completion sound. No preferences were changed."; return 1; }
+    settings="$(WOR_IOT_ACCOUNT_PASSWORD="$account_password" jq -n --arg mode "$mode" --arg source "$source" --arg downloadDir "$download_dir" \
+      --arg dryRun "$dry_run" --arg playSound "$play_sound" --arg completionSound "$sound" --arg showNotification "$notification" \
+      --arg hdmiMode "$hdmi_mode" --arg hdmiConfig "$hdmi_config" \
+      --arg accountSetup "$account_setup" --arg accountUsername "$account_username" \
+      --arg languageSetup "$language_setup" --arg language "$language" \
+      '{mode: $mode, source: $source, downloadDir: $downloadDir, dryRun: ($dryRun == "TRUE"),
+        playSound: ($playSound == "TRUE"), completionSound: $completionSound, showNotification: ($showNotification == "TRUE"),
+        hdmiMode: $hdmiMode, hdmiConfig: $hdmiConfig, accountSetup: ($accountSetup == "TRUE"),
+        accountUsername: $accountUsername, accountPassword: env.WOR_IOT_ACCOUNT_PASSWORD,
+        languageSetup: ($languageSetup == "TRUE"), language: $language}')" || return 1
+    if [ "$refresh_requested" == 1 ] || [ "$mode" != "$(jq -r .mode <<<"$state")" ] \
+      || [ "$hdmi_mode" != "$(jq -r .hdmiMode <<<"$state")" ] \
+      || [ "$account_setup" != "$(jq -r 'if .accountSetup then "TRUE" else "FALSE" end' <<<"$state")" ];then
+      state="$(jq --argjson settings "$settings" '. + $settings' <<<"$state")" || return 1
+      continue
+    fi
+    saved=0
+    gui_iot_save_options "$settings" || saved=$?
+    [ "$saved" != 0 ] || return 0
+    [ "$saved" != 2 ] || return 0
+    state="$(jq --argjson settings "$settings" '. + $settings' <<<"$state")" || return 1
+  done
+}
+
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice privacy_guidance privacy_settings_url progress_file progress_jxa progress_status progress_diagnostics progress_failed resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning
+  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice privacy_guidance privacy_settings_url progress_file progress_jxa progress_status progress_diagnostics progress_failed resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning validation_status
 
   current_windows_ver='Windows 11'
   current_rpi_model=''
+  if is_iot_core;then
+    current_windows_ver='Windows 10 IoT Core (ARM32, legacy)'
+    [ -z "${WOR_TARGET_BOARD:-}" ] || current_rpi_model="$(rpi_board_label)"
+  fi
   step=target
   while true; do
     case "$step" in
       target)
         target_choice="$(macos_choose_target "$current_windows_ver" "$current_rpi_model")" || exit 0
         WINDOWS_VER="${target_choice%%$'\t'*}"
+        select_windows_family "$WINDOWS_VER" || error "Unrecognized Windows image family."
         select_rpi_board "${target_choice#*$'\t'}" || error "Unrecognized Raspberry Pi selection."
         current_windows_ver="$WINDOWS_VER"
         current_rpi_model="${target_choice#*$'\t'}"
-        list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
-        [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
-        [ -n "$BID" ] || error "No compatible Windows build is available for $(rpi_board_label)."
-        set_default_config_txt
-        [ -z "$WIN_LANG" ] && WIN_LANG="$(default_win_lang)"
+        if is_iot_core;then
+          CAN_INSTALL_ON_SAME_DRIVE=1
+          gui_iot_plan_source || error "Cannot read the reviewed IoT Core source settings."
+        else
+          list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
+          [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
+          [ -n "$BID" ] || error "No compatible Windows build is available for $(rpi_board_label)."
+          set_default_config_txt
+          [ -z "$WIN_LANG" ] && WIN_LANG="$(default_win_lang)"
+        fi
+        if is_iot_core && [ "$DRY_RUN" == 1 ];then
+          DEVICE=''
+          step=confirm
+          continue
+        fi
         step=device
         ;;
       language)
@@ -2226,12 +3135,24 @@ macos_start_cli() {
         fi
         [ "$device_choice" == __REFRESH__ ] && continue
         DEVICE="${device_choice%%$'\t'*}"
+        is_iot_core && iot_core_clear_target_approval
         is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE. Choose an external, physical, writable whole disk."
-        device_capability="$(drive_capability "$DEVICE")"
-        validate_install_mode "$device_capability"
+        if ! is_iot_core;then
+          device_capability="$(drive_capability "$DEVICE")"
+          validate_install_mode "$device_capability"
+        fi
         step=mode
         ;;
       mode)
+        if is_iot_core;then
+          CAN_INSTALL_ON_SAME_DRIVE=1
+          validation_status=0
+          gui_iot_validate_target || validation_status=$?
+          if [ "$validation_status" == 2 ];then step=device;continue;fi
+          [ "$validation_status" == 0 ] || exit 0
+          step=confirm
+          continue
+        fi
         if [ "$device_capability" == recovery ];then
           CAN_INSTALL_ON_SAME_DRIVE=0
         else
@@ -2250,10 +3171,14 @@ macos_start_cli() {
         [ "$confirmation" == Cancel ] && exit 0
         if [ "$confirmation" == Advanced ];then
           macos_advanced_options
+          if is_iot_core && [ "$DRY_RUN" != 1 ] && [ -z "$DEVICE" ];then step=device;fi
           continue
         fi
-        [ "$confirmation" == Flash ] && break
-        step=mode
+        if [ "$confirmation" == Flash ];then
+          is_iot_core && WOR_IOT_CONFIRM_ERASE=1
+          break
+        fi
+        if is_iot_core;then step=device;else step=mode;fi
         ;;
     esac
   done
@@ -2559,7 +3484,7 @@ function updateDiskAlertStatus() {
 function confirmAbort() {
   const alert = $.NSAlert.alloc.init
   alert.messageText = 'Stop flashing this drive?'
-  alert.informativeText = 'The drive will be left unusable and has to be flashed again before it can boot.'
+  alert.informativeText = 'Preparation will stop. If disk writing has begun, the drive may be incomplete and must not be booted.'
   alert.alertStyle = $.NSAlertStyleCritical
   alert.addButtonWithTitle('Stop flashing')
   alert.addButtonWithTitle('Keep going')
@@ -2840,7 +3765,7 @@ JXA
 
 $(windows_version_label) media was not completed.
 
-$DEVICE is now in an unusable state and has to be flashed again before it can boot.
+If disk writing had begun, $DEVICE may be incomplete. Do not boot an unverified image.
 
 Full log: $saved_log" '' '' "$saved_log"
       exit 1
@@ -2870,6 +3795,11 @@ Full log: $saved_log" '' '' "$saved_log"
     $(windows_version_label) media preparation is complete.
 
     It is now safe to remove your USB drive."
+      if is_iot_core;then
+        completion_text="Process completed successfully.
+
+$(iot_core_next_steps)"
+      fi
       [ -z "$disk_alert_warning" ] || completion_text="$completion_text"$'\n\n'"$disk_alert_warning"
       completion_text="$completion_text"$'\n\n'"Full log: $saved_log"
     else
@@ -2902,9 +3832,13 @@ Full log: $saved_log"
     fi
     completion_image=''
     [ "$installer_status" == 0 ] && completion_image="$WOR_ASSETS_DIR/next-steps.png"
+    is_iot_core && [ "$installer_status" == 0 ] && completion_image="$WOR_LOGO_PATH"
     #posted before the window opens, so it lands while the app is still in the background
     [ "$installer_status" == 0 ] && wor_show_result_notification success "$(windows_version_label)" || wor_show_result_notification failure "$(windows_version_label)"
     macos_show_result_dialog "$completion_text" "$completion_image" "$privacy_settings_url" "$saved_log" "$([ "${PLAY_SOUND:-1}" == 1 ] && wor_completion_sound)"
+    if [ "$installer_status" == 0 ] && is_iot_core && iot_core_personalization_requested && [ "$DRY_RUN" != 1 ];then
+      gui_iot_account_setup || exit 1
+    fi
     exit "$installer_status"
   done
 }
@@ -2912,7 +3846,7 @@ Full log: $saved_log"
 if is_macos ;then
   command -v osascript >/dev/null 2>&1 || error "Cannot present graphical interface: osascript is unavailable on this macOS host. Cannot continue."
   macos_check_accessibility || exit 0
-  setup || exit 1
+  setup gui || exit 1
   announcement_choice="$(macos_show_announcement)" || exit 0
   macos_start_cli
   exit $?
@@ -2937,7 +3871,7 @@ if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ];then
 fi
 
 #run safety checks and install packages
-setup || exit 1
+setup gui || exit 1
 
 if ! command -v yad >/dev/null 2>&1 ;then
   error "Cannot present graphical interface: 'yad' is missing and could not be installed. Cannot continue."
@@ -2999,6 +3933,57 @@ linux_choose_one() { #Input: newline choices, prompt, default, optional Back lab
   fi
 }
 
+linux_choose_target() { #Collects Windows and a compatible board on one screen, matching macOS.
+  local windows="${1:-Windows 11}" desktop_board="${2:-}" iot_board="${2:-}" family boards board windows_choices
+  local result response refresh_file refresh_requested changed_action previous_windows previous_family
+  local all_windows=$'Windows 11\nWindows 10\nWindows 10 IoT Core (ARM32, legacy)\nMore options'
+  while true;do
+    family=desktop
+    [ "$windows" != 'Windows 10 IoT Core (ARM32, legacy)' ] || family=iot-core
+    boards="$(wor_rpi_board_options "$family")"
+    [ "$family" == desktop ] && board="$desktop_board" || board="$iot_board"
+    if ! grep -qxF "$board" <<<"$boards";then board="$(head -n1 <<<"$boards")";fi
+    boards="$(printf '%s\n%s\n' "$board" "$boards" | awk 'NF && !seen[$0]++' | paste -sd '!' -)"
+    windows_choices="$(printf '%s\n%s\n' "$windows" "$all_windows" | awk 'NF && !seen[$0]++' | paste -sd '!' -)"
+    refresh_file="$(mktemp)" || { warning "Could not create the target-picker refresh marker."; return 1; }
+    previous_windows="$windows" previous_family="$family"
+    #Yad cannot replace a live combo catalog; refresh the same form and retain both families' choices.
+    changed_action="if [ \"\$1\" == 1 ] && [ \"\$2\" != $(printf '%q' "$windows") ];then
+      printf 'refresh\n' > $(printf '%q' "$refresh_file")
+      kill -USR1 \"\$YAD_PID\"
+    fi"
+    response=0
+    result="$(yad "${yadflags[@]}" --response=0 --changed-action="$changed_action" \
+      --width="$(wor_yad_width 680)" --height="$(wor_yad_height 320)" \
+      --text='<big><b>Choose Windows and Raspberry Pi target</b></big>
+Compatible board choices follow the selected Windows image. Download/import and verification start only after Flash.' \
+      --form --align=center --buttons-layout=center \
+      --field='Windows version:CB' "$windows_choices" \
+      --field='Raspberry Pi model:CB' "$boards" \
+      --button='<b>Cancel</b>':1 --button='<b>Next</b>':0)" || response=$?
+    refresh_requested=0
+    [ ! -s "$refresh_file" ] || refresh_requested=1
+    rm -f "$refresh_file"
+    [ "$response" == 0 ] || return 1
+    windows="$(sed -n '1p' <<<"$result")"
+    board="$(sed -n '2p' <<<"$result")"
+    if ! grep -qxF "$windows" <<<"$all_windows";then
+      warning "Unrecognized Windows image selection. No image was prepared."
+      return 1
+    fi
+    if grep -qxF "$board" <<<"$(wor_rpi_board_options "$previous_family")";then
+      [ "$previous_family" == desktop ] && desktop_board="$board" || iot_board="$board"
+    fi
+    if [ "$refresh_requested" == 1 ] || [ "$windows" != "$previous_windows" ];then continue;fi
+    if ! grep -qxF "$board" <<<"$(wor_rpi_board_options "$family")";then
+      warning "Choose a board supported by the selected Windows image. No image was prepared."
+      return 1
+    fi
+    printf '%s\t%s\n' "$windows" "$board"
+    return 0
+  done
+}
+
 ensure_linux_desktop_identity
 
 #this array stores flags that are used in all yad windows - saves on the typing and makes it easy to change an attribute on all dialogs from one place.
@@ -3024,19 +4009,22 @@ yad "${yadflags[@]}" --width="$(wor_yad_width 840)" --height="$(wor_yad_height 7
 { #choose destination RPi model and windows build ID
 RPI_MODEL=''
 BID=''
-target_choice="$(yad "${yadflags[@]}" --width="$(wor_yad_width 620)" --height="$(wor_yad_height 260)" \
-  --text='<big><b>Choose Windows and Raspberry Pi target</b></big>' \
-  --form --align=center --buttons-layout=center \
-  --field='Windows version:CB' 'Windows 11!Windows 10!More options' \
-  --field='Raspberry Pi model:CB' "$(wor_rpi_board_options | paste -sd '!' -)" \
-  --button='<b>Cancel</b>':1 --button='<b>Next</b>':0)"
-button=$?
-[ "$button" == 0 ] || exit 0
-WINDOWS_VER="$(printf '%s\n' "$target_choice" | sed -n '1p')"
-rpi_choice="$(printf '%s\n' "$target_choice" | sed -n '2p')"
+WINDOWS_VER='Windows 11'
+is_iot_core && WINDOWS_VER='Windows 10 IoT Core (ARM32, legacy)'
+target_choice="$(linux_choose_target "$WINDOWS_VER" "$(rpi_board_label)")" || exit 0
+WINDOWS_VER="${target_choice%%$'\t'*}"
+rpi_choice="${target_choice#*$'\t'}"
+select_windows_family "$WINDOWS_VER" || error "Unrecognized Windows image family."
 select_rpi_board "$rpi_choice" || error "Unrecognized Raspberry Pi selection."
 
 case "$WINDOWS_VER" in
+    'Windows 10 IoT Core (ARM32, legacy)')
+      CAN_INSTALL_ON_SAME_DRIVE=1
+      gui_iot_plan_source || error "Cannot read the reviewed IoT Core source settings."
+      if [ "$DRY_RUN" == 1 ];then
+        DEVICE=''
+      fi
+      ;;
     'Windows 11' | 'Windows 10')
       loading_dialog "Finding best $WINDOWS_VER image version..." &
       loader_pid=$!
@@ -3184,13 +4172,13 @@ RPI_MODEL: $RPI_MODEL"
 }
 
 { #choose language
-if [ -z "$WIN_LANG" ];then
+if ! is_iot_core && [ -z "$WIN_LANG" ];then
   WIN_LANG="$(default_win_lang)"
 fi
 echo "WIN_LANG: $WIN_LANG"
 }
 
-{ #choose device to flash
+linux_choose_flash_device() { #Collects a device using the shared enumeration and safety helpers.
 if [ -z "$DEVICE" ];then
   while [ -z "$DEVICE" ] || [ ! -b "$DEVICE" ];do
     IFS=$'\n'
@@ -3237,7 +4225,14 @@ is_safe_target_device "$DEVICE" || error "Refusing to overwrite $DEVICE, which i
 echo "DEVICE: $DEVICE"
 }
 
+if ! is_iot_core || [ "$DRY_RUN" != 1 ];then linux_choose_flash_device;fi
+
 { #choose installation mode from the detected drive capacity
+if ! is_iot_core || [ "$DRY_RUN" != 1 ];then
+if is_iot_core;then
+  iot_core_clear_target_approval
+  linux_iot_validate_selection || exit 0
+fi
 device_capability="$(drive_capability "$DEVICE")"
 validate_install_mode "$device_capability"
 
@@ -3264,11 +4259,12 @@ elif [ -z "$CAN_INSTALL_ON_SAME_DRIVE" ];then
   done
 fi
 echo "CAN_INSTALL_ON_SAME_DRIVE: $CAN_INSTALL_ON_SAME_DRIVE"
+fi
 }
 
 { #Offer to use ZRAM DL_DIR if appropriate
 #if a windows ESD file will be downloaded (no point in using ram if windows is already in DL_DIR), an ISO will not be used, and DL_DIR has not already been customized
-if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ ! -f "${DL_DIR}/winfiles_${BID}_${WIN_LANG}/alldone" ] && [ -z "$SOURCE_FILE" ] && [ "$DL_DIR" == "$HOME/wor-flasher-files" ];then
+if ! is_iot_core && [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ ! -f "${DL_DIR}/winfiles_${BID}_${WIN_LANG}/alldone" ] && [ -z "$SOURCE_FILE" ] && [ "$DL_DIR" == "$HOME/wor-flasher-files" ];then
   #if total usable RAM is >= 5GB
   if [ "$(awk '/MemTotal/ {print $2}' /proc/meminfo)" -ge $((5*1024*1024)) ];then
     #if kernel modules are available
@@ -3394,9 +4390,19 @@ To continue, click Flash. To review or change these settings, click Advanced. To
 
   if [ $button == 0 ];then
     #button: Flash
+    is_iot_core && WOR_IOT_CONFIRM_ERASE=1
     break
   elif [ $button == 2 ];then
     #button: Advanced options
+      if is_iot_core;then
+        linux_iot_options
+        if [ "$DRY_RUN" != 1 ] && [ -z "$DEVICE" ];then
+          linux_choose_flash_device
+          iot_core_clear_target_approval
+          linux_iot_validate_selection || exit 0
+        fi
+        continue
+      fi
 
     refresh_prompt=() #this variable is populated if the Advanced Options window is repeated, to let the user know why
     save_advanced_preferences
@@ -3500,9 +4506,9 @@ To continue, click Flash. To review or change these settings, click Advanced. To
         fields+=("--field=Play a sound when the flash finishes":CHK "$(wor_yad_bool "${PLAY_SOUND:-1}")")
         completion_sound_field=$((${#fields[@]} / 2 + 1))
         fields+=("--field=Completion sound":CB "$sound_items")
-        notification_field=$((${#fields[@]} / 2 + 1))
-        fields+=("--field=Show a notification when the flash finishes":CHK "$(wor_yad_bool "${SHOW_NOTIFICATION:-1}")")
       fi
+      notification_field=$((${#fields[@]} / 2 + 1))
+      fields+=("--field=Show a completion notification":CHK "$(wor_yad_bool "${SHOW_NOTIFICATION:-1}")")
       fields+=("--field=Windows account:LBL" '')
       account_checkbox_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Create an optional local Windows administrator account":CHK "$(wor_yad_bool "$WINDOWS_ACCOUNT_SETUP")")
@@ -3660,8 +4666,8 @@ To continue, click Flash. To review or change these settings, click Advanced. To
             sel_sound_label="$(yad_field_value "$completion_sound_field")"
             sel_sound="$(wor_sound_options | awk -F'\t' -v l="$sel_sound_label" '$2 == l {print $1; exit}')"
             [ -n "$sel_sound" ] && COMPLETION_SOUND="$sel_sound"
-            [ "$(yad_field_value "$notification_field")" == TRUE ] && SHOW_NOTIFICATION=1 || SHOW_NOTIFICATION=0
           fi
+          [ "$(yad_field_value "$notification_field")" == TRUE ] && SHOW_NOTIFICATION=1 || SHOW_NOTIFICATION=0
           #end of parsing check-box values for advanced options window
 
           if [ "$release_refresh_requested" == 1 ];then
@@ -3760,7 +4766,7 @@ if [ "$progress_aborted" == 1 ];then
   saved_log="$(gui_save_installer_log)"
   wor_play_result_sound failure
   wor_show_result_notification failure "$(windows_version_label)"
-  yad "${yadflags[@]}" --text="Flashing was stopped before it finished.\n\n$(windows_version_label) media was not completed.\n\n$DEVICE is now in an unusable state and has to be flashed again before it can boot.\n\nFull log: $saved_log"
+  yad "${yadflags[@]}" --text="Preparation or flashing was stopped before it finished.\n\n$(windows_version_label) media was not completed.\n\nIf disk writing had begun, $DEVICE may be incomplete. Do not boot an unverified image.\n\nFull log: $saved_log"
   exit 1
 fi
 
@@ -3783,10 +4789,17 @@ if [ "$exitcode" == 0 ];then
   #display "next steps" window
   linux_completion_image="$(wor_yad_image_for_screen "$WOR_ASSETS_DIR/next-steps.png" "$WOR_LOGO_PATH" 730 440)"
   linux_completion_text="$(windows_version_label) media preparation is complete."
+  if is_iot_core;then
+    linux_completion_image="$WOR_LOGO_PATH"
+    linux_completion_text="$(iot_core_next_steps)"
+  fi
   yad --center --width="$(wor_yad_width 690)" --height="$(wor_yad_height 380)" --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" \
     --text="$linux_completion_text" \
     --form --align=center --image-on-top --buttons-layout=center --image="$linux_completion_image" \
     --field="It is now safe to remove your USB drive.":LBL '' --button=Close:0 >/dev/null
+  if is_iot_core && iot_core_personalization_requested && [ "$DRY_RUN" != 1 ];then
+    gui_iot_account_setup || exit 1
+  fi
 else
   #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
   saved_log="$(gui_save_installer_log)"

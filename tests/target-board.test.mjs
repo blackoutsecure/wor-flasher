@@ -35,7 +35,9 @@ describe("Separate Raspberry Pi 2 v1.2 board entry", () => {
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.stdout.trim().split("\n"), [...choices, choices.join("!")]);
     assert.match(gui, /const piModels = ObjC\.unwrap\(args\.objectAtIndex\(9\)\)\.split/);
-    assert.match(gui, /--field='Raspberry Pi model:CB' "\$\(wor_rpi_board_options \| paste -sd '!' -\)"/);
+    assert.match(gui, /linux_choose_target\(\)/);
+    assert.match(gui, /--field='Raspberry Pi model:CB' "\$boards"/);
+    assert.match(gui, /boards="\$\(wor_rpi_board_options "\$family"\)"/);
     assert.doesNotMatch(gui, /Raspberry Pi 3 \/ Pi 2 v1\.2/);
   });
 

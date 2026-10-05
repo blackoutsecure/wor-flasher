@@ -22,6 +22,10 @@ Create a bootable Windows 10 or Windows 11 ARM64 drive for a Raspberry Pi from L
 
 WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and available drivers, writes the target drive, and verifies the finished result. It automates the manual process described in worproject's [How to install from other OSes](https://worproject.com/guides/how-to-install/from-other-os) guide.
 
+An additional, separate [Windows 10 IoT Core workflow](#windows-10-iot-core)
+applies supported legacy **ARM32 FFU** images to Pi 2 and Pi 3 Model B media.
+It does not turn IoT Core into desktop Windows or add an ARM64 IoT Core image.
+
 > [!WARNING]
 > Flashing erases the selected drive. Check the device carefully, keep the computer powered, and do not remove the drive until verification and ejection finish.
 
@@ -31,6 +35,8 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
 
 - [Table of contents](#table-of-contents)
   - [Compatibility](#compatibility)
+  - [Windows 10 IoT Core](#windows-10-iot-core)
+    - [Recommended IoT Core workflow](#recommended-iot-core-workflow)
   - [Requirements](#requirements)
   - [Install](#install)
   - [Pi-Apps](#pi-apps)
@@ -78,10 +84,272 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
 
 Pi 3 and Pi 4 cannot run builds newer than `25163`, because those builds require ARMv8.1 atomics. WoR-Flasher rejects incompatible builds. Windows versions that run on these models are past end of support and should be treated as experimental or offline systems.
 
-Both GUIs list **Raspberry Pi 2 v1.2** separately from **Raspberry Pi 3**. Pi 2
-v1.2 still uses `RPI_MODEL=3` for firmware, drivers, boot configuration and image
-compatibility; summaries retain the board you selected. Earlier Pi 2 revisions
-are not supported by this ARM64 desktop route.
+The graphical board picker lists **Raspberry Pi 2 v1.2** separately from
+**Raspberry Pi 3**. Pi 2 v1.2 keeps the existing Pi 3-compatible firmware, driver
+and boot-preparation route (`RPI_MODEL=3`), while the overview and installer log
+identify the selected board as Pi 2 v1.2. This desktop ARM64 route does not
+support earlier Pi 2 revisions; Pi 2 v1.1 uses the separate IoT Core route below.
+
+## Windows 10 IoT Core
+
+> [!IMPORTANT]
+> Raspberry Pi's historical Windows 10 IoT Core images are **ARM32**, including
+> when running on Pi 2 v1.2 or Pi 3's ARM64-capable processors. This is different
+> from Windows 10/11 desktop ARM64 and from Windows IoT Enterprise.
+> ARM64 IoT Core, arbitrary ARM32 desktop images and the Pi 3B+ technical preview
+> are not accepted by this profile.
+
+| Workflow | Target architecture | Boards in this workflow | Accepted input |
+| --- | --- | --- | --- |
+| Existing Windows 10/11 desktop | ARM64 | Existing compatibility table above | Desktop ARM64 ISO import or the existing ESD download route |
+| Windows 10 IoT Core (legacy) | ARM32 | Pi 2 v1.1, Pi 2 v1.2, Pi 3 **Model B** | Reviewed local `.ffu`, `.iso` or `.msi`, or an explicitly requested official download |
+
+The IoT workflow is experimental at the **deployment-tool** level: the historical
+OS/board support is documented, but a real hardware boot is not certified by the
+offline tests. Pi 3B+, Pi 3A+, Pi 4/400, Pi 5 and unqualified Compute Module
+images are deliberately excluded rather than routed through a guessed firmware.
+
+The FFU is the entire image: firmware, drivers and partition layout. WoR-Flasher
+does not install WoR-PE, download ARM64 drivers, replace the firmware configuration, add desktop
+answer files, apply Pi 4 RAM settings, or offer recovery-drive mode for it.
+Advanced Options defaults to the recommended 720p/60 Hz display-only HDMI
+override. Choose **Official image default** to preserve the original boot
+configuration, or select an explicit preset/custom preference. The source FFU
+stays unchanged and allowlisted.
+Hash validation and read-back verification are mandatory. Arbitrary FFUs,
+compressed/delta/multi-store variants, phone images and raw `.img` files are not
+accepted; supported images are identified by the packaged
+[IoT Core image manifest](src/config/iot-core-images.json), not the filename.
+
+The initial allowlist contains the official **17763.107** Raspberry Pi FFU,
+SHA-256 `15e9451eb7b3e5645e89e25ffc846d4dfd4b4a8c9c63600e177cb16817da67f5`.
+This is a legacy October 2018 maker image, not the newest servicing release.
+Only this exact image is accepted initially; adding another requires reviewed
+provenance and format/geometry validation, not a user override.
+
+Native acquisition verifies the ISO/MSI package **before** invoking archive
+tools, then checks the extracted FFU against the same allowlist and chunk
+hashes used for direct FFU import. It never executes MSI or Windows code.
+Downloads require HTTPS and the reviewed Microsoft source. Cache reuse is
+verified; desktop `USE_CACHE=2` and `VERIFY_TLS=0` cannot bypass these checks.
+
+Its fixed MBR/EBR image layout is preserved. **GPT cards can be reused through
+the normal confirmed Flash process.** After the complete FFU has passed its
+mandatory hash/format checks, the writer rechecks the bound target and validates
+both GPT headers, partition tables, CRCs and bounds. It then clears only the
+validated old MBR/GPT metadata, flushes and verifies that cleanup, and applies
+the FFU. Old GPT regions outside the FFU's final writes must remain cleared
+during final read-back. **This erases the existing installation**; selection,
+review, Advanced Options and dry run never perform cleanup.
+
+Malformed, orphaned, inconsistent or oversized GPT metadata fails before cleanup,
+rather than trusting unvalidated sector pointers. Direct helper invocations still
+refuse GPT unless `--allow-gpt-cleanup` is explicitly supplied together with the
+verified image digest and confirmed target identity; the normal Flash workflow
+supplies these only after erase confirmation. Cleanup is not a secure erase or
+GPT repair. Larger targets up to 2 TiB are supported, but additional capacity is
+left unused; the Windows partitions are not expanded.
+
+If selecting a card is rejected, the GUI shows the specific layout, capacity,
+sector-size or device-safety reason and offers **Choose another drive** instead
+of only `Cannot use this target for IoT Core`. A card from a desktop WoR
+installation normally uses GPT; that does not mean Pi 2 v1.1 is unsupported.
+Valid GPT can now be replaced automatically after Flash and full source
+verification; changing the partition scheme destroys the existing Windows
+installation. Corrupt or unsupported metadata still requires deliberate recovery
+or a separate suitable card. Selection/retry does not format the card or start
+image preparation.
+
+IoT Core offers a UWP/kiosk interface, native ARM console tools and services,
+**not Explorer or built-in desktop x86 emulation**. Use these archived maker
+images on an isolated development network. Their availability does not mean
+they are current or commercially licensed LTSC images.
+
+### Recommended IoT Core workflow
+
+1. **Identify the exact board revision.** Use Pi 2 v1.1/v1.2 or Pi 3 Model B;
+   a Pi 3B+ is a different image target.
+2. **Select IoT Core, choose the board and drive, then review settings.**
+   Both GUIs select Windows and its compatible Raspberry Pi board on the same
+   screen. Switching the Windows image updates the board choices; IoT Core
+   does not open an additional board or source-selection screen.
+   There is no separate download-versus-local source screen. The reviewed
+   **official Microsoft Windows 10 IoT Core image** is selected by default,
+   but **no image is downloaded, imported or extracted until you click Flash**.
+   This is the ARM32 IoT Core maker image, not desktop Windows 10 or IoT
+   Enterprise. Review uses only the digest-checked bundled profile for the
+   expected build and capacity; it shows source verification as **Not Assessed**.
+   The selected device identity and safe cache/log storage are checked without
+   opening the drive for writing.
+   Optional local Raspberry Pi ISO/MSI/FFU imports are in **Advanced Options**
+   on the review screen. An explicitly configured local source is still
+   respected and verified without downloading.
+   Microsoft license terms apply. The historical
+   [Microsoft download link](https://go.microsoft.com/fwlink/?LinkId=846058)
+   resolves to a legacy release, not the latest servicing level.
+3. **Keep the source, cache, installer and logs on another drive.** WoR-Flasher
+   refuses to erase disks containing its active image, running scripts or log.
+   Native extraction requires only Python and `cabextract`; no Windows
+   technician PC is needed. The reviewed cabinet is reconstructed with bounded
+   reads and verified before extraction. The ISO is a delivery package,
+   **not** a desktop installation ISO.
+4. **Inspect without selecting or writing any disk**:
+
+   ```bash
+   WOR_TARGET_BOARD=pi2-v1.1 \
+     SOURCE_FILE="/path/to/flash.ffu" DRY_RUN=1 \
+     ./install-wor.sh --iot-core
+   ```
+
+     Or explicitly download, import and inspect the reviewed package:
+
+     ```bash
+     WOR_TARGET_BOARD=pi2-v1.1 DRY_RUN=1 ./install-wor.sh --iot-core-download
+     ```
+
+     A local ISO/MSI can replace the FFU path in the first command. Do not
+     combine a local `SOURCE_FILE` with a download request.
+     Other accepted board IDs are `pi2-v1.2` and `pi3-b`. An unsupported image or
+     architecture fails before any drive is opened for writing. Python 3 and `jq`
+     must be available; package extraction also requires `cabextract`.
+     Local imports need no network. A GUI launched with `DRY_RUN=1` can review
+     settings without selecting a disk, then click Flash to start inspection
+     only; no drive is written.
+     Imported/downloaded FFUs are cached under `DL_DIR/iot-core` (by default
+     `~/wor-flasher-files/iot-core`), outside the installer runtime. Allow about
+     3 GB of temporary free space for the reviewed wrapper, cabinet and FFU.
+5. **Use the GUI for the actual flash**: choose **Windows 10 IoT Core (ARM32,
+   legacy)**, the exact board and the validated FFU, then select the microSD
+   card's safe whole-disk device and review the erase warning. Use a reliable
+   16 GB microSD card; an existing validated GPT layout is replaced only after
+   confirmed Flash. The actual minimum capacity check comes from the FFU.
+   This legacy image requires 512-byte logical sectors; 4Kn targets are rejected.
+   IoT Advanced Options marks **Official Microsoft Image** with a
+   **Recommended** badge. The custom-file row is hidden until **Custom Image**
+   is selected; it accepts the same reviewed official FFU/ISO/MSI, not
+   arbitrary or unverified images. Options can change the image source,
+   download folder, inspection-only mode,
+   completion sound and completion notification. Changing the source or cache
+   folder queues that change without acquiring image data; Back keeps the
+   previous settings. Desktop OOBE/account/locale options, ARM64 firmware and
+   drivers, the full desktop `config.txt` editor and recovery mode are not shown. Package/FFU integrity,
+   board compatibility and written-image read-back cannot be disabled; desktop
+   trust-cache and skip-verification options do not apply.
+   The selected download root is shared with desktop Windows 10/11 (`DL_DIR`,
+   normally `~/wor-flasher-files`), including in the review screen. Each
+   image keeps its own cache files/subfolder underneath that root; IoT FFUs
+   remain in `DL_DIR/iot-core` so existing verified caches are preserved.
+   **Show a completion notification** is available for every image family
+   in both GUIs, independently of completion sounds.
+   **HDMI display** defaults to **1280 x 720 / 60 Hz (compatibility)**,
+   marked **Recommended** (green beside the dropdown on macOS).
+   On **2026-10-05**, the user reported that this preset resolved the monitor's
+   "out of range" issue. This is display-specific feedback, not certification
+   of every monitor or complete IoT boot route. **Official image default**
+   preserves the original timing, and a 1080p/60 Hz preset is also available.
+   Explicit JSON/environment or saved Advanced Options selections are preserved.
+   **Change IoT administrator after first boot** is an optional account step,
+   disabled by default. Enable it to enter the desired administrator username
+   and a new password (12-127 characters) in the masked password field.
+   Keeping the username `Administrator` changes only its password; a different
+   username renames that same built-in administrator, preserving its SID and
+   privileges. `DefaultAccount` and other service accounts are not modified.
+   The password is not included in summaries, logs or native process arguments.
+   Back discards pending edits; disabling this option clears its stored password.
+   **IoT language** is selected automatically using the same host-language
+   detection and language catalog as desktop Windows 10/11 (`en-US` is the
+   fallback). Change it in Advanced Options; explicit selections are preserved.
+   **Apply IoT language after first boot** defaults on and can be disabled to
+   leave the image's language unchanged. Language changes do not replace or
+   download the FFU or any language pack.
+   This is **not** the desktop unattended-setup path and does not patch the FFU
+   account database. Offline IoT provisioning requires Microsoft's Windows
+   ADK/Configuration Designer tools; the Mac/Linux workflow uses supported
+   post-boot SSH administration instead.
+   **Custom video settings** reveals **View / Edit config.txt (video only)**.
+   It uses the same multiline text editor as the Windows 10/11 boot settings,
+   with 720p defaults, Save/Cancel and a reset control. These are video key/value
+   lines merged into the image's original boot configuration, not a replacement
+   for the entire file; required IoT boot, memory and framebuffer entries stay
+   protected. The editor accepts only
+   `hdmi_group` and `hdmi_mode`, optionally `hdmi_force_hotplug` and `hdmi_drive`;
+   other firmware keys, conditional filters and custom modelines are rejected.
+   Save/Back is transactional, and editing these preferences does not download
+   an image or change an already-flashed card. The configured boot file is
+   checked before authentication, written through the same FFU/sudo path and
+   included in mandatory read-back. No new clusters, filesystem resizing,
+   driver changes or verified-cache modifications are involved.
+   These are firmware timings, not a guarantee that the Windows IoT display
+   driver will keep that mode. Use a display-supported mode; if Windows is
+   network reachable, `SetDisplayResolution` and `SetDisplayResolution -list`
+   on the Pi can identify its current and supported Windows display modes.
+   The device identity and capacity are checked again after authentication,
+   and the writer must open the same device node that was approved.
+6. **Click Flash to prepare, verify and write.** The normal installer progress
+   window shows download/cache reuse, extraction and complete FFU validation.
+   Cancellation or any verification failure prevents writing. The drive
+   identity is checked again after preparation and administrator approval;
+   writing starts only after all source and target checks succeed. A previously
+   prepared cache is fully verified, never silently trusted. Written-image
+   read-back and safe ejection must finish before removing the card.
+   Requested language and administrator setup remain **Pending** at this point.
+   After the media result, move the card to the Pi, boot it on an isolated local
+   network, enter its local address and **current IoT** credentials, then confirm
+   the SSH fingerprint belongs to your Pi. This password is not the Mac's sudo
+   password. The app pins that identity and queries the installed UI languages
+   using Microsoft's `IoTSettings` under the existing `DefaultAccount` session,
+   as required by Microsoft. A temporary least-privilege task runs the command
+   in that user context and is removed afterward. Unsupported/missing languages
+   fail explicitly before any administrator changes; no language pack is guessed
+   or downloaded. A matching read-back reports the language verified; an accepted
+   change that is not yet active reports **pending-reboot**, requiring a Pi
+   restart and confirmation instead of declaring success.
+   If administrator changes were requested, the same connection then updates the
+   built-in administrator and reconnects with the new credentials to verify the
+   username and SID. Language-only setup never changes the account password.
+   Skip, connection failures, partial changes and failed verification are reported
+   separately from successful flashing; they never imply a configured account
+   or active language.
+   If an update fails after changing the password or name, check the old/new login
+   before retrying. New credentials are held only for that GUI run and cleared
+   after the account step.
+   JSON exposes `userAccount.iotCore.languageSetup` and
+   `userAccount.iotCore.language`; environment equivalents are
+   `IOT_CORE_LANGUAGE_SETUP` and `IOT_CORE_LANGUAGE`. The selected language is
+   shown in the review summary and passed to the shared personalization step.
+   Progress, Abort, logging and completion use the same GUI surfaces as
+   desktop Windows. The completion instructions describe the selected image;
+   IoT Core uses the product logo instead of the desktop WoR-PE illustration.
+   Insert the microSD into the
+   selected Pi, connect HDMI and wired Ethernet, then power on. Expect the IoT
+   default app, not desktop Windows Setup. Configure credentials and deploy an
+   appropriate UWP app/service using the IoT tooling.
+
+For JSON automation, start with [the inspection-only example](config-templates/iot-core.json):
+
+```bash
+./install-wor.sh --config /path/to/iot-core.json
+```
+
+Set `target.board` and either `media.sourceFile` or
+`media.downloadIotImage: true` with an empty source path. Only after reviewing the target,
+set `target.device`, `execution.dryRun: false`, and
+`execution.confirmIotErase: true` for unattended writing. The hook uses the
+same engine and configuration:
+
+```bash
+./install-wor-hook.sh --config /path/to/iot-core.json run
+```
+
+The explicit erase consent is separate from a GUI/CLI mode flag. It cannot
+disable validation or verification. `RPI_MODEL`, desktop build/language
+selection and desktop customization are not an alternate route to an IoT image.
+CLI IoT runs keep a private timestamped log and refresh `last-run.log`.
+An explicitly chosen `WOR_LOG_FILE` must be new; existing logs are never
+silently overwritten. Preparation failures in the GUI also preserve their log.
+
+For the source, driver, architecture and historical limitations behind these
+choices, see the [ARM32 investigation](docs/research/pi2-v1.1-arm32-windows.md).
 
 ## Requirements
 
@@ -323,6 +591,22 @@ Windows packaging is intentionally only a placeholder today. A Windows UI should
 
 ## Parameters
 
+IoT Core adds `WOR_IMAGE_FAMILY=iot-core` (or `--iot-core`),
+`WOR_TARGET_BOARD=pi2-v1.1|pi2-v1.2|pi3-b`, and a local FFU in `SOURCE_FILE`.
+The reviewed ISO/MSI packages are also accepted. Use `WOR_IOT_DOWNLOAD=1`
+with `SOURCE_FILE` empty, or `--iot-core-download`, for an explicit download.
+IoT-only `IOT_CORE_HDMI_MODE` defaults to recommended `720p60`; `official`,
+`1080p60` and `custom` remain explicit choices. The normal workflow forwards this
+selection to the FFU helper; direct low-level helper calls remain unmodified
+unless `--hdmi-mode` is supplied. `IOT_CORE_HDMI_CONFIG` is at most 512 ASCII characters
+of display-only key/value lines for `custom`, requiring `hdmi_group=1` (CEA) or
+`2` (DMT) and a legacy `hdmi_mode`. JSON uses
+`customization.iotHdmiMode` and `customization.iotHdmiConfig`.
+`WOR_IMAGE_ARCH=arm32` is an optional assertion; ARM64 is rejected for IoT.
+`DRY_RUN=1` inspects only, without a target. Non-interactive writes additionally
+require `WOR_IOT_CONFIRM_ERASE=1`. The existing desktop defaults below remain
+unchanged; the IoT image supplies its own firmware, drivers and layout.
+
 Every prompt has a matching environment variable.
 
 | Variable                    | Default                                    | Function                                                                                                                |
@@ -388,8 +672,8 @@ image-deployment memory pressure in WoR-PE on these 1 GB boards.
 This check covers downloaded images, imported ISO images, existing extracted
 caches, and resumed password retries, in both self-installation and recovery-media
 modes. It also runs during `DRY_RUN=1` preparation and with `USE_CACHE=2`: trusting
-downloaded files does not bypass the required image format. Pi 4/5 do not perform
-this conversion.
+downloaded files does not bypass the required image format. Pi 4/5 and the
+separate IoT Core FFU workflow do not perform this conversion.
 
 All Windows editions and their metadata are preserved. Conversion writes to
 temporary storage next to the cached image; the original is replaced only after
@@ -661,7 +945,7 @@ On macOS, every finished GUI attempt keeps its full log under `$DL_DIR/logs/` wi
 
 Closing the progress window does not prove the flash succeeded. The macOS result screen uses the installer exit status and shows **Complete** only for success; errors and interruptions get a failure message instead. If the custom result window fails, its diagnostics are saved and a plain native dialog displays the same result. If both dialog mechanisms fail, the app attempts to open the saved log in a text editor. Successful-attempt logs are retained too, including the installer exit status and result-dialog diagnostics, so a missing popup no longer removes the evidence.
 
-Canceling the macOS administrator password dialog before writing shows **Administrator password entry was canceled**, not an unexpected-crash message. The retry screen confirms that this attempt has not changed the target and that prepared downloads are kept. **Try Again** resumes at the password step; **Close** exits without flashing. Empty or incorrect password entries have their own concise explanations. Raw `sudo`/AppleScript diagnostics remain in the saved log, not in this dialog. If writing has already started or its state cannot be confirmed, the normal error details are shown instead of claiming no changes were made.
+Canceling the macOS administrator password dialog before writing shows **Administrator password entry was canceled**, not an unexpected-crash message. Windows 10, Windows 11 and IoT Core use the same deferred authentication and **Try Again**/**Close** recovery flow. The retry screen confirms that this attempt has not changed the target and that prepared downloads are kept. **Try Again** rechecks the prepared media and target before returning to the password step; IoT Core revalidates its reviewed image from the cache without downloading it again when that cache remains valid. **Close** exits without flashing. Empty or incorrect password entries have their own concise explanations. Raw `sudo`/AppleScript diagnostics remain in the saved log, not in this dialog. If writing has already started or its state cannot be confirmed, the normal error details are shown instead of claiming no changes were made.
 
 Each macOS GUI attempt accepts one password submission. If it is rejected, WoR-Flasher returns to **Try Again** instead of letting `sudo` reopen another password dialog behind the progress window. Retrying creates fresh prompt state and keeps prepared downloads. Once authorization succeeds, the log records **Administrator access granted** and progress changes to **Preparing the target disk...**, rather than continuing to display a password wait during partitioning.
 
@@ -673,7 +957,7 @@ The same worker applies a geometry-driven Pi 3 GPT bootstrap before written-imag
 
 The shared `src/lib/pi3-hybrid-mbr.py` helper (historical filename retained for launcher compatibility) follows the [upstream WoR FAT bootstrap approach](https://worproject.com/guides/how-to-install/from-other-os) without copying its fixed-geometry patch. It validates the GPT checksums and actual FAT32 layout, keeps a single protective `0xEE` MBR entry, and derives a sector-0 FAT header whose reserved-sector count and metadata offsets reach the existing boot files. Only sector 0 is written; the GPT, real FAT boot sector, allocation tables and files are unchanged. Unsupported geometry fails explicitly before that write, including non-512-byte FAT sectors and a partition offset plus FAT reserved area exceeding 65535 sectors. The helper reads back its write; the macOS worker also runs its read-only `--check` after the final partition updates. Pi 4 and Pi 5 do not use this bootstrap.
 
-WoR-PE later recreates the installed boot partition (normally 128 MiB), so the installer-media bootstrap must be refreshed again **on the Pi, before the first installed-Windows reboot**. Pi 3 desktop media now always carries `Pi3BootRefresh.exe` in WoR-PE's pre-finalization hook, independently of Windows 10/11, self-install/recovery mode, cache mode, and optional account, locale or OOBE settings. The helper uses WoR's selected target disk and both destination-volume extents, not a hardcoded disk number or the recovery-media drive. Pi 2 v1.2 uses this same Pi 3-compatible desktop route; Pi 4 and Pi 5 do not use it.
+WoR-PE later recreates the installed boot partition (normally 128 MiB), so the installer-media bootstrap must be refreshed again **on the Pi, before the first installed-Windows reboot**. Pi 3 desktop media now always carries `Pi3BootRefresh.exe` in WoR-PE's pre-finalization hook, independently of Windows 10/11, self-install/recovery mode, cache mode, and optional account, locale or OOBE settings. The helper uses WoR's selected target disk and both destination-volume extents, not a hardcoded disk number or the recovery-media drive. Pi 2 v1.2 uses this same Pi 3-compatible desktop route; Pi 4, Pi 5 and IoT Core do not use it.
 
 The native ARM64 helper works offline in stock Windows PE, without Python, PowerShell or an added interpreter. It validates the actual disk, GPT checksums, partition bounds and FAT32 geometry, saves the original 512-byte sector in `<installed Windows>\Windows\Logs\WoR-Flasher\pi3-sector0-before-*.bin`, writes only sector 0, flushes and verifies its read-back, and verifies that the inspected GPT/FAT metadata is unchanged. An already-correct bootstrap needs no write. A missing helper, invalid target, backup failure or verification failure aborts WoR-PE finalization instead of reporting a bootable installation. Optional answer-file and Pi 4 customization failures remain non-fatal.
 
@@ -797,6 +1081,26 @@ The Linux wrapper installs its test dependencies, including Python for answer-fi
 On a non-Linux host the run prints three summaries — the Docker container's nested run, the integration wrapper, then the host's own run. All three must report `failed 0`.
 
 CI runs ShellCheck plus the suite on Ubuntu and macOS, and a one-model dry-run integration pass. See [CONTRIBUTING.md](CONTRIBUTING.md) for house style and for the traps that have already caught us.
+
+IoT coverage includes FFU format/integrity tests, verified-package acquisition,
+GUI cancellation, target/source-disk protection and guard-removal mutation
+checks. The Linux CI integration job additionally applies a synthetic
+non-Windows image to a freshly created loop device and performs real
+read-back/cache-flush checks. This opt-in native test is never a physical-media
+test; on other hosts it is explicitly skipped:
+
+```bash
+python3 -B tests/test-iot-ffu.py
+python3 -B tests/test-iot-media.py
+# Only inside an isolated Linux test runner with losetup:
+sudo env WOR_TEST_NATIVE_LOOP=1 python3 -B tests/test-iot-ffu.py NativeLinuxDeviceTests
+```
+
+Physical board qualification remains separate: record the board revision/SoC,
+image hash, cold/warm boot, serial logs, storage, display, USB, Ethernet and
+shutdown/reboot results before claiming hardware-validated support. Firmware
+rebuilds, desktop ARM32 ports and additional image/board combinations are not
+enabled by passing the software tests.
 
 Pushing a new semantic version tag matching `product.version` in
 [`src/config/metadata.json`](src/config/metadata.json) publishes a GitHub Release after those checks pass.

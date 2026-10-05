@@ -15,13 +15,15 @@ const functions = ["gui_start_installer", "gui_update_last_log", "gui_save_insta
 }).join("\n");
 
 describe("macOS GUI failed-then-successful password retry", () => {
-  for (const first of ["rejected", "canceled", "empty"]) {
-    it(`recovers from ${first} input with one fresh prompt and advances progress`, () => {
+  for (const [family, first] of ["desktop", "iot-core"].flatMap((family) =>
+    ["rejected", "canceled", "empty"].map((first) => [family, first]))) {
+    it(`recovers ${family} from ${first} input with one fresh prompt and advances progress`, () => {
       const directory = mkdtempSync(join(tmpdir(), "wor-password-retry-"));
       try {
         for (const path of ["bin", "tmp", "windows/bootpart", "peinstaller/winpe/2", "peinstaller/efi"]) {
           mkdirSync(join(directory, path), { recursive: true });
         }
+        writeFileSync(join(directory, "prepared.ffu"), "Cached image fixture; never written to a disk.\n");
         writeFileSync(join(directory, "gui-functions.sh"), functions);
         writeFileSync(join(directory, "bin/mktemp"), `#!/bin/bash
 #macOS mktemp without a template can prefer its system temp directory over TMPDIR.
@@ -88,7 +90,7 @@ exit 124
         writeFileSync(join(directory, "bin/sgdisk"), '#!/bin/bash\nprintf "Unexpected disk command\\n" >&2\nexit 99\n', { mode: 0o755 });
         writeFileSync(join(directory, "installer.sh"), `#!/bin/bash
 source "$WOR_TEST_ROOT/install-wor.sh" source >/dev/null
-HOST_OS=Darwin RUN_MODE=gui DEVICE=/dev/mock-target RPI_MODEL=4 CAN_INSTALL_ON_SAME_DRIVE=1
+HOST_OS=Darwin RUN_MODE=gui DEVICE=/dev/mock-target RPI_MODEL=4 CAN_INSTALL_ON_SAME_DRIVE=1 IOT_CORE_HDMI_MODE=official
 winfiles=windows STEP_NUM=4 STEP_TOTAL=8 MACOS_ASKPASS=''
 WOR_METADATA_FILE="$WOR_TEST_DIR/metadata.sh"
 export WOR_METADATA_FILE
@@ -99,12 +101,39 @@ darwin_prepare_disk_or_die() {
   darwin_finalize_partition_types_or_die
   exit 0
 }
-darwin_flash_device
+if [ "$WOR_TEST_FAMILY" == iot-core ];then
+  WOR_IMAGE_FAMILY=iot-core WOR_TARGET_BOARD=pi2-v1.1 RPI_MODEL=2
+  WOR_IOT_DOWNLOAD=1 WOR_IOT_CONFIRM_ERASE=1 SOURCE_FILE=''
+  require_macos_tools() { :; }
+  detect_root_dev() { ROOT_DEV=/dev/mock-host; }
+  iot_core_validate_device() {
+    [ "$IOT_CORE_TARGET_ID" == fixture-binding ] && [ "$IOT_CORE_TARGET_BYTES" == 16000000000 ] \
+      && [ "$IOT_CORE_TARGET_LAYOUT" == GPT ] || return 98
+    printf '%s\\n' "\${1:-verified}" >> "$WOR_TEST_DIR/target-checks"
+  }
+  iot_core_inspect_source() {
+    [ -f "$WOR_TEST_DIR/prepared.ffu" ] || return 98
+    SOURCE_FILE="$WOR_TEST_DIR/prepared.ffu"
+    printf 'inspect-cached-image\\n' >> "$WOR_TEST_DIR/inspections"
+  }
+  diskutil() {
+    case "$1" in unmountDisk|eject) printf '%s\\n' "$1" >> "$WOR_TEST_DIR/disk-operations";; *) return 99;; esac
+  }
+  iot_core_apply() {
+    command sudo -n -v || return 98
+    printf 'prepared\\n' >> "$WOR_TEST_DIR/prepared"
+  }
+  iot_core_run
+else
+  darwin_flash_device
+fi
 `, { mode: 0o755 });
         const result = spawnSync("bash", ["-c", `
           source "$WOR_TEST_ROOT/install-wor.sh" source >/dev/null
           source "$WOR_TEST_DIR/gui-functions.sh"
           HOST_OS=Darwin RUN_MODE=gui DEVICE=/dev/mock-target GUI_PROGRESS_EARLY=1
+          WOR_IMAGE_FAMILY="$WOR_TEST_FAMILY"
+          IOT_CORE_TARGET_ID=fixture-binding IOT_CORE_TARGET_BYTES=16000000000 IOT_CORE_TARGET_LAYOUT=GPT
           DL_DIR="$WOR_TEST_DIR/downloads" WOR_ICON_PATH=mock-icon
           cli_script="$WOR_TEST_DIR/installer.sh"
           gui_start_disk_alert_handler() { disk_alert_pid=''; }
@@ -130,7 +159,7 @@ darwin_flash_device
           cwd: directory, encoding: "utf8", timeout: 20000,
           env: {
             ...process.env, NO_UPDATE: "1", DIRECTORY: root, WOR_TEST_ROOT: root,
-            WOR_TEST_DIR: directory, WOR_TEST_PASSWORD: first, TMPDIR: join(directory, "tmp"),
+            WOR_TEST_DIR: directory, WOR_TEST_PASSWORD: first, WOR_TEST_FAMILY: family, TMPDIR: join(directory, "tmp"),
             PATH: `${directory}/bin:${process.env.PATH}`,
           },
         });
@@ -143,8 +172,19 @@ darwin_flash_device
         assert.doesNotMatch(firstProgress, /^DISK_WRITE\t1\t/m);
         const secondProgress = readFileSync(join(directory, "second-progress"), "utf8");
         assert.match(secondProgress, /^DISK_WRITE\t1\t/m);
-        assert.equal(secondProgress.split("\n").filter((line) => line.startsWith("TASK\t")).at(-1),
-          "TASK\t0\tPreparing the target disk...");
+        const preparing = secondProgress.indexOf("TASK\t0\tPreparing the target disk...");
+        assert.ok(preparing > secondProgress.indexOf("TASK\t0\tWaiting for administrator access..."));
+        if (family === "desktop") {
+          assert.equal(secondProgress.split("\n").filter((line) => line.startsWith("TASK\t")).at(-1),
+            "TASK\t0\tPreparing the target disk...");
+        } else {
+          assert.ok(secondProgress.indexOf("STEP\t2\t3\tApplying and verifying Windows 10 IoT Core") > preparing);
+          assert.equal(readFileSync(join(directory, "inspections"), "utf8"), "inspect-cached-image\n".repeat(2));
+          assert.equal(readFileSync(join(directory, "disk-operations"), "utf8"), "unmountDisk\neject\n");
+          assert.equal(readFileSync(join(directory, "target-checks"), "utf8"),
+            "preview\nverified\npreview\nverified\nverified\n");
+          assert.equal(readFileSync(join(directory, "prepared.ffu"), "utf8"), "Cached image fixture; never written to a disk.\n");
+        }
         const states = readFileSync(join(directory, "states"), "utf8").trim().split("\n");
         assert.equal(states.length, 2);
         assert.notEqual(states[0], states[1]);

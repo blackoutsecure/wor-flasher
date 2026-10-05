@@ -15,7 +15,7 @@ const engine = readFileSync(join(root, "install-wor.sh"), "utf8");
 const original = "original cached installation image\n";
 
 function fixture({
-  model = 3, compression = "LZMS", chunk = 131072, solid = true,
+  model = 3, family = "desktop", compression = "LZMS", chunk = 131072, solid = true,
   failure = "", cacheMode = 1, dryRun = 0, freeBytes = "107374182400", mode = 1,
   host = "Darwin", imageBytes = "",
 } = {}) {
@@ -27,7 +27,7 @@ function fixture({
     writeFileSync(join(directory, "cached image", "alldone"), "already extracted\n");
     const result = spawnSync("bash", ["-c", `
       source "$DIRECTORY/install-wor.sh" source >/dev/null || exit 90
-      RPI_MODEL="$TEST_MODEL" BID=19045.3803
+      RPI_MODEL="$TEST_MODEL" WOR_IMAGE_FAMILY="$TEST_FAMILY" BID=19045.3803
       RUN_MODE=cli CAN_INSTALL_ON_SAME_DRIVE="$TEST_MODE" USE_CACHE="$TEST_CACHE" DRY_RUN="$TEST_DRY_RUN"
       WOR_GUI_PROGRESS_FILE="$TEST_DIR/progress"
       is_macos() { [ "$TEST_HOST" == Darwin ]; }
@@ -75,7 +75,7 @@ function fixture({
       cwd: directory, encoding: "utf8", timeout: 10000,
       env: {
         ...process.env, NO_UPDATE: "1", DIRECTORY: root, WOR_CACHE_DIR: join(directory, "tool-cache"),
-        TEST_DIR: directory, TEST_IMAGE: image, TEST_MODEL: String(model),
+        TEST_DIR: directory, TEST_IMAGE: image, TEST_MODEL: String(model), TEST_FAMILY: family,
         TEST_COMPRESSION: compression, TEST_CHUNK: String(chunk), TEST_SOLID: solid ? "1" : "0",
         TEST_FAILURE: failure, TEST_CACHE: String(cacheMode), TEST_DRY_RUN: String(dryRun),
         TEST_FREE: freeBytes, TEST_MODE: String(mode),
@@ -126,7 +126,7 @@ describe("Pi 3 low-memory installation-image preparation", () => {
     assert.match(result.stdout + result.stderr, /already.*non-solid LZX|Reusing.*non-solid LZX/);
   });
 
-  for (const options of [{ model: 4 }, { model: 5 }]) {
+  for (const options of [{ model: 4 }, { model: 5 }, { family: "iot-core" }]) {
     it(`leaves other target routes untouched ${JSON.stringify(options)}`, () => {
       const result = fixture(options);
       assert.equal(result.status, 0, result.stderr);
@@ -250,7 +250,7 @@ describe("Real wimlib Pi 3 conversion", { skip: !wimlibAvailable }, () => {
         const before = command("wiminfo", [image]);
         assert.match(command("wiminfo", [image, "--blobs"]), /WIM_RESHDR_FLAG_SOLID/);
         const env = { ...process.env, NO_UPDATE: "1", DIRECTORY: root, WOR_CACHE_DIR: join(directory, "cache"),
-          TEST_IMAGE: image, RPI_MODEL: "3", BID: "19045.3803", RUN_MODE: "cli", CAN_INSTALL_ON_SAME_DRIVE: "1" };
+          TEST_IMAGE: image, RPI_MODEL: "3", WOR_IMAGE_FAMILY: "desktop", BID: "19045.3803", RUN_MODE: "cli", CAN_INSTALL_ON_SAME_DRIVE: "1" };
         const invoke = () => command("bash", ["-c", 'source "$DIRECTORY/install-wor.sh" source >/dev/null || exit 90; prepare_pi3_install_wim "$TEST_IMAGE"'], { cwd: directory, env });
         invoke();
         const after = command("wiminfo", [image]);

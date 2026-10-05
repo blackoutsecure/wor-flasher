@@ -13,6 +13,7 @@ assert.ok(dialog, "The administrator-password retry dialog is missing.");
 const authFailure = "\u001b[91mAdministrator authentication failed or was canceled. Enter the macOS password in the WoR-Flasher dialog and try again.\u001b[0m\n";
 const canceledLog = "364:467: execution error: User canceled. (-128)\nsudo: no password was provided\nsudo: a password is required\n" + authFailure;
 const prewrite = "STEP\t5\t8\tPartitioning and formatting /dev/mock-target\nTASK\t0\tWaiting for administrator access...\n";
+const iotPrewrite = "STEP\t1\t3\tPreparing and verifying Windows 10 IoT Core image\nTASK\t0\tWaiting for administrator access...\n";
 
 function invokeDialog({ log = canceledLog, progress = prewrite, choice = "retry" } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "wor-password-cancel-"));
@@ -98,12 +99,41 @@ describe("Canceled macOS administrator password", () => {
     assert.equal(result.stdout, "retry\n");
   });
 
+  for (const [diagnostic, expected] of [
+    ["Sorry, try again.\nsudo: 1 incorrect password attempt\n", "The administrator password was not accepted."],
+    ["execution error: User canceled. (-128)\nsudo: no password was provided\n", "Administrator password entry was canceled."],
+    ["sudo: no password was provided\n", "No administrator password was entered."],
+  ]) {
+    it(`uses the shared password wait for IoT recovery: ${expected}`, () => {
+      const result = invokeDialog({ progress: iotPrewrite, log: diagnostic + authFailure });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "retry\n");
+      assert.ok(result.args[1].startsWith(expected));
+      assert.match(result.args[1], /prepared downloads have been kept/);
+      assert.match(result.args[1], /No changes have been made/);
+    });
+  }
+
+  it("closes an IoT password attempt without starting a retry", () => {
+    const result = invokeDialog({ progress: iotPrewrite, choice: "close" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "close\n");
+  });
+
   for (const progress of [
     prewrite + "DISK_WRITE\t1\t/dev/mock-target\n",
     prewrite + "DISK_WRITE\t1\t/dev/mock-target\nDISK_WRITE\t0\t/dev/mock-target\n",
     prewrite + "STEP\t6\t8\tCopying files\n",
     "STEP\t4\t8\tPreparing the Windows image\n",
     "",
+    iotPrewrite + "DISK_WRITE\t1\t/dev/mock-target\n",
+    iotPrewrite + "DISK_WRITE\t1\t/dev/mock-target\nDISK_WRITE\t0\t/dev/mock-target\n",
+    iotPrewrite + "STEP\t2\t3\tApplying and verifying Windows 10 IoT Core\n",
+    iotPrewrite + "TASK\t0\tPreparing the target disk...\n",
+    "STEP\t1\t3\tPreparing and verifying Windows 10 IoT Core image\n",
+    "TASK\t0\tWaiting for administrator access...\n",
+    "STEP\t1x\t3\tPreparing image\nTASK\t0\tWaiting for administrator access...\n",
+    "STEP\t4\t3\tPreparing image\nTASK\t0\tWaiting for administrator access...\n",
   ]) {
     it(`never claims no changes for unsafe or unconfirmed progress ${JSON.stringify(progress)}`, () => {
       const result = invokeDialog({ progress });
@@ -170,6 +200,7 @@ describe("Administrator cancellation at the engine write boundary", () => {
         cwd: directory, encoding: "utf8", timeout: 10000,
         env: { ...process.env, DIRECTORY: root, NO_UPDATE: "1", PATH: `${directory}/bin:${process.env.PATH}` },
       });
+
       assert.equal(result.status, 1);
       assert.match(result.stderr, /Administrator authentication failed or was canceled/);
       assert.doesNotMatch(result.stdout + result.stderr, /unexpected|There is no turning back|Creating WOR_BOOT/);
@@ -182,4 +213,42 @@ describe("Administrator cancellation at the engine write boundary", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+});
+
+describe("Shared flash authentication without a GUI progress file", () => {
+  for (const host of ["Darwin", "Linux"]) {
+    for (const authorized of [true, false]) {
+      it(`${authorized ? "authenticates" : "rejects"} ${host} CLI credentials without depending on GUI progress`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "wor-shared-auth-"));
+        try {
+          const result = spawnSync("bash", ["-c", `
+            source "$DIRECTORY/install-wor.sh" source >/dev/null || exit 90
+            HOST_OS="$TEST_HOST" RUN_MODE=cli WOR_GUI_PROGRESS_FILE=''
+            sudo() { printf '%s\\n' "$*" >> "$TEST_DIR/sudo-args"; return "$TEST_AUTH_STATUS"; }
+            authenticate_flash || exit $?
+            printf 'Authenticated\\n'
+          `], {
+            cwd: directory, encoding: "utf8", timeout: 10000,
+            env: {
+              ...process.env, DIRECTORY: root, NO_UPDATE: "1", TEST_HOST: host, TEST_DIR: directory,
+              TEST_AUTH_STATUS: authorized ? "0" : "1", WOR_CACHE_DIR: directory,
+              WOR_LOG_FILE: join(directory, "run.log"),
+            },
+          });
+          assert.equal(result.status, authorized ? 0 : 1, result.stderr);
+          assert.equal(readFileSync(join(directory, "sudo-args"), "utf8"), "-v\n");
+          if (authorized) {
+            assert.equal(result.stdout, "Authenticated\n");
+            assert.match(result.stderr, /Administrator access granted/);
+          } else {
+            assert.equal(result.stdout, "");
+            assert.match(result.stderr, /Administrator authentication failed or was canceled/);
+            assert.doesNotMatch(result.stderr, /Administrator access granted/);
+          }
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      });
+    }
+  }
 });

@@ -141,6 +141,11 @@ Commands:
 
 Set the same variables documented in README.md before calling run, including
 DEVICE, RPI_MODEL, BID, WIN_LANG and CAN_INSTALL_ON_SAME_DRIVE, or pass --config FILE.
+For legacy IoT Core use WOR_IMAGE_FAMILY=iot-core, WOR_TARGET_BOARD=pi2-v1.1,
+pi2-v1.2 or pi3-b, and SOURCE_FILE pointing to the reviewed ARM32 FFU/ISO/MSI.
+Alternatively set WOR_IOT_DOWNLOAD=1 with SOURCE_FILE empty to request the official image.
+Use DRY_RUN=1 to inspect only. Unattended writes require WOR_IOT_CONFIRM_ERASE=1.
+ARM64 IoT Core is not a supported Raspberry Pi image profile.
 Use --progress-file FILE with run to receive STATUS, STEP, SUBSTEP and TASK events.
 Use --set NAME=VALUE to pass engine settings as options instead of environment variables.
 

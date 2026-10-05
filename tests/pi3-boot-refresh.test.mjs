@@ -23,7 +23,7 @@ function temporary(callback) {
 function inEngine(directory, command, env = {}) {
   return spawnSync("bash", ["-c", `
     source "$DIRECTORY/install-wor.sh" source >/dev/null || exit 90
-    RPI_MODEL=3 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 PI4_UEFI_SHELL_UNLOCK=0
+    RPI_MODEL=3 WOR_IMAGE_FAMILY=desktop OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 PI4_UEFI_SHELL_UNLOCK=0
     WINDOWS_ACCOUNT_SETUP=0 WINDOWS_LOCALE_SETUP=0
     ${command}
   `], {
@@ -91,6 +91,16 @@ describe("Native Pi 3 finalizer packaging and staging", () => {
       assert.equal(existsSync(join(directory, "peinstaller/winpe/2/scripts")), false);
     }));
   }
+
+  it("does not add the desktop finalizer to an IoT Core route", () => temporary((directory) => {
+    mkdirSync(join(directory, "peinstaller/winpe/2"), { recursive: true });
+    const result = inEngine(directory, `
+      WOR_IMAGE_FAMILY=iot-core
+      configure_pe_prefinalize || exit 91
+    `);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(existsSync(join(directory, "peinstaller/winpe/2/scripts/Pi3BootRefresh.exe")), false);
+  }));
 
   for (const damage of ["missing", "tampered", "manifest"]) {
     it(`fails closed for a ${damage} native helper even with USE_CACHE=2`, () => temporary((directory) => {

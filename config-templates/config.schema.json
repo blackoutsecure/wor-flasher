@@ -4,9 +4,17 @@
   "description": "JSON schema for WoR-Flasher configuration parameters",
   "type": "object",
   "properties": {
+    "$schema": {
+      "type": "string"
+    },
     "target": {
       "type": "object",
       "properties": {
+        "board": {
+          "type": "string",
+          "enum": ["pi2-v1.1", "pi2-v1.2", "pi3-b"],
+          "description": "Explicit physical board required by the legacy ARM32 IoT Core FFU profile. The IoT workflow resolves its own route; rpiModel is for desktop package selection."
+        },
         "rpiModel": {
           "type": "integer",
           "enum": [3, 4, 5],
@@ -26,6 +34,21 @@
     "media": {
       "type": "object",
       "properties": {
+        "imageFamily": {
+          "type": "string",
+          "enum": ["desktop", "iot-core"],
+          "description": "Desktop ARM64 ISO/ESD preparation (default) or separate legacy ARM32 IoT Core full-FFU deployment."
+        },
+        "architecture": {
+          "type": "string",
+          "enum": ["arm64", "arm32"],
+          "description": "Optional architecture assertion: desktop requires arm64; the supported Raspberry Pi IoT Core profile requires arm32. Omit to use the image-family architecture."
+        },
+        "downloadIotImage": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicitly download and import the reviewed Microsoft IoT Core package with mandatory TLS/hash checks. Only for imageFamily=iot-core; leave sourceFile empty. No Windows installer is executed."
+        },
         "winLang": {
           "type": "string",
           "description": "Windows language code (e.g. en-us)"
@@ -36,7 +59,7 @@
         },
         "sourceFile": {
           "type": "string",
-          "description": "Path to an existing local Windows ARM64 ISO file"
+          "description": "Local desktop Windows ARM64 ISO/ESD, or the reviewed Raspberry Pi IoT Core FFU/ISO/MSI. IoT delivery packages are verified and extracted natively. Raw IMG, unapproved images and ARM64 IoT Core are not accepted."
         },
         "downloadDir": {
           "type": "string",
@@ -60,6 +83,18 @@
         "configTxt": {
           "type": "string",
           "description": "Body of config.txt for the boot partition"
+        },
+        "iotHdmiMode": {
+          "type": "string",
+          "enum": ["official", "720p60", "1080p60", "custom"],
+          "default": "720p60",
+          "description": "IoT-only firmware display timing: recommended 720p60 compatibility (default), unchanged official image, 1080p60, or restricted custom HDMI settings. Explicit selections are preserved. Monitor and OS-driver support still apply."
+        },
+        "iotHdmiConfig": {
+          "type": "string",
+          "maxLength": 512,
+          "default": "",
+          "description": "For iotHdmiMode=custom, ASCII HDMI key=value lines. Require hdmi_group and hdmi_mode; optionally hdmi_force_hotplug and hdmi_drive. Other firmware keys, filters and custom modelines are rejected."
         },
         "oobeNetworkBypass": {
           "type": "boolean",
@@ -91,6 +126,38 @@
     "userAccount": {
       "type": "object",
       "properties": {
+        "iotCore": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Offer separate administrator rename/password setup after IoT first boot using fingerprint-pinned SSH; no offline FFU account modification."
+            },
+            "username": {
+              "type": "string",
+              "default": "Administrator",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,19}$",
+              "description": "Desired name for the existing built-in IoT administrator; service/system accounts are excluded."
+            },
+            "password": {
+              "type": "string",
+              "default": "",
+              "description": "New IoT password (12-127 UTF-16 characters), used only by the GUI post-boot SSH step. Prefer the masked GUI field; configuration files store plaintext and must not be committed."
+            },
+            "languageSetup": {
+              "type": "boolean",
+              "default": true,
+              "description": "Apply the selected IoT UI language under DefaultAccount during post-boot SSH personalization, verifying that the language is installed and reporting restart requirements."
+            },
+            "language": {
+              "type": "string",
+              "default": "",
+              "description": "IoT language tag. Empty inherits the shared host-language detection or desktop locale preference; explicit selections are preserved. No language pack is downloaded."
+            }
+          },
+          "additionalProperties": false
+        },
         "setupAccount": {
           "type": "boolean",
           "description": "Whether to setup a local administrator account during setup"
@@ -117,6 +184,11 @@
     "execution": {
       "type": "object",
       "properties": {
+        "confirmIotErase": {
+          "type": "boolean",
+          "default": false,
+          "description": "Explicit erase consent for non-interactive IoT Core deployment only. Ignored for inspection-only dry runs. Requires an explicitly selected safe whole disk."
+        },
         "dryRun": {
           "type": "boolean",
           "description": "Whether to run in dry-run mode without writing to storage"
@@ -173,6 +245,35 @@
               "description": "Reserved: Windows is not a supported host, so no sound is played there"
             }
           },
+          "allOf": [
+            {
+              "if": {
+                "required": ["media"],
+                "properties": {
+                  "media": {
+                    "required": ["imageFamily"],
+                    "properties": { "imageFamily": { "const": "iot-core" } }
+                  }
+                }
+              },
+              "then": {
+                "required": ["target"],
+                "properties": {
+                  "target": {
+                    "required": ["board"],
+                    "properties": { "canInstallOnSameDrive": { "const": true } }
+                  },
+                  "media": { "properties": { "architecture": { "const": "arm32" } } },
+                  "execution": { "properties": { "skipImageVerification": { "const": false } } }
+                }
+              },
+              "else": {
+                "properties": {
+                  "media": { "properties": { "architecture": { "const": "arm64" }, "downloadIotImage": { "const": false } } }
+                }
+              }
+            }
+          ],
           "additionalProperties": false
         }
       },

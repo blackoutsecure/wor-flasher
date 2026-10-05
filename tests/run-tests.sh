@@ -281,7 +281,7 @@ static_checks() {
     || fail "Linux does not write stable partition labels"
 
   grep -qF 'WOR_MACOS_BREW_FORMULAE=(aria2 cabextract jq wget wimlib gptfdisk pv)' "$REPO_DIR/src/lib/dependencies.sh" \
-    && grep -qF 'WOR_LINUX_PACKAGES=(yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc parted dosfstools unzip git pv)' "$REPO_DIR/src/lib/dependencies.sh" \
+    && grep -qF 'WOR_LINUX_PACKAGES=(yad aria2 cabextract wimtools chntpw genisoimage exfat-fuse wget udftools bc parted dosfstools unzip git pv jq python3)' "$REPO_DIR/src/lib/dependencies.sh" \
     && pass "supported hosts install the progress utility" \
     || fail "a supported host does not install the progress utility"
 
@@ -481,7 +481,7 @@ static_checks() {
     && grep -qF 'Raspberry Pi model:' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'macos_choose_target()' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Windows and Raspberry Pi target' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'selectedValue = windows[windowsIdx] + '\''\t'\'' + piModels[piIdx]' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'selectedValue = windows[windowsIdx] + '\''\t'\'' + activeModels[piIdx]' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'current_windows_ver='\''Windows 11'\''' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'target_choice="$(macos_choose_target "$current_windows_ver" "$current_rpi_model")"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'windowWillClose:' "$REPO_DIR/install-wor-gui.sh" \
@@ -677,6 +677,7 @@ disk5 Second drive"
     && [ -f "$REPO_DIR/config-templates/prefinalize.cmd" ] \
     && [ -f "$REPO_DIR/config-templates/config.json" ] \
     && [ -f "$REPO_DIR/config-templates/config.schema.json" ] \
+    && [ -f "$REPO_DIR/config-templates/iot-core.json" ] \
     && grep -qF 'read_config_template() {' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'sync_repo_template' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'raw.githubusercontent.com' "$REPO_DIR/install-wor.sh" \
@@ -700,7 +701,11 @@ disk5 Second drive"
 
   #these must be committed: a fresh clone without them silently writes a blank config.txt and the Pi will not boot
   if command -v git >/dev/null && git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
-    [ "$(git -C "$REPO_DIR" ls-files config-templates/ | wc -l | tr -d ' ')" == 9 ] \
+    git -C "$REPO_DIR" ls-files --error-unmatch -- \
+      config-templates/config.json config-templates/config.schema.json config-templates/iot-core.json \
+      config-templates/pi3.config.txt config-templates/pi4.config.txt config-templates/pi5.config.txt \
+      config-templates/pi4-ram-unlock.ps1 config-templates/pi4-ram-unlock-specialize.xml \
+      config-templates/oobe-network-bypass.xml config-templates/prefinalize.cmd >/dev/null 2>&1 \
       && grep -qF 'This file ships with WoR-Flasher and is required to write a bootable drive.' "$REPO_DIR/install-wor.sh" \
       && pass "config-templates/ files are tracked by git and a missing one aborts instead of writing a blank config.txt" \
       || fail "config-templates/ files are untracked, or a missing template does not abort"
@@ -744,8 +749,10 @@ disk5 Second drive"
     && [ "$(grep -anF -- '--field=$(wor_setup_scope "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE"):LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Firmware and drivers:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
     && [ "$(grep -anF -- '--field=Firmware and drivers:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Validation:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
     && [ "$(grep -anF -- '--field=Validation:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Downloads:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
-    && grep -qF -- "--field='Windows version:CB' 'Windows 11!Windows 10!More options'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- "--field='Raspberry Pi model:CB' \"\$(wor_rpi_board_options | paste -sd '!' -)\"" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--field='Windows version:CB' \"\$windows_choices\"" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'linux_choose_target() {' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'boards="$(wor_rpi_board_options "$family")"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--field='Raspberry Pi model:CB' \"\$boards\"" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "RPI_MODEL=''" "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF -- '--form --columns=2' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF -- "--button='<b>View / Edit config.txt...</b>':3" "$REPO_DIR/install-wor-gui.sh" \
@@ -811,12 +818,12 @@ disk5 Second drive"
 
   #a modal session never services default-mode run loop sources, so the Dock's quit Apple Event
   #is only delivered because each window registers a handler and pumps default mode from a timer
-  [ "$(grep -cF "'handleQuitEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
-    && [ "$(grep -cF "'pumpEvents:': {" "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
-    && [ "$(grep -cF 'worInstallWindowHandlers(controller)' "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
+  [ "$(grep -cF "'handleQuitEvent:withReplyEvent:': {" "$REPO_DIR/install-wor-gui.sh")" == 7 ] \
+    && [ "$(grep -cF "'pumpEvents:': {" "$REPO_DIR/install-wor-gui.sh")" == 7 ] \
+    && [ "$(grep -cF 'worInstallWindowHandlers(controller)' "$REPO_DIR/install-wor-gui.sh")" == 7 ] \
     && grep -qF '0x61657674, 0x71756974' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'addTimerForMode(pumpTimer' "$REPO_DIR/src/lib/gui.sh" \
-    && [ "$(grep -cF 'app.runModalForWindow(window)' "$REPO_DIR/install-wor-gui.sh")" == 6 ] \
+    && [ "$(grep -cF 'app.runModalForWindow(window)' "$REPO_DIR/install-wor-gui.sh")" == 7 ] \
     && pass "every macOS window responds to the Dock's Quit menu item" \
     || fail "a macOS window cannot receive the Dock's quit Apple Event"
 
@@ -868,7 +875,7 @@ disk5 Second drive"
     && grep -qF 'Use the latest UEFI firmware' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'Use the latest Windows ARM64 drivers' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'Skip verifying the written image after flashing' "$REPO_DIR/src/lib/gui.sh" \
-    && grep -qF 'Flash begins immediately after administrator approval. Use Advanced to change these settings.' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'Flash starts image preparation. Disk writing follows verification and administrator approval.' "$REPO_DIR/install-wor-gui.sh" \
     && pass "Skip-verification option defaults off, wraps both verify_written_image calls, and confirm screens show pinned versions and guidance" \
     || fail "Skip-verification option or confirm-screen guidance is missing or incomplete"
 
@@ -890,8 +897,10 @@ disk5 Second drive"
     && grep -qF 'function updateConfigEditableState() {' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "editConfigButton = \$.NSButton.buttonWithTitleTargetAction('View / Edit…', controller, 'editConfigClicked:')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'editConfigButton.enabled = enabled' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "dialog.messageText = \$('View / Edit config.txt')" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'configTxtValue = ObjC.unwrap(editor.string)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "const result = worEditText(configTxtValue, 'View / Edit config.txt'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if (result.saved) configTxtValue = result.text' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'function worEditText(value, title, message, iconPath, defaults)' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'return { saved: true, text: ObjC.unwrap(editor.string) }' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'out.push(configTxtValue)' "$REPO_DIR/install-wor-gui.sh" \
     && pass "Applying the customized config.txt is a togglable checkbox that enables its separate editor on macOS" \
     || fail "Apply-customized-config.txt toggle is missing or incomplete"
@@ -951,7 +960,7 @@ disk5 Second drive"
     && grep -aqF 'export WOR_GUI_AUTH_MARKER="$auth_marker"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -aqF 'export GUI_PROGRESS_EARLY=1' "$REPO_DIR/install-wor-gui.sh" \
     && grep -aqF 'gui_preauthenticate() {' "$REPO_DIR/install-wor.sh" \
-    && grep -aqF 'deferred until Step 5' "$REPO_DIR/install-wor.sh" \
+    && grep -aqF 'deferred until preparation and target validation finish' "$REPO_DIR/install-wor.sh" \
     && ! grep -aqF 'WOR_GUI_SUDO_PREAUTH_DONE=1' "$REPO_DIR/install-wor.sh" \
     && grep -aqF 'command sudo -n -v >/dev/null 2>&1 || true; sleep 30' "$REPO_DIR/install-wor.sh" \
     && pass "GUI defers the single sudo prompt until the destructive disk step" \
@@ -999,7 +1008,11 @@ SH
   #exactly one place may prompt: the main installer shell authenticates immediately before disk preparation.
   [ "$(grep -cE '(^|[^n]) *sudo -v' "$REPO_DIR/install-wor-gui.sh")" == 0 ] \
     && [ "$(grep -cF 'sudo -v ||' "$REPO_DIR/install-wor.sh")" == 1 ] \
+    && [ "$(grep -cE '^authenticate_flash\(\)' "$REPO_DIR/install-wor.sh")" == 1 ] \
     && grep -qF 'sudo -v || error "Administrator authentication failed or was canceled.' "$REPO_DIR/install-wor.sh" \
+    && grep -qFx '  authenticate_flash' "$REPO_DIR/install-wor.sh" \
+    && grep -qFx '  authenticate_flash' "$REPO_DIR/src/lib/iot-core.sh" \
+    && ! grep -qE 'sudo[[:space:]]+-v' "$REPO_DIR/src/lib/iot-core.sh" \
     && grep -qF "emit_gui_task_progress 0 'Preparing the target disk...'" "$REPO_DIR/install-wor.sh" \
     && grep -qF 'status "Administrator access granted."' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'Administrator access: requesting macOS password with the native WoR-Flasher dialog.' "$REPO_DIR/install-wor.sh" \
@@ -1162,9 +1175,9 @@ SH
     && pass "canceling the administrator password dialog is not reported as a script crash" \
     || fail "canceling the administrator password dialog is reported as if the script crashed"
 
-  #mistyping the password 3 times gets the same friendly treatment, and both cases offer a retry
-  #instead of forcing a full app restart when nothing has been written to disk yet
-  grep -qF "grep -qF 'incorrect password attempts' \"\$saved_log\"" "$REPO_DIR/install-wor-gui.sh" \
+  #A rejected password gets the same friendly treatment as Cancel, with one prompt per attempt
+  #and an explicit retry instead of forcing an app restart before anything has been written.
+  grep -qF "grep -qF 'incorrect password attempt' \"\$saved_log\"" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "macos_choose '' \"\$password_retry_reason" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "retry Close '' '' '' 'Try Again'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'if [ "$password_retry_choice" == retry ];then' "$REPO_DIR/install-wor-gui.sh" \
@@ -1279,8 +1292,8 @@ SH
     && grep -qF "set_bool_if_unset \"SHOW_NOTIFICATION\"" "$REPO_DIR/install-wor.sh" \
     && grep -qF 'wor_show_result_notification success' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'wor_show_result_notification failure' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "notificationCheckbox = \$.NSButton.checkboxWithTitleTargetAction('Show a notification when the flash finishes'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "fields+=(\"--field=Show a notification when the flash finishes\":CHK" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "notificationCheckbox = \$.NSButton.checkboxWithTitleTargetAction('Show a completion notification'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "fields+=(\"--field=Show a completion notification\":CHK" "$REPO_DIR/install-wor-gui.sh" \
     && [ "$(bash -c "source '$REPO_DIR/src/lib/metadata.sh'; source '$REPO_DIR/src/lib/gui.sh'; SHOW_NOTIFICATION=0 wor_show_result_notification success >/dev/null 2>&1; echo \$?")" == 0 ] \
     && [ "$(bash -c "source '$REPO_DIR/src/lib/metadata.sh'; source '$REPO_DIR/src/lib/gui.sh'; PATH=/nonexistent wor_show_result_notification failure >/dev/null 2>&1; echo \$?")" == 0 ] \
     && pass "finishing a flash posts a desktop notification without being able to fail the run" \
@@ -1444,7 +1457,7 @@ SH
     || fail "a minimised window cannot be restored from the Dock"
 
   #every screen must build its window through the one shared helper, or their title bars drift apart again
-  [ "$gui_windows" == 6 ] \
+  [ "$gui_windows" == 7 ] \
     && grep -qF 'window = worMakeWindow({' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'NSWindow.alloc.initWithContentRectStyleMaskBackingDefer' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'NSWindow.alloc.initWithContentRectStyleMaskBackingDefer' "$REPO_DIR/install-wor.sh" \
@@ -1928,7 +1941,7 @@ shared_function_checks() {
 
   #the CLI banner and both GUI overviews must describe a run from one place, or they drift apart
   summary_labels="$(run_in_engine 'settings_summary | cut -f1 | tr "\n" ","')"
-  [ "$summary_labels" == 'WoR-Flasher version,Target drive,Target hardware,Operating system,Installation mode,Offline OOBE,Windows local account,Windows keyboard and regional settings,Pi 4 RAM unlock,UEFI firmware,Windows ARM64 drivers,Custom config.txt,Hide empty drives,Verify written image,Downloaded files,Dry run,Download directory,Log file,' ] \
+  [ "$summary_labels" == 'WoR-Flasher version,Target drive,Target hardware,Operating system,Installation mode,Offline OOBE,Windows local account,Windows keyboard and regional settings,Pi 4 RAM unlock,UEFI firmware,Windows ARM64 drivers,Custom config.txt,Hide empty drives,Verify written image,Downloaded files,Dry run,Download folder,Log file,' ] \
     && [ "$(run_in_engine 'settings_summary | awk -F"\t" "NF != 2" | wc -l | tr -d " "')" == 0 ] \
     && pass "settings_summary emits one tab-separated label/value pair per setting" \
     || fail "settings_summary is missing settings or emits malformed lines: $summary_labels"

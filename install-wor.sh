@@ -40,6 +40,31 @@
 #WOR_FLASHER_VERSION below is the single source of truth for its version line.
 #
 #Version history
+#Unreleased - Add a separate validated ARM32 IoT Core FFU workflow for Pi 2 and Pi 3 Model B.
+#             Preserve the desktop ARM64 route; reject unsupported ARM64 IoT Core and board combinations.
+#             Import/download verified IoT delivery packages natively and bind consent to the target identity.
+#             Defer official Microsoft IoT image preparation until Flash; keep local imports,
+#               cache location, inspection-only mode and completion preferences in IoT Advanced Options.
+#             Use the same Windows/board, drive, review, progress and completion route for all GUI images,
+#               with board eligibility and image-specific backend/options kept separate.
+#             Show the exact IoT target-rejection reason and allow another drive to be selected without
+#               starting image preparation, erasing the card or discarding successful device identity checks.
+#             Replace validated GPT metadata automatically inside the confirmed IoT FFU write, only after
+#               complete source verification and bound-target checks, with cleanup and payload read-back.
+#             Mark official IoT media Recommended, reveal its custom source only when selected, and show
+#               the shared download root and independent completion notifications across every GUI workflow.
+#             Reuse deferred flash authentication and pre-write password recovery for desktop and IoT media,
+#               keeping one native prompt per attempt, verified caches and target revalidation on retry.
+#             Offer stock, 720p60, 1080p60 and restricted custom IoT HDMI settings in Advanced Options;
+#               preserve the verified FFU cache and include configured boot blocks in mandatory read-back.
+#             Match the desktop View/Edit config.txt editor while clearly limiting IoT customizations
+#               to video settings and preserving its required boot, memory and framebuffer entries.
+#             Default IoT video to the user-confirmed 720p60 compatibility preset and mark it Recommended;
+#               preserve explicit official-image, 1080p60 and custom video preferences.
+#             Offer optional IoT administrator username/password setup after first boot over pinned SSH;
+#               leave the FFU unchanged and keep account status Pending until a new login is verified.
+#             Preselect the shared host language for IoT Advanced Options, preserve explicit overrides
+#               and verify installed-language support under DefaultAccount during post-boot personalization.
 #---------------
 #2.0.1 - Distribute the macOS app in a verified compressed DMG while retaining the local app bundle.
 #        Package a self-contained install-wor.sh release asset for macOS and supported Linux hosts.
@@ -139,6 +164,8 @@ source "$(dirname "$WOR_METADATA_FILE")/paths.sh"
 source "$(dirname "$WOR_METADATA_FILE")/cleanup.sh"
 #shellcheck source=src/lib/gui.sh
 source "$(dirname "$WOR_METADATA_FILE")/gui.sh"
+#shellcheck source=src/lib/iot-core.sh
+source "$(dirname "$WOR_METADATA_FILE")/iot-core.sh"
 export WOR_METADATA_FILE WOR_FLASHER_NAME WOR_FLASHER_VERSION WOR_APP_TITLE WOR_WINDOW_TITLE
 
 CLEANUP_MOUNTS=()
@@ -258,6 +285,13 @@ ASKPASS
     return 1
   fi
   command sudo "$@"
+}
+
+authenticate_flash() { #Authenticate in the owning shell before either image workflow can write.
+  sudo -v || error "Administrator authentication failed or was canceled. Enter the administrator password in the WoR-Flasher dialog and try again."
+  emit_gui_task_progress 0 'Preparing the target disk...'
+  status "Administrator access granted."
+  return 0
 }
 
 gui_error_dialog() { #Input: error message
@@ -465,7 +499,11 @@ report_verification_task() { #Input: percent, label. Advances verification when 
 }
 
 progress_task_label() { #Input: command and args. Output: friendly label for GUI subprogress.
-  local previous='' arg original_command="${1##*/}" command="${1##*/}" windows_name
+  local previous='' arg original_command="${1##*/}" command="${1##*/}" windows_name media_script="${2:-}"
+  if [ "$command" == iot_core_apply ];then
+    printf 'Applying and verifying Windows 10 IoT Core\n'
+    return
+  fi
   for arg in "$@" ;do
     if [ "$previous" == '-N' ];then
       printf '%s\n' "$arg"
@@ -473,6 +511,12 @@ progress_task_label() { #Input: command and args. Output: friendly label for GUI
     fi
     previous="$arg"
   done
+  if [ "$command" == python3 ] && [ "${media_script##*/}" == iot-media.py ];then
+    case "${3:-}" in
+      download) printf 'Downloading and verifying Windows 10 IoT Core\n'; return ;;
+      prepare) printf 'Importing and verifying Windows 10 IoT Core\n'; return ;;
+    esac
+  fi
   if [ "$command" == sudo ] && [ "$#" -gt 1 ];then
     shift
     command="${1##*/}"
@@ -1181,9 +1225,7 @@ darwin_flash_device() {
   [ "$RPI_MODEL" != 3 ] || pi3_bootstrap_helper="$DIRECTORY/src/lib/pi3-hybrid-mbr.py"
   #Authenticate in this shell before helpers capture their output in subshells; otherwise the
   #GUI prompt state does not survive to the final privileged disk operation.
-  sudo -v || error "Administrator authentication failed or was canceled. Enter the macOS password in the WoR-Flasher dialog and try again."
-  emit_gui_task_progress 0 'Preparing the target disk...'
-  status "Administrator access granted."
+  authenticate_flash
   darwin_start_partition_finalizer_or_die "$DEVICE" "$sgdisk_bin" "$pi3_bootstrap_helper"
   printf '  There is no turning back now.\n' 1>&2
   status "  Creating WOR_BOOT (${boot_size_mb} MB) and WOR_INSTALL (${install_size_mb} MB)"
@@ -1303,7 +1345,7 @@ wim_uses_pi3_lzx_layout() { #Input: wiminfo output, solid-resource flag. Does no
 }
 
 prepare_pi3_install_wim() { #Input: cached install.wim. Normalize before any physical-device write.
-  [ "$RPI_MODEL" == 3 ] || return 0
+  [ "$RPI_MODEL" == 3 ] && ! is_iot_core || return 0
   (
     set -o pipefail
     export LC_ALL=C
@@ -1441,7 +1483,7 @@ configure_pe_settings_ini() { #Sets HideEmptyDrives in the cached WoR-PE setting
 }
 
 validate_pi3_boot_refresh() { #Checks the native finalizer before disk writes, even when trusting downloaded caches.
-  [ "$RPI_MODEL" == 3 ] || return 0
+  [ "$RPI_MODEL" == 3 ] && ! is_iot_core || return 0
   local helper_dir="$DIRECTORY/src/lib/pi3-boot-refresh" name key expected
   for name in Pi3BootRefresh.exe GO-LICENSE.txt ;do
     [ "$name" == Pi3BootRefresh.exe ] && key=binarySha256 || key=goLicenseSha256
@@ -1456,7 +1498,7 @@ configure_pe_prefinalize() { #Stages mandatory boot finalization and any optiona
   #WoR-PE recreates the boot filesystem before this hook, invalidating the Pi 3 sector-0 FAT view.
   #DISM also skips Windows Setup's media-root answer-file search, so stage the answer in Panther.
   local app_dir="$PWD/peinstaller/winpe/2" scripts_dir answer_needed=0 shell_needed=0 pi3_needed=0
-  [ "$RPI_MODEL" != 3 ] || pi3_needed=1
+  [ "$RPI_MODEL" != 3 ] || is_iot_core || pi3_needed=1
   if [ ! -d "$app_dir" ];then
     [ "$pi3_needed" == 0 ] && return 0
     echo_red "The WoR-PE payload is missing; the mandatory Pi 3 boot finalizer cannot be staged."
@@ -2116,8 +2158,14 @@ get_size_raw() { #Input: device. Output: total size of device in bytes
 
 drive_capability() { #Input: block device. Output: 'too-small', 'recovery' or 'install'
   #single source of truth for the size tiers, used by both this script and the GUI
-  local size
+  local size minimum
   size="$(get_size_raw "$1")"
+  if is_iot_core;then
+    minimum="$(iot_core_minimum_bytes)" || error "Cannot read the reviewed IoT Core capacity requirement."
+    [[ "$size" =~ ^[0-9]+$ ]] || error "Cannot determine the IoT Core target-drive capacity."
+    [ "$size" -ge "$minimum" ] && echo install || echo too-small
+    return
+  fi
   if [ "$size" -lt $((8*1024*1024*1024)) ];then
     echo too-small
   elif [ "$size" -lt $((25*1024*1024*1024)) ];then
@@ -2128,6 +2176,11 @@ drive_capability() { #Input: block device. Output: 'too-small', 'recovery' or 'i
 }
 
 validate_install_mode() { #Input: drive capability. Validates CAN_INSTALL_ON_SAME_DRIVE when supplied.
+  if is_iot_core;then
+    iot_core_validate_options || error "Invalid IoT Core deployment settings."
+    [ "$1" == install ] || error "The target is too small for the complete IoT Core FFU ($(iot_core_minimum_bytes) bytes required)."
+    return 0
+  fi
   case "$1" in
     too-small)
       error "Drive $DEVICE is smaller than 8GB and cannot be used."
@@ -2344,6 +2397,15 @@ get_os_name() { #input: build id, Output: either "Windows 10 build $BID" or "Win
 }
 
 select_rpi_board() { #Input: board-picker label. Pi 2 v1.2 retains the existing normalized Pi 3 package route.
+  if is_iot_core;then
+    case "$1" in
+      'Raspberry Pi 2 v1.1') RPI_MODEL=2; WOR_TARGET_BOARD=pi2-v1.1 ;;
+      'Raspberry Pi 2 v1.2') RPI_MODEL=3; WOR_TARGET_BOARD=pi2-v1.2 ;;
+      'Raspberry Pi 3 Model B') RPI_MODEL=3; WOR_TARGET_BOARD=pi3-b ;;
+      *) warning "Unsupported IoT Core board: $1. Choose Pi 2 v1.1/v1.2 or Pi 3 Model B; not Pi 3B+, Pi 4 or Pi 5."; return 1 ;;
+    esac
+    return 0
+  fi
   case "$1" in
     'Raspberry Pi 2 v1.2') RPI_MODEL=3; WOR_TARGET_BOARD=pi2-v1.2 ;;
     'Raspberry Pi 3') RPI_MODEL=3; WOR_TARGET_BOARD='' ;;
@@ -2354,6 +2416,15 @@ select_rpi_board() { #Input: board-picker label. Pi 2 v1.2 retains the existing 
 }
 
 rpi_board_label() { #Output: the selected physical board, without changing package routing.
+  if is_iot_core;then
+    case "${WOR_TARGET_BOARD:-}" in
+      pi2-v1.1) printf 'Raspberry Pi 2 v1.1' ;;
+      pi2-v1.2) printf 'Raspberry Pi 2 v1.2' ;;
+      pi3-b) printf 'Raspberry Pi 3 Model B' ;;
+      *) printf 'Not selected (IoT Core requires an explicit board)' ;;
+    esac
+    return
+  fi
   if [ "$RPI_MODEL" == 3 ] && [ "${WOR_TARGET_BOARD:-}" == pi2-v1.2 ];then
     printf 'Raspberry Pi 2 v1.2'
   else
@@ -2370,6 +2441,10 @@ uefi_pinned_version() { #Output: the pinned UEFI firmware version for the select
 }
 
 release_package_source() { #Input: uefi or drivers. Sets the repository and asset prefix for the selected model.
+  if is_iot_core;then
+    warning "IoT Core uses firmware and drivers from its FFU, not desktop ARM64 release packages."
+    return 1
+  fi
   case "$1:$RPI_MODEL" in
     uefi:3) RELEASE_REPO="$WOR_DEFAULT_UEFI_REPO_PI3"; RELEASE_ASSET_PREFIX='RPi3_UEFI_Firmware_' ;;
     uefi:4) RELEASE_REPO="$WOR_DEFAULT_UEFI_REPO_PI4"; RELEASE_ASSET_PREFIX='RPi4_UEFI_Firmware_' ;;
@@ -2516,6 +2591,10 @@ cache_mode_label() { #Input: USE_CACHE value. Output: how that mode reads on a s
 }
 
 install_mode_label() { #Input: CAN_INSTALL_ON_SAME_DRIVE value. Output: how that mode reads on a summary screen.
+  if is_iot_core;then
+    printf 'Apply complete IoT Core FFU to this drive\n'
+    return
+  fi
   case "$1" in
     1) echo 'Install Windows onto this drive' ;;
     *) echo 'Recovery drive for another >16 GB drive' ;;
@@ -2523,6 +2602,13 @@ install_mode_label() { #Input: CAN_INSTALL_ON_SAME_DRIVE value. Output: how that
 }
 
 advanced_option_applies() { #Input: option key. Shared applicability for controls and effective settings.
+  if is_iot_core;then
+    case "$1" in
+      dryrun) return 0 ;;
+      oobe | pi4 | drivers | language | account | locale | uefi | verify | config) return 1 ;;
+      *) warning "Unknown Advanced Options key: $1"; return 2 ;;
+    esac
+  fi
   case "$1" in
     oobe) [[ "${BID%%.*}" =~ ^[0-9]+$ ]] && [ "${BID%%.*}" -ge "$WIN11_MIN_BUILD" ] ;;
     pi4) [ "$RPI_MODEL" == 4 ] ;;
@@ -2536,6 +2622,10 @@ advanced_option_applies() { #Input: option key. Shared applicability for control
 }
 
 windows_version_label() { #Output: the Windows family of the selected build, also correct for imported ISOs.
+  if is_iot_core;then
+    printf 'Windows 10 IoT Core (ARM32)'
+    return
+  fi
   local name
   name="$(get_os_name "$BID")"
   printf '%s' "${name% build *}"
@@ -2548,6 +2638,7 @@ default_config_txt() { #Input: Pi model. Output: that model's shipped config.txt
 }
 
 set_default_config_txt() { #Sets CONFIG_TXT from the selected model's shipped template, unless the caller already supplied one.
+  is_iot_core && return 0
   local previous_default
   if [ -n "$CONFIG_TXT" ];then
     #stepping back and choosing another model must not flash the previous model's boot config, but a
@@ -2663,6 +2754,10 @@ wor_last_log_file() { #Output: stable support path pointing at the most recent s
 }
 
 settings_summary() { #Output: tab-separated "label<TAB>value" lines describing this run. One source of truth for the CLI banner and both GUI confirmation screens.
+  if is_iot_core;then
+    iot_core_summary
+    return
+  fi
   local display_win_lang
   display_win_lang="$(windows_locale_from_language_code "$WIN_LANG")"
   printf '%s version\t%s\n' "$WOR_FLASHER_NAME" "$WOR_FLASHER_VERSION"
@@ -2691,7 +2786,7 @@ settings_summary() { #Output: tab-separated "label<TAB>value" lines describing t
   printf 'Verify written image\t%s\n' "$([ "$SKIP_IMAGE_VERIFICATION" == 1 ] && echo 'No (skipped)' || echo 'Yes')"
   printf 'Downloaded files\t%s\n' "$(cache_mode_label "$USE_CACHE")"
   printf 'Dry run\t%s\n' "$([ "$DRY_RUN" == 1 ] && echo 'Yes (no changes will be written)' || echo 'No')"
-  printf 'Download directory\t%s\n' "$DL_DIR"
+  printf 'Download folder\t%s\n' "$DL_DIR"
   printf 'Log file\t%s\n' "$(wor_log_file)"
   return 0
 }
@@ -2728,11 +2823,13 @@ list_langs_preferred() { #Output: list_langs with en-us first, then the other En
   list_langs | grep -v '^en-'
 }
 
-windows_locale_from_language_code() { #Input: Windows language code. Output: Windows locale casing.
-  awk -F- '{
-    out = tolower($1)
-    for (i = 2; i <= NF; i++) {
-      part = tolower($i)
+windows_locale_from_language_code() { #Input: code, or stdin code<TAB>label rows. Output: Windows locale casing.
+  { if [ "$#" -gt 0 ];then printf '%s\n' "$1";else cat;fi; } | awk '{
+    split($0, columns, "\t")
+    count = split(columns[1], parts, "-")
+    out = tolower(parts[1])
+    for (i = 2; i <= count; i++) {
+      part = tolower(parts[i])
       if (length(part) == 4) {
         part = toupper(substr(part, 1, 1)) substr(part, 2)
       } else {
@@ -2740,8 +2837,9 @@ windows_locale_from_language_code() { #Input: Windows language code. Output: Win
       }
       out = out "-" part
     }
-    print out
-  }' <<<"$1"
+    if (length(columns[2])) print out "\t" columns[2]
+    else print out
+  }'
 }
 
 default_windows_locale() { #Output: the current host locale in Windows casing, or en-US.
@@ -2836,6 +2934,10 @@ settings_summary_markup() { #Output: one pango-markup line per setting, for a ya
 #Every setting a GUI front-end collects and the installer subprocess has to see. Kept in one place so
 #the macOS and Linux front-ends can never drift into exporting different subsets of the same run.
 WOR_INSTALLER_SETTINGS=(DIRECTORY DL_DIR RPI_MODEL WOR_TARGET_BOARD BID WIN_LANG DEVICE CAN_INSTALL_ON_SAME_DRIVE SOURCE_FILE
+  WOR_IMAGE_FAMILY WOR_IMAGE_ARCH WOR_IOT_CONFIRM_ERASE WOR_IOT_DOWNLOAD IOT_CORE_ACQUISITION IOT_CORE_BUILD IOT_CORE_MINIMUM_BYTES IOT_CORE_SHA256 IOT_CORE_TARGET_ID IOT_CORE_TARGET_BYTES IOT_CORE_TARGET_LAYOUT
+  IOT_CORE_HDMI_MODE IOT_CORE_HDMI_CONFIG
+  IOT_CORE_ACCOUNT_SETUP IOT_CORE_ACCOUNT_USERNAME
+  IOT_CORE_LANGUAGE_SETUP IOT_CORE_LANGUAGE
   CONFIG_TXT APPLY_CUSTOM_CONFIG_TXT PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS WINDOWS_ACCOUNT_SETUP WINDOWS_ACCOUNT_USERNAME WINDOWS_ACCOUNT_PASSWORD WINDOWS_LOCALE_SETUP WINDOWS_LOCALE UEFI_USE_LATEST DRIVERS_USE_LATEST
   UEFI_VER_PI3 UEFI_VER_PI4 UEFI_VER_PI5 DRIVER_VER
   PI4_UEFI_SHELL_UNLOCK SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE DRY_RUN WOR_APP_TITLE WOR_RUN_ID)
@@ -2844,12 +2946,19 @@ export_installer_settings() { #Exports every collected setting, so the installer
   #Empty carries automatic model selection without turning it into an explicit override.
   : "${UEFI_USE_LATEST:=}"
   : "${WOR_TARGET_BOARD:=}"
+  : "${WOR_IMAGE_FAMILY:=desktop}" "${WOR_IMAGE_ARCH:=}" "${WOR_IOT_CONFIRM_ERASE:=0}"
+  : "${IOT_CORE_BUILD:=}" "${IOT_CORE_MINIMUM_BYTES:=}" "${IOT_CORE_SHA256:=}"
+  : "${IOT_CORE_TARGET_ID:=}" "${IOT_CORE_TARGET_BYTES:=}" "${IOT_CORE_TARGET_LAYOUT:=}"
+  : "${WOR_IOT_DOWNLOAD:=0}" "${IOT_CORE_ACQUISITION:=}"
+  : "${IOT_CORE_HDMI_MODE:=$(iot_core_hdmi_mode)}" "${IOT_CORE_HDMI_CONFIG:=}"
+  : "${IOT_CORE_ACCOUNT_SETUP:=0}" "${IOT_CORE_ACCOUNT_USERNAME:=Administrator}"
+  : "${IOT_CORE_LANGUAGE_SETUP:=1}" "${IOT_CORE_LANGUAGE:=$(iot_core_language)}"
   export "${WOR_INSTALLER_SETTINGS[@]}"
 }
 
 gui_preauthenticate() { #Signals that setup/preparation may start; sudo is requested at the destructive boundary.
   #The front-end waits for this before opening its progress window. Authentication is intentionally
-  #deferred until Step 5 so a long download/prep phase cannot expire the only password prompt.
+  #deferred until preparation finishes so a long download cannot expire the only password prompt.
   if [ -n "$WOR_GUI_AUTH_MARKER" ];then
     touch "$WOR_GUI_AUTH_MARKER" 2>/dev/null
     sync 2>/dev/null || true
@@ -2897,6 +3006,11 @@ If this error persists, contact Botspot - the WoR-flasher developer."
         install_packages exfat-utils || exit 1
       fi
     fi
+  fi
+
+  if [ "${1:-}" == gui ] || is_iot_core;then
+    [ -z "$ROOT_DEV" ] && detect_root_dev
+    return 0
   fi
 
   if ! command -v wget >/dev/null ;then
@@ -2989,6 +3103,11 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   }
 
   set_if_unset "RPI_MODEL" '.target.rpiModel // .rpiModel // .RPI_MODEL // empty'
+  set_if_unset "WOR_TARGET_BOARD" '.target.board // .WOR_TARGET_BOARD // empty'
+  set_if_unset "WOR_IMAGE_FAMILY" '.media.imageFamily // .WOR_IMAGE_FAMILY // empty'
+  set_if_unset "WOR_IMAGE_ARCH" '.media.architecture // .WOR_IMAGE_ARCH // empty'
+  set_bool_if_unset "WOR_IOT_CONFIRM_ERASE" '[.execution.confirmIotErase, .WOR_IOT_CONFIRM_ERASE] | map(select(. != null)) | first'
+  set_bool_if_unset "WOR_IOT_DOWNLOAD" '[.media.downloadIotImage, .WOR_IOT_DOWNLOAD] | map(select(. != null)) | first'
   set_if_unset "DEVICE" '.target.device // .device // .DEVICE // empty'
   set_bool_if_unset "CAN_INSTALL_ON_SAME_DRIVE" '.target.canInstallOnSameDrive // .canInstallOnSameDrive // .CAN_INSTALL_ON_SAME_DRIVE // empty'
   set_if_unset "WIN_LANG" '.media.winLang // .winLang // .WIN_LANG // empty'
@@ -2999,6 +3118,8 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
 
   set_bool_if_unset "APPLY_CUSTOM_CONFIG_TXT" '.customization.applyCustomConfigTxt // .applyCustomConfigTxt // .APPLY_CUSTOM_CONFIG_TXT // empty'
   set_if_unset "CONFIG_TXT" '.customization.configTxt // .configTxt // .CONFIG_TXT // empty'
+  set_if_unset "IOT_CORE_HDMI_MODE" '.customization.iotHdmiMode // .IOT_CORE_HDMI_MODE // empty'
+  set_if_unset "IOT_CORE_HDMI_CONFIG" '.customization.iotHdmiConfig // .IOT_CORE_HDMI_CONFIG // empty'
   set_bool_if_unset "OOBE_NETWORK_BYPASS" '.customization.oobeNetworkBypass // .oobeNetworkBypass // .OOBE_NETWORK_BYPASS // empty'
   set_bool_if_unset "PI4_AUTO_DISABLE_3GB" '.customization.pi4AutoDisable3Gb // .pi4AutoDisable3Gb // .PI4_AUTO_DISABLE_3GB // empty'
   set_bool_if_unset "PI4_UEFI_SHELL_UNLOCK" '.customization.pi4UefiShellUnlock // .pi4UefiShellUnlock // .PI4_UEFI_SHELL_UNLOCK // empty'
@@ -3009,6 +3130,11 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   set_bool_if_unset "WINDOWS_ACCOUNT_SETUP" '.userAccount.setupAccount // .windowsAccountSetup // .WINDOWS_ACCOUNT_SETUP // empty'
   set_if_unset "WINDOWS_ACCOUNT_USERNAME" '.userAccount.username // .windowsAccountUsername // .WINDOWS_ACCOUNT_USERNAME // empty'
   set_if_unset "WINDOWS_ACCOUNT_PASSWORD" '.userAccount.password // .windowsAccountPassword // .WINDOWS_ACCOUNT_PASSWORD // empty'
+  set_bool_if_unset "IOT_CORE_ACCOUNT_SETUP" '[.userAccount.iotCore.enabled, .IOT_CORE_ACCOUNT_SETUP] | map(select(. != null)) | first'
+  set_if_unset "IOT_CORE_ACCOUNT_USERNAME" '.userAccount.iotCore.username // .IOT_CORE_ACCOUNT_USERNAME // empty'
+  set_if_unset "IOT_CORE_ACCOUNT_PASSWORD" '.userAccount.iotCore.password // .IOT_CORE_ACCOUNT_PASSWORD // empty'
+  set_bool_if_unset "IOT_CORE_LANGUAGE_SETUP" '[.userAccount.iotCore.languageSetup, .IOT_CORE_LANGUAGE_SETUP] | map(select(. != null)) | first'
+  set_if_unset "IOT_CORE_LANGUAGE" '.userAccount.iotCore.language // .IOT_CORE_LANGUAGE // empty'
   set_bool_if_unset "WINDOWS_LOCALE_SETUP" '.userAccount.localeSetup // .windowsLocaleSetup // .WINDOWS_LOCALE_SETUP // empty'
   set_if_unset "WINDOWS_LOCALE" '.userAccount.locale // .windowsLocale // .WINDOWS_LOCALE // empty'
 
@@ -3020,7 +3146,7 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   set_if_unset "WOR_LOG_FILE" '.execution.logFile // .logFile // .WOR_LOG_FILE // empty'
 
   set_bool_if_unset "PLAY_SOUND" '.notifications.playSound // .playSound // .PLAY_SOUND // empty'
-  set_bool_if_unset "SHOW_NOTIFICATION" '.notifications.showNotification // .showNotification // .SHOW_NOTIFICATION // empty'
+  set_bool_if_unset "SHOW_NOTIFICATION" '[.notifications.showNotification, .showNotification, .SHOW_NOTIFICATION] | map(select(. != null)) | first'
   #the sound is named per platform, so a config shared between a Mac and a Linux box suits both
   if is_macos ;then
     set_if_unset "COMPLETION_SOUND" '.notifications.sounds.macos // .completionSound // .COMPLETION_SOUND // empty'
@@ -3050,6 +3176,27 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
 #
 
 #Load configuration values from config.json if present and variables are unset
+if [ "${1:-}" != source ];then
+  wor_config_args=("$@")
+  for ((wor_config_index=0; wor_config_index<${#wor_config_args[@]}; wor_config_index++));do
+    case "${wor_config_args[$wor_config_index]}" in
+      --iot-core) WOR_IMAGE_FAMILY=iot-core ;;
+      --iot-core-download) WOR_IMAGE_FAMILY=iot-core; WOR_IOT_DOWNLOAD=1 ;;
+      --config=*) WOR_CONFIG_FILE="${wor_config_args[$wor_config_index]#*=}" ;;
+      --config)
+        wor_config_index=$((wor_config_index+1))
+        [ "$wor_config_index" -lt "${#wor_config_args[@]}" ] || error "--config requires a file path argument."
+        WOR_CONFIG_FILE="${wor_config_args[$wor_config_index]}"
+        ;;
+    esac
+  done
+  unset wor_config_args wor_config_index
+fi
+if [ -n "${WOR_CONFIG_FILE:-}" ];then
+  [ -f "$WOR_CONFIG_FILE" ] && [ -r "$WOR_CONFIG_FILE" ] || error "Configuration file is missing or unreadable: $WOR_CONFIG_FILE"
+  command -v jq >/dev/null || error "jq is required to load an explicit JSON configuration."
+  jq -e 'type == "object"' "$WOR_CONFIG_FILE" >/dev/null || error "Configuration must be a valid JSON object: $WOR_CONFIG_FILE"
+fi
 load_config_json
 [ -z "$DL_DIR" ] && DL_DIR="$HOME/wor-flasher-files"
 
@@ -3202,7 +3349,7 @@ fi
 [ -z "$NO_UPDATE" ] && NO_UPDATE=0
 
 { #report a newer published release unless disabled via NO_UPDATE
-if [ "$NO_UPDATE" != 1 ] && [ -n "$DIRECTORY" ] && [ -f "$DIRECTORY/src/updater.mjs" ] && command -v node >/dev/null 2>&1 ;then
+if ! is_iot_core && [ "$NO_UPDATE" != 1 ] && [ -n "$DIRECTORY" ] && [ -f "$DIRECTORY/src/updater.mjs" ] && command -v node >/dev/null 2>&1 ;then
   emit_gui_progress "STATUS	Checking for WoR-Flasher updates..."
   emit_gui_substep 5
   update_res="$(node "$DIRECTORY/src/updater.mjs" --check-release "--repo-dir=$DIRECTORY" 2>/dev/null)"
@@ -3238,6 +3385,14 @@ mkdir -p "$WOR_CACHE_DIR"
 #and a tool that erases a disk must do exactly what it was asked to do.
 while [ $# -gt 0 ]; do
   case "$1" in
+    --iot-core)
+      export WOR_IMAGE_FAMILY=iot-core
+      shift
+      ;;
+    --iot-core-download)
+      export WOR_IMAGE_FAMILY=iot-core WOR_IOT_DOWNLOAD=1
+      shift
+      ;;
     --config=*)
       WOR_CONFIG_FILE="${1#*=}"
       load_config_json "$WOR_CONFIG_FILE"
@@ -3253,6 +3408,7 @@ while [ $# -gt 0 ]; do
       shift
       [ -x "$DIRECTORY/install-wor-gui.sh" ] || error "No script found named install-wor-gui.sh
 Both scripts must be in the same directory."
+      export WOR_CONFIG_FILE WOR_IMAGE_FAMILY WOR_IOT_DOWNLOAD
       exec "$DIRECTORY/install-wor-gui.sh" "$@"
       ;;
     --version|-V)
@@ -3267,6 +3423,8 @@ Usage: $(basename "$0") [OPTIONS] [gui]
   (no arguments)     run the interactive text-mode installer
   gui, --gui, -g     run the graphical front-end instead
   --config <file>    load configuration settings from a JSON file
+  --iot-core        use the separate legacy ARM32 IoT Core FFU workflow
+  --iot-core-download  explicitly download/import the reviewed Microsoft IoT image
   --version          print the version and exit
   --help             show this message
 
@@ -3295,8 +3453,14 @@ ANSI_CYAN=$'\e[96m'
 ANSI_RESET=$'\e[0m'
 
 #Let the GUI progress window open before setup/download/preparation. The single GUI sudo prompt is
-#deferred until Step 5, immediately before the first destructive disk operation.
+#deferred until preparation and target validation finish, before the first destructive disk operation.
 [ "$RUN_MODE" == gui ] && gui_preauthenticate
+
+validate_image_family || error "Invalid Windows image profile."
+if is_iot_core;then
+  iot_core_run_logged
+  exit $?
+fi
 
 setup || exit 1
 
@@ -3348,10 +3512,19 @@ if [ -z "$BID" ];then
 \e[96m1\e[0m) Windows 11
 \e[96m2\e[0m) Windows 10
 \e[96m3\e[0m) More options...
-Enter \e[96m1\e[0m, \e[96m2\e[0m or \e[96m3\e[0m: "
+\e[96m4\e[0m) Windows 10 IoT Core (ARM32, legacy FFU)
+Enter \e[96m1\e[0m, \e[96m2\e[0m, \e[96m3\e[0m or \e[96m4\e[0m: "
     read reply
 
     case $reply in
+      4)
+        WOR_IMAGE_FAMILY=iot-core
+        WOR_IMAGE_ARCH=arm32
+        WOR_TARGET_BOARD=''
+        CAN_INSTALL_ON_SAME_DRIVE=1
+        iot_core_run_logged
+        exit $?
+        ;;
       1 | 2)
         #latest Windows 10/11 chosen
         echo -e "\nFinding newest build..."

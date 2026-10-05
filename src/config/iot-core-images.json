@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "images": [
+    {
+      "id": "rpi-iot-core-17763.107",
+      "format": "ffu-v1",
+      "profile": "iot-core",
+      "architecture": "arm32",
+      "build": "17763.107",
+      "os_version": "10.0.17763.107",
+      "sha256": "15e9451eb7b3e5645e89e25ffc846d4dfd4b4a8c9c63600e177cb16817da67f5",
+      "ffu_bytes": 1008861184,
+      "payload_bytes": 1008336896,
+      "minimum_disk_bytes": 3774873600,
+      "sector_size": 512,
+      "chunk_size": 131072,
+      "platform_ids": ["Broadcom.RPi.2", "*"],
+      "recommended_boards": ["pi2-v1.1", "pi2-v1.2", "pi3-b"],
+      "source_url": "https://go.microsoft.com/fwlink/?LinkId=846058",
+      "resolved_source_url": "https://software-download.microsoft.com/download/sg/17763.107.181026-1406.rs5_release_svc_prod2_amd64fre_IOTCORE_RPi.iso",
+      "source_sha256": "3c8ca1d74d50f903062982fce9fee970c4664d5bfe4672f2de19b21b17060318",
+      "source_bytes": 787347456,
+      "source_msi": "Windows_10_IoT_Core_for_RPi.msi",
+      "source_msi_sha256": "e2be34df835e162f8606354048aaca9cd4c879afb582718b190682d36713d2f2",
+      "source_msi_bytes": 786710528,
+      "source_msi_offset": 634880,
+      "source_cab": "92c8cb0845792251b644366cf48a802a.cab",
+      "source_cab_sha256": "9f5c5f8572658c8eb0da45e7a9ff148781f2810e3bb82fbf71d25f5c18bc4ed2",
+      "source_cab_bytes": 784568479,
+      "source_cab_start_sector": 4,
+      "source_cab_member": "fil2dda957cfdb079d52c8f284117ff4a0b",
+      "documentation_url": "https://learn.microsoft.com/en-us/previous-versions/windows/iot-core/downloads",
+      "status": "legacy-maker-image",
+      "security_note": "Archived October 2018 maker image, not a current or fully patched Windows release. Not for commercialization.",
+      "hardware_tested": false
+    }
+  ]
+}

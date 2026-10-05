@@ -1,0 +1,23 @@
+{
+  "$schema": "./config.schema.json",
+  "target": {
+    "board": "pi3-b",
+    "device": "",
+    "canInstallOnSameDrive": true
+  },
+  "media": {
+    "imageFamily": "iot-core",
+    "architecture": "arm32",
+    "downloadIotImage": false,
+    "sourceFile": ""
+  },
+  "customization": {
+    "iotHdmiMode": "720p60",
+    "iotHdmiConfig": ""
+  },
+  "execution": {
+    "dryRun": true,
+    "confirmIotErase": false,
+    "skipImageVerification": false
+  }
+}

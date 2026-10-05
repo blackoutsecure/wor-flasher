@@ -49,6 +49,40 @@ whole disk. The interesting failure modes follow from that:
   images are checked against Microsoft's published SHA-1, and cached payloads carry a
   SHA-256 manifest. A way to get unverified content past any of those is a
   vulnerability.
+- **IoT Core image substitution.** Native acquisition and FFU application use the
+  reviewed digest-pinned image manifest. Package hashes, FFU chunk hashes and
+  mandatory read-back checks cannot be disabled through desktop cache/TLS options.
+  Catalog-signature interpretation is not the trust anchor: exact reviewed file
+  digests are. A wildcard FFU platform ID does not authorize another board.
+- **IoT Core target replacement.** Erase consent is bound to the selected device
+  node, capacity and previewed partition scheme; disks backing the source, running installer and active log
+  must not be targets. Failure to determine that relationship denies the write.
+- **IoT Core GPT cleanup.** Cleanup is part of the confirmed FFU write, after
+  independent complete-source verification and target binding. GPT headers/table
+  CRCs and bounded sector ranges must validate before any cleanup write, and cleared
+  metadata outside the final image extents is included in mandatory read-back.
+  An invalid layout or a changed source/target must not reach destructive cleanup.
+- **IoT Core display overrides.** The unchanged, allowlisted FFU is verified before
+  deriving an opt-in HDMI-only patch. Only the existing FAT16 boot config file
+  and its directory size can change, within the existing allocation. Firmware
+  boot keys, FAT tables and other files stay intact. Configured output blocks
+  participate in the same mandatory read-back as every other final image block;
+  invalid settings or boot geometry fail before target access.
+- **IoT Core administrator setup.** This is an opt-in post-boot operation, not an
+  offline account-database or FFU edit. The local device address and its SSH key
+  require explicit confirmation before credentials are sent. SSH host-key checking
+  stays strict, and a fresh login must verify the desired name and the same local
+  built-in administrator SID before success. DefaultAccount/service accounts are
+  excluded. Passwords use masked controls, private temporary state and SSH stdin,
+  not host command arguments, summaries or logs. Failed/partial updates remain
+  unverified; never silently retry them under the old credentials.
+- **IoT Core language selection.** The language preference uses the same pinned
+  SSH connection, but the actual IoTSettings operation must run as DefaultAccount,
+  never the administrator. The selected tag must be installed, the temporary task
+  uses the existing interactive token without stored credentials or elevated
+  run level, and task/files cleanup failures block a verified result. Accepted
+  but inactive settings are pending-reboot, not verified. No account membership,
+  SSH key authorization, image trust rule or language-pack source is widened.
 - **Privilege escalation through the sudo helpers.** The askpass scripts and the
   credential keep-alive run while the user's timestamp is live.
 - **Command or argument injection** through a filename, drive label, environment
