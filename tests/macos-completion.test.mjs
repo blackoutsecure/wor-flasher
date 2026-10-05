@@ -9,6 +9,12 @@ import vm from "node:vm";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const gui = readFileSync(join(root, "install-wor-gui.sh"), "utf8");
+const engine = readFileSync(join(root, "install-wor.sh"), "utf8");
+const engineHelpers = ["select_rpi_board", "get_os_name", "windows_version_label"].map((name) => {
+  const match = engine.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m"));
+  assert.ok(match, `Missing shared ${name} helper`);
+  return match[0];
+}).join("\n");
 const helpers = [
   "gui_start_installer", "installer_showed_own_error", "gui_update_last_log",
   "gui_save_installer_log", "gui_log_tail", "macos_password_retry_dialog", "macos_show_result_dialog",
@@ -28,7 +34,7 @@ function runFlow({ installerStatus = 0, dialogStatus = 0, fallbackStatus = 0, ab
   const directory = mkdtempSync(join(tmpdir(), "wor-completion-"));
   try {
     for (const path of ["bin", "tmp", "logs"]) mkdirSync(join(directory, path));
-    writeFileSync(join(directory, "functions.sh"), `${helpers}\n${flow}\n`);
+    writeFileSync(join(directory, "functions.sh"), `${helpers}\n${engineHelpers}\n${flow}\n`);
     writeFileSync(join(directory, "bin/mktemp"), `#!/bin/bash
 if [ "$#" == 0 ];then
   exec /usr/bin/mktemp "$TEST_DIRECTORY/tmp/tmp.XXXXXX"
@@ -50,7 +56,7 @@ exit "$TEST_INSTALLER_STATUS"
       source "$TEST_DIRECTORY/functions.sh"
       cli_script="$TEST_DIRECTORY/installer.sh"
       WOR_ICON_PATH=mock-icon WOR_APP_TITLE=WoR-Flasher WOR_WINDOW_TITLE="WoR-Flasher test"
-      WOR_ASSETS_DIR="$TEST_DIRECTORY/assets" WIN_LANG=en-us GUI_PROGRESS_EARLY=1 PLAY_SOUND=0
+      WOR_ASSETS_DIR="$TEST_DIRECTORY/assets" WIN_LANG=en-us GUI_PROGRESS_EARLY=1 PLAY_SOUND=0 WIN11_MIN_BUILD=22000
       is_macos() { return 0; }
       error() { printf "error: %s\\n" "$*" >&2; exit 1; }
       warning() { printf "warning: %s\\n" "$*" >&2; }
@@ -63,7 +69,7 @@ exit "$TEST_INSTALLER_STATUS"
       wor_jxa_window_lib() { :; }
       wor_show_result_notification() { printf '%s\\n' "$1" >> "$TEST_DIRECTORY/notifications"; }
       kill_process_tree() { printf '%s\\n' "$1" > "$TEST_DIRECTORY/stopped"; }
-      macos_choose_target() { printf 'Windows 10\\tRaspberry Pi 3 / Pi 2 v1.2\\n'; }
+      macos_choose_target() { printf 'Windows 10\\tRaspberry Pi 3\\n'; }
       list_bids() { :; }
       get_bid() { printf '19045.3803\\n'; }
       set_default_config_txt() { :; }
@@ -141,6 +147,7 @@ describe("macOS progress-to-result handoff", () => {
     assert.equal(result.logMode, 0o600);
     assert.equal(result.dialog.length, 10);
     assert.match(result.dialog[3], /Process completed successfully/);
+    assert.match(result.dialog[3], /Windows 10 media preparation is complete/);
     assert.match(result.dialog[3], /Full log: /);
     assert.match(result.dialog[6], /next-steps\.png$/);
     assert.equal(result.dialog[9], "");
@@ -158,6 +165,7 @@ describe("macOS progress-to-result handoff", () => {
       assert.equal(result.lastLog, result.log);
       assert.deepEqual(result.fallback.slice(0, 1), ["-"]);
       assert.equal(result.fallback[1], result.dialog[3]);
+      assert.match(result.fallback[1], /Windows 10 media preparation/);
       assert.equal(result.fallback[3], installerStatus === 0 ? "Complete" : "OK");
       assert.match(result.fallbackScript, /on run argv/);
       assert.match(result.fallbackScript, /activate/);
@@ -181,6 +189,7 @@ describe("macOS progress-to-result handoff", () => {
     assert.equal(result.status, 1, result.stderr);
     assert.equal(result.dialog.length, 10);
     assert.match(result.dialog[3], /Flashing was stopped before it finished/);
+    assert.match(result.dialog[3], /Windows 10 media was not completed/);
     assert.equal(result.dialog[6], "");
     assert.equal(result.dialog[9], "");
     assert.match(result.log, /Installer exit status: 1 \(interrupted\)/);

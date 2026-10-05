@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "target": "windows/arm64",
+  "goVersion": "go version go1.27.1 darwin/arm64",
+  "sourceSha256": "93d890f646e5e8da2f7961c8af15882b072df58767c5d3ab48792e48dd98fc1e",
+  "binarySha256": "c5a9d9ab2994ecaf0350ceb43bd274d240ab48afeabb1e174925e84825e262e2",
+  "goLicenseSha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+}

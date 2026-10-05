@@ -46,5 +46,10 @@ This project downloads, but does not redistribute, the following:
 
 Each of those is covered by its own license, held by its own authors.
 
+The bundled Pi3BootRefresh.exe includes the Go runtime and standard library.
+Their license is supplied in src/lib/pi3-boot-refresh/GO-LICENSE.txt and copied
+alongside the helper on installation media. The first-party helper source is in
+src/pi3-boot-refresh/.
+
 The config.txt bodies in config-templates/ are derived from the Pi Firmware Task
 Force reference configuration (https://github.com/pftf/RPi4/blob/master/config.txt).

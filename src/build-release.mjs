@@ -25,6 +25,7 @@ import {
 import { checkPackageMetadata } from "./sync-package-metadata.mjs";
 import { packageStandalone } from "./package-standalone.mjs";
 import { packageMacosDmg } from "./package-macos-dmg.mjs";
+import { verifyPi3BootRefresh } from "./build-pi3-boot-refresh.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoDir = join(scriptDir, "..");
@@ -152,6 +153,7 @@ function preparePlatformDir(name) {
 }
 
 function verifyShellRuntime() {
+  verifyPi3BootRefresh();
   for (const runtimePath of runtimePaths)
     assertExists(join(repoDir, runtimePath), `Missing ${runtimePath}`);
 

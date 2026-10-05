@@ -10,7 +10,7 @@
         "rpiModel": {
           "type": "integer",
           "enum": [3, 4, 5],
-          "description": "Target Raspberry Pi model (3, 4, or 5)"
+          "description": "Target package route: 3 (Pi 3 or Pi 2 v1.2), 4, or 5. The GUI lists Pi 2 v1.2 separately."
         },
         "device": {
           "type": "string",
@@ -63,7 +63,7 @@
         },
         "oobeNetworkBypass": {
           "type": "boolean",
-          "description": "Whether to bypass Windows OOBE network requirement"
+          "description": "Whether to hide Windows 11 OOBE network and online-account screens. Ignored for Windows 10."
         },
         "pi4AutoDisable3Gb": {
           "type": "boolean",
@@ -75,11 +75,11 @@
         },
         "uefiUseLatest": {
           "type": "boolean",
-          "description": "Whether to query GitHub for latest UEFI firmware instead of pinned version"
+          "description": "Override UEFI selection: true uses the latest stable release, false uses the selected/configured UEFI version. Omit to use latest for Pi 3 and pinned for Pi 4/5."
         },
         "driversUseLatest": {
           "type": "boolean",
-          "description": "Whether to query GitHub for latest drivers instead of pinned version"
+          "description": "Whether to query GitHub for latest drivers instead of the selected/configured driver version"
         },
         "hideEmptyDrives": {
           "type": "boolean",
@@ -192,19 +192,19 @@
         },
         "uefiVerPi3": {
           "type": "string",
-          "description": "Pinned UEFI firmware version for Pi 3"
+          "description": "Selected Pi 3 UEFI tag, used when uefiUseLatest is false and as the latest-lookup fallback; Pi 3 defaults to latest stable"
         },
         "uefiVerPi4": {
           "type": "string",
-          "description": "Pinned UEFI firmware version for Pi 4"
+          "description": "Selected Pi 4 UEFI tag, used when latest is disabled and as the latest-lookup fallback"
         },
         "uefiVerPi5": {
           "type": "string",
-          "description": "Pinned UEFI firmware version for Pi 5"
+          "description": "Selected Pi 5 UEFI tag, used when latest is disabled and as the latest-lookup fallback"
         },
         "driverVer": {
           "type": "string",
-          "description": "Pinned Windows driver package version"
+          "description": "Selected Windows driver release tag, used when latest is disabled and as the latest-lookup fallback"
         },
         "armv80MaxBuild": {
           "type": "integer",

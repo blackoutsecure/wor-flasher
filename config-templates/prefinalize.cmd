@@ -11,6 +11,24 @@
 ::
 @echo off
 
+:: The boot filesystem is already recreated, but ESP retagging and temporary-partition cleanup follow.
+:: Refresh Pi 3's sector-0 FAT view now; the helper resolves WoR-PE 1.1's duplicated drive exports.
+:: Unlike optional personalization, failure here must stop installation before an unbootable reboot.
+if exist "%~dp0Pi3BootRefresh.exe" goto :refresh_pi3
+if /i "%WOR_DEVICE_TYPE%"=="RPi3-ARM64" if /i "%WOR_INSTALLOPTIONS_PARTITIONSCHEME%"=="GPT" (
+  call :RaiseEvent LogFatal, "The required Pi 3 boot finalizer is missing. Do not reboot or reflash this installation."
+  exit /b 1
+)
+goto :stage_answer
+
+:refresh_pi3
+"%~dp0Pi3BootRefresh.exe"
+if not "%errorlevel%"=="0" (
+  call :RaiseEvent LogFatal, "Pi 3 boot finalization failed. Preserve the installation and any boot-sector backup; do not reboot."
+  exit /b 1
+)
+
+:stage_answer
 set answerSource=%~dp0unattend.xml
 set pantherDir=%WOR_DISK_WINDOWSPARTITION%\Windows\Panther
 
@@ -92,5 +110,5 @@ echo WoR-Event^|%~1^|%~2
 goto :eof
 
 :end
-:: a non-zero exit code aborts the whole installation, and a missing answer file is not worth that
+:: Optional answer-file and Pi 4 customization failures remain non-fatal.
 exit /b 0

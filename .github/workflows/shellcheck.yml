@@ -6,6 +6,9 @@ on:
       - "**.sh"
       - "**.js"
       - "**.mjs"
+      - "**.py"
+      - "src/pi3-boot-refresh/**"
+      - "src/lib/pi3-boot-refresh/**"
       - "package.json"
       - "src/config/**"
       - "assets/**"
@@ -21,6 +24,9 @@ on:
       - "**.sh"
       - "**.js"
       - "**.mjs"
+      - "**.py"
+      - "src/pi3-boot-refresh/**"
+      - "src/lib/pi3-boot-refresh/**"
       - "package.json"
       - "src/config/**"
       - "assets/**"
@@ -63,6 +69,13 @@ jobs:
 
       - name: Check for errors
         run: shellcheck --severity=error src/standalone-launcher.sh src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+
+      - name: Test native Pi 3 boot finalization
+        working-directory: src/pi3-boot-refresh
+        env:
+          GO111MODULE: "off"
+          GOTOOLCHAIN: local
+        run: go test -count=1 ./...
 
       - name: Report warnings
         continue-on-error: true

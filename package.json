@@ -38,6 +38,8 @@
     "build:macos": "node src/build-release.mjs --platform=macos",
     "build:linux": "node src/build-release.mjs --platform=linux",
     "build:standalone": "node src/build-release.mjs --platform=standalone",
+    "build:pi3-boot-refresh": "node src/build-pi3-boot-refresh.mjs",
+    "pi3-boot-refresh:check": "node src/build-pi3-boot-refresh.mjs --check",
     "package:macos": "node src/build-release.mjs --platform=macos",
     "package:all": "node src/build-release.mjs --platform=all",
     "pe:check": "node src/check-pe-installer.mjs --check",

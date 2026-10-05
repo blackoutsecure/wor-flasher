@@ -39,6 +39,29 @@ scripts install for themselves.
 npm run check                 # shell syntax and an isolated release-package build
 ```
 
+The Pi 3 post-install bootstrap helper is a small, self-contained Windows ARM64
+program; users do not need Go to flash or install Windows. Its source is in
+`src/pi3-boot-refresh/`, and the checked-in executable, source/binary hashes and
+Go license are in `src/lib/pi3-boot-refresh/`.
+
+When changing that helper, install Go 1.21 or newer (for example `brew install go`
+on macOS), then run:
+
+```bash
+(cd src/pi3-boot-refresh && GO111MODULE=off GOTOOLCHAIN=local go test -count=1 ./...)
+npm run build:pi3-boot-refresh
+npm run pi3-boot-refresh:check
+node --test tests/pi3-boot-refresh.test.mjs
+```
+
+The native core tests reuse the Python GPT/FAT fixtures and compare against the
+desktop bootstrap helper, so they also need `python3`. The build cross-compiles
+for Windows ARM64 v8.0 without CGO or external Go modules. Rebuild the executable
+and its generated manifest/license together after source changes; normal release
+packaging rejects a stale pair without requiring a Go compiler. Offline tests do
+not execute Windows device-control calls or replace a real WoR-PE installation
+test on a Pi.
+
 The suite must be green and ShellCheck must be error-clean before a pull request can
 be merged. CI runs the same commands on Ubuntu and macOS.
 

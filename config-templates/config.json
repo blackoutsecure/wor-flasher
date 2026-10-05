@@ -16,7 +16,6 @@
     "applyCustomConfigTxt": true,
     "oobeNetworkBypass": true,
     "pi4AutoDisable3Gb": true,
-    "uefiUseLatest": false,
     "driversUseLatest": true,
     "hideEmptyDrives": true
   },

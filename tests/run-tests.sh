@@ -286,9 +286,9 @@ static_checks() {
     || fail "a supported host does not install the progress utility"
 
   grep -qF 'copy_startup_environment_with_progress' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'copy_local_file_with_progress "$(basename "$install_image")"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'sha1_file_with_progress downloaded-esd' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'sha256_file_with_progress downloaded-esd' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'copy_local_file_with_progress "$(windows_version_label) installation image ($(basename "$install_image"))"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sha1_file_with_progress "$(windows_version_label) downloaded ESD"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'sha256_file_with_progress "$(windows_version_label) downloaded ESD"' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'errors="$(wimextract' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'errors="$(wimexport' "$REPO_DIR/install-wor.sh" \
     && ! grep -qF 'errors="$(wimdelete' "$REPO_DIR/install-wor.sh" \
@@ -420,8 +420,9 @@ static_checks() {
     && grep -qF 'command -v xwininfo' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'export GIO_USE_VOLUME_MONITOR=unix' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'yad "${yadflags[@]}" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 700)" --image="$WOR_ASSETS_DIR/overview.png"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'output="$(yad "${yadflags[@]}" --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 720)"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- "--text=\$'<big><b>Advanced Options</b></big>" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'output="$(GTK_OVERLAY_SCROLLING=0 yad "${yadflags[@]}" --response=0 --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 720)" --height="$(wor_yad_height "$WOR_YAD_SCREEN_HEIGHT")"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--vscroll-policy=auto' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "advanced_text=\$'<big><b>Advanced Options</b></big>" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'config_editor_title="$WOR_WINDOW_TITLE | config.txt"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--text-info --editable --in-place' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Cached Windows Files' "$REPO_DIR/install-wor-gui.sh" \
@@ -569,7 +570,7 @@ disk5 Second drive"
     && grep -qF "const imagePath = optionalArgument(7, '')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'exit "$installer_status"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'WOR_GUI_ERROR_MARKER="$error_marker"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'The $(windows_version_label) media preparation stopped unexpectedly (exit code $installer_status).' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "name: 'WorProgressController'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF 'tell application "Terminal" to close front window' "$REPO_DIR/install-wor-gui.sh" \
@@ -634,7 +635,7 @@ disk5 Second drive"
     && pass "Pi 4 Ethernet, USB, and DMA filter drivers are checked before and after flashing" \
     || fail "Pi 4 Ethernet, USB, and DMA filter driver verification is incomplete"
 
-  grep -qF 'if [ "$RPI_MODEL" == 4 ] && [ "$PI4_AUTO_DISABLE_3GB" == 1 ];then' "$REPO_DIR/install-wor.sh" \
+  grep -qF 'if advanced_option_applies pi4 && [ "$PI4_AUTO_DISABLE_3GB" == 1 ];then' "$REPO_DIR/install-wor.sh" \
     && grep -qF 'after the injected drivers are installed' "$REPO_DIR/README.md" \
     && grep -qF 'CM4 requires the RAM limit set to 1 GB' "$REPO_DIR/README.md" \
     && grep -qF 'bcdedit /deletevalue' "$REPO_DIR/config-templates/pi4-ram-unlock.ps1" \
@@ -651,8 +652,8 @@ disk5 Second drive"
     && grep -qF 'Microsoft-Windows-International-Core' "$REPO_DIR/install-wor.sh" \
     && [ "$(grep -cF 'install_windows_setup_configuration ' "$REPO_DIR/install-wor.sh")" == 2 ] \
     && grep -qF 'cmp -s "$boot_mount/Autounattend.xml" "$install_mount/Autounattend.xml"' "$REPO_DIR/install-wor.sh" \
-    && pass "Windows OOBE network bypass is default-on, configurable, written to both partitions, and verified" \
-    || fail "Windows OOBE network bypass is incomplete"
+    && pass "Windows 11 OOBE network bypass is default-on, configurable, written to both partitions, and verified" \
+    || fail "Windows 11 OOBE network bypass is incomplete"
 
   account_xml="$(run_in_engine 'WINDOWS_ACCOUNT_SETUP=1 WINDOWS_ACCOUNT_USERNAME="Test&User" WINDOWS_ACCOUNT_PASSWORD="safe<password>" WINDOWS_LOCALE_SETUP=1 WINDOWS_LOCALE=en-GB unattend_xml')"
   printf '%s' "$account_xml" | grep -qF '<Name>Test&amp;User</Name>' \
@@ -713,7 +714,7 @@ disk5 Second drive"
     && grep -qF 'Automatically disable the Pi 4 3 GB RAM limit after install' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'Skip flashing the device (dry run)' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'function addSectionHeader(title)' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "addSectionHeader('Windows setup')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "addSectionHeader(setupTitle)" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "addSectionHeader('Firmware and drivers')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "addSectionHeader('Validation')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "addSectionHeader('Downloads')" "$REPO_DIR/install-wor-gui.sh" \
@@ -740,11 +741,11 @@ disk5 Second drive"
 
   grep -qF 'linux_choose_one() {' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--use-markup' "$REPO_DIR/install-wor-gui.sh" \
-    && [ "$(grep -anF -- '--field=Windows setup:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Firmware and drivers:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
+    && [ "$(grep -anF -- '--field=$(wor_setup_scope "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE"):LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Firmware and drivers:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
     && [ "$(grep -anF -- '--field=Firmware and drivers:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Validation:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
     && [ "$(grep -anF -- '--field=Validation:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" -lt "$(grep -anF -- '--field=Downloads:LBL' "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)" ] \
     && grep -qF -- "--field='Windows version:CB' 'Windows 11!Windows 10!More options'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- "--field='Raspberry Pi model:CB' 'Raspberry Pi 5!Raspberry Pi 4 / Pi 400!Raspberry Pi 3 / Pi 2 v1.2'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- "--field='Raspberry Pi model:CB' \"\$(wor_rpi_board_options | paste -sd '!' -)\"" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "RPI_MODEL=''" "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF -- '--form --columns=2' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF -- "--button='<b>View / Edit config.txt...</b>':3" "$REPO_DIR/install-wor-gui.sh" \
@@ -842,15 +843,17 @@ disk5 Second drive"
     || fail "a macOS function definition is being swallowed by a preceding heredoc"
   rm -rf "$macos_fn_probe" "$macos_fn_tmpdir"
 
-  #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4, so the GUIs must not offer it as a live choice
+  #both toolkits omit irrelevant controls without shifting the remaining result fields
   grep -qF 'checked: parts[1]' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "enabled: parts[2] !== '0'" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'checkbox.enabled = rows[i].enabled' "$REPO_DIR/install-wor-gui.sh" \
-    && [ "$(grep -cF 'pi4_applicable=1 || pi4_applicable=0' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
-    && grep -qF 'not applicable to the Pi %s' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'advanced_option_applies pi4 && pi4_applicable=1 || pi4_applicable=0' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if (!rows[i].enabled)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if advanced_option_applies pi4;then' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if advanced_option_applies drivers;then' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '2) [ "$pi4_applicable" == 1 ] && PI4_AUTO_DISABLE_3GB="$line" ;;' "$REPO_DIR/install-wor-gui.sh" \
-    && pass "the Pi 4 RAM-unlock toggle is greyed out and ignored on other Pi models" \
-    || fail "the Pi 4 RAM-unlock toggle is not gated on the selected Pi model"
+    && pass "inapplicable advanced controls are hidden without changing their saved preferences" \
+    || fail "an advanced control is not gated on the selected target"
 
   #in recovery mode the custom config.txt only boots the installer media
   grep -qF "printf 'boot partition'" "$REPO_DIR/src/lib/gui.sh" \
@@ -862,8 +865,8 @@ disk5 Second drive"
   grep -qF '[ -z "$SKIP_IMAGE_VERIFICATION" ] && SKIP_IMAGE_VERIFICATION=0' "$REPO_DIR/install-wor.sh" \
     && [ "$(grep -cF 'if [ "$SKIP_IMAGE_VERIFICATION" == 1 ];then' "$REPO_DIR/install-wor.sh")" == 2 ] \
     && [ "$(grep -cF 'verify_written_image "$DEVICE" "$PART1" "$PART2"' "$REPO_DIR/install-wor.sh")" == 2 ] \
-    && grep -qF 'Use the latest UEFI firmware instead of the tested pinned version (%s)' "$REPO_DIR/src/lib/gui.sh" \
-    && grep -qF 'Use the latest Windows ARM64 drivers instead of the pinned version (%s)' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'Use the latest UEFI firmware' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'Use the latest Windows ARM64 drivers' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'Skip verifying the written image after flashing' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'Flash begins immediately after administrator approval. Use Advanced to change these settings.' "$REPO_DIR/install-wor-gui.sh" \
     && pass "Skip-verification option defaults off, wraps both verify_written_image calls, and confirm screens show pinned versions and guidance" \
@@ -906,7 +909,9 @@ disk5 Second drive"
     && pass "HideEmptyDrives is written into the cached PE settings.ini before boot.wim assembly" \
     || fail "HideEmptyDrives support is missing or incomplete"
 
-  grep -qF 'Allow Windows setup to continue without a network connection' "$REPO_DIR/src/lib/gui.sh" \
+  grep -qF 'Allow Windows 11 setup to continue without a network connection' "$REPO_DIR/src/lib/gui.sh" \
+    && ! grep -qF 'Skip Windows 10 network and online-account setup screens' "$REPO_DIR/src/lib/gui.sh" \
+    && grep -qF 'if advanced_option_applies oobe;then' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF "step=oobe" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'OOBE_NETWORK_BYPASS' "$REPO_DIR/install-wor.sh" \
     && pass "macOS and Linux GUIs expose the OOBE network choice only in Advanced Options" \
@@ -1363,9 +1368,9 @@ SH
 
   #wimverify does not consistently report byte progress, so verification needs deterministic milestones.
   grep -qF 'report_verification_task() {' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'report_verification_task 45 "Verifying boot.wim integrity"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'report_verification_task 60 "Verifying install.wim integrity"' "$REPO_DIR/install-wor.sh" \
-    && grep -qF 'report_verification_task 100 "Written image verified"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'report_verification_task 45 "Verifying $windows_name PE image integrity (boot.wim)"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'report_verification_task 60 "Verifying $windows_name installation image integrity (install.wim)"' "$REPO_DIR/install-wor.sh" \
+    && grep -qF 'report_verification_task 100 "$windows_name written image verified"' "$REPO_DIR/install-wor.sh" \
     && pass "verification reports milestones when wimverify is silent" \
     || fail "verification can stall the GUI progress bar while wimverify is silent"
 
@@ -2170,7 +2175,7 @@ JSON
     && grep -qF 'darwin_require_wimlib_volume_access "$boot_mount/sources/boot.wim"' "$REPO_DIR/install-wor.sh" \
     && awk '/^darwin_flash_device\(\)/ { in_function=1 }
       in_function && /darwin_require_wimlib_volume_access/ { preflight=1 }
-      in_function && /report_copy_task 15 "Installation files"/ { exit preflight ? 0 : 1 }' "$REPO_DIR/install-wor.sh" \
+      in_function && /report_copy_task 15 "\$windows_name installation files"/ { exit preflight ? 0 : 1 }' "$REPO_DIR/install-wor.sh" \
     && pass "macOS preflights wimlib removable-volume access before the large installation copy" \
     || fail "macOS wimlib removable-volume preflight or denial guidance is incomplete"
 
@@ -2253,6 +2258,7 @@ rc=1" ] \
   mkdir -p "$hook_bootstrap_dir/source/config-templates" "$hook_bootstrap_dir/source/src/lib" "$hook_bootstrap_dir/source/src/config"
   cp "$REPO_DIR/install-wor.sh" "$hook_bootstrap_dir/source/"
   cp "$REPO_DIR/src/lib/metadata.sh" "$REPO_DIR/src/lib/dependencies.sh" "$REPO_DIR/src/lib/paths.sh" "$REPO_DIR/src/lib/cleanup.sh" "$REPO_DIR/src/lib/gui.sh" "$hook_bootstrap_dir/source/src/lib/"
+  cp -R "$REPO_DIR/src/lib/pi3-boot-refresh" "$hook_bootstrap_dir/source/src/lib/"
   cp "$REPO_DIR/src/config/metadata.json" "$REPO_DIR/src/config/metadata.schema.json" "$hook_bootstrap_dir/source/src/config/"
   cp -R "$REPO_DIR/config-templates/." "$hook_bootstrap_dir/source/config-templates/"
   git -C "$hook_bootstrap_dir/source" init -q
@@ -2337,7 +2343,7 @@ rc=1" ] \
     #the answer file has to reach the installed OS, and the hook must not invalidate the cache
     grep -qF "<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>" peinstaller/winpe/2/scripts/unattend.xml && echo answer-staged
     grep -qF "Windows\\Panther" peinstaller/winpe/2/scripts/prefinalize.cmd && echo targets-panther
-    grep -q "exit /b 0" peinstaller/winpe/2/scripts/prefinalize.cmd && echo always-exits-zero
+    grep -q "exit /b 0" peinstaller/winpe/2/scripts/prefinalize.cmd && echo optional-settings-nonfatal
     grep -qU $'"'"'\r'"'"' peinstaller/winpe/2/scripts/prefinalize.cmd && echo crlf
     cache_is_current "$PWD/peinstaller" token-v1 && echo cache-intact
     #turning both customizations off must not leave a stale hook behind in the cache
@@ -2346,7 +2352,7 @@ rc=1" ] \
     [ -e peinstaller/winpe/2/scripts ] || echo stale-hook-removed
   ')"
   rm -rf "$pe_hook_dir"
-  for pe_hook_expected in answer-staged targets-panther always-exits-zero crlf cache-intact stale-hook-removed ;do
+  for pe_hook_expected in answer-staged targets-panther optional-settings-nonfatal crlf cache-intact stale-hook-removed ;do
     printf '%s\n' "$pe_hook_out" | grep -qx "$pe_hook_expected" || missing_pe_hook="$missing_pe_hook $pe_hook_expected"
   done
   [ -z "$missing_pe_hook" ] \
@@ -2523,6 +2529,12 @@ PARTPROBE
 seed_winfiles() { #Input: build id. Makes install-wor.sh skip the multi-gigabyte Windows download.
   [ "$SKIP_ESD" == 0 ] && return 0
   mkdir -p "$TEST_DL_DIR/winfiles_${1}_${TEST_WIN_LANG}"
+  if [ ! -s "$TEST_DL_DIR/winfiles_${1}_${TEST_WIN_LANG}/install.wim" ];then
+    mkdir -p "$TEST_DIR/install-image-fixture"
+    printf 'installation image fixture\n' > "$TEST_DIR/install-image-fixture/fixture.txt"
+    wimcapture "$TEST_DIR/install-image-fixture" "$TEST_DL_DIR/winfiles_${1}_${TEST_WIN_LANG}/install.wim" install >/dev/null \
+      || die "Failed to prepare a valid cached installation image."
+  fi
   touch "$TEST_DL_DIR/winfiles_${1}_${TEST_WIN_LANG}/alldone"
 }
 

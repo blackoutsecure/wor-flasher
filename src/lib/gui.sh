@@ -10,30 +10,65 @@
 #Every user-facing option label lives here exactly once.
 #Ordering stays with each front-end: yad parses its results positionally, so its field order is load-bearing.
 
-#Output: key<TAB>label<TAB>caution for every Advanced Options toggle.
+wor_rpi_board_options() { #Output: separate board labels shared by the macOS and Linux target pickers.
+	printf '%s\n' 'Raspberry Pi 5' 'Raspberry Pi 4 / Pi 400' 'Raspberry Pi 3' 'Raspberry Pi 2 v1.2'
+}
+
+#Output: key<TAB>label<TAB>caution<TAB>recommended for every Advanced Options toggle.
 #caution 1 marks an option that departs from the tested defaults, so both front-ends can flag it.
-wor_advanced_toggles() { #Input: pinned UEFI version, pinned driver version, Pi model.
-	printf 'oobe\tAllow Windows setup to continue without a network connection\t0\n'
-	printf 'pi4\t%s\t0\n' "$(wor_pi4_label "$3")"
-	printf 'uefi\tUse the latest UEFI firmware instead of the tested pinned version (%s)\t1\n' "$1"
-	printf 'drivers\tUse the latest Windows ARM64 drivers instead of the pinned version (%s)\t0\n' "$2"
-	printf 'verify\tSkip verifying the written image after flashing\t1\n'
-	printf 'dryrun\tSkip flashing the device (dry run)\t0\n'
-}
-
-wor_advanced_label() { #Input: key, pinned UEFI version, pinned driver version, Pi model. Output: label.
-	wor_advanced_toggles "$2" "$3" "$4" | awk -F'\t' -v key="$1" '$1 == key {print $2}'
-}
-
-wor_advanced_caution() { #Input: key. Output: 1 when the option departs from the tested defaults.
-	wor_advanced_toggles '' '' '' | awk -F'\t' -v key="$1" '$1 == key {print $3}'
-}
-
-wor_pi4_label() { #Input: Pi model. Output: label for the Pi 4 RAM-unlock toggle.
-	if [ "$1" == 4 ];then
-		printf 'Automatically disable the Pi 4 3 GB RAM limit after install'
+wor_advanced_toggles() { #Input: pinned UEFI, pinned driver, Pi model, Windows family, installation mode.
+	local drivers_recommended=0
+	case "$3" in 3 | 4) drivers_recommended=1 ;; esac
+	printf 'oobe\tAllow Windows 11 setup to continue without a network connection\t0\t0\n'
+	printf 'pi4\t%s\t0\t0\n' "$(wor_pi4_label "$3")"
+	if [ "$3" == 3 ];then
+		printf 'uefi\tUse the latest UEFI firmware\t0\t1\n'
 	else
-		printf 'Automatically disable the Pi 4 3 GB RAM limit after install (not applicable to the Pi %s)' "$1"
+		printf 'uefi\tUse the latest UEFI firmware\t1\t0\n'
+	fi
+	printf 'drivers\tUse the latest Windows ARM64 drivers\t0\t%s\n' "$drivers_recommended"
+	if [ "${5:-1}" == 0 ];then
+		printf 'verify\tSkip verifying the prepared recovery media\t1\t0\n'
+	else
+		printf 'verify\tSkip verifying the written image after flashing\t1\t0\n'
+	fi
+	printf 'dryrun\tSkip flashing the device (dry run)\t0\t0\n'
+}
+
+wor_advanced_label() { #Input: key, pinned UEFI, pinned driver, Pi model, Windows family, installation mode.
+	wor_advanced_toggles "$2" "$3" "$4" "${5:-}" "${6:-1}" | awk -F'\t' -v key="$1" '$1 == key {print $2}'
+}
+
+wor_advanced_caution() { #Input: key, optional Pi model. Output: 1 when the option departs from model defaults.
+	wor_advanced_toggles '' '' "${2:-}" | awk -F'\t' -v key="$1" '$1 == key {print $3}'
+}
+
+wor_advanced_recommended() { #Input: key, Pi model. Output: 1 when the option gets a Recommended label.
+	wor_advanced_toggles '' '' "$2" | awk -F'\t' -v key="$1" '$1 == key {print $4}'
+}
+
+wor_release_version_label() { #Input: tag, verified latest tag. Display text only; downloads keep the raw tag.
+	printf '%s' "$1"
+	[ -z "$2" ] || [ "$1" != "$2" ] || printf ' (latest) [recommended]'
+}
+
+wor_pi4_label() { #Output: label for the applicable Pi 4 RAM-unlock toggle.
+	printf 'Automatically disable the Pi 4 3 GB RAM limit after install'
+}
+
+wor_setup_scope() { #Input: Windows family, installation mode. Output: the target of first-boot customization.
+	if [ "$2" == 0 ];then
+		printf '%s setup on the destination drive' "$1"
+	else
+		printf '%s setup on this drive' "$1"
+	fi
+}
+
+wor_advanced_context() { #Input: Windows family, installation mode. Output: scope explanation for both GUIs.
+	if [ "$2" == 0 ];then
+		printf 'Creating recovery media for %s.\nSetup, account and regional choices apply when WoR-PE installs Windows on another drive.' "$1"
+	else
+		printf 'Preparing %s for installation on this drive.\nSetup, account and regional choices apply when WoR-PE installs Windows.' "$1"
 	fi
 }
 
@@ -234,10 +269,12 @@ wor_init_yad_flags() { #Sets the shared yadflags array. Assigns rather than echo
 	yadflags=(--center --fixed --buttons-layout=center --width="$(wor_yad_width 400)" --height="$(wor_yad_height 250)" --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" --separator='\n')
 }
 
-wor_yad_label() { #Input: label, caution flag. Output: label with the shared not-recommended marker.
-	#yad cannot colour a checkbox label, so the macOS red badge becomes plain text here
+wor_yad_label() { #Input: label, caution flag, optional recommendation flag. Output: annotated checkbox label.
+	#yad cannot colour a checkbox label, so the macOS badges become plain text here
 	if [ "$2" == 1 ];then
 		printf '%s (not recommended)' "$1"
+	elif [ "${3:-0}" == 1 ];then
+		printf '%s (recommended)' "$1"
 	else
 		printf '%s' "$1"
 	fi
@@ -265,15 +302,15 @@ wor_play_result_sound() { #Input: success or failure. The macOS side uses NSSoun
 	return 0
 }
 
-wor_show_result_notification() { #Input: success or failure. A flash is long enough to walk away from, so the desktop reports the result too.
+wor_show_result_notification() { #Input: success or failure, optional Windows family. Reports the selected media result.
 	#Best effort only: backgrounded, and always successful, so a denied notification permission or a
 	#desktop with no notification daemon never turns a finished flash into a failed run
 	[ "${SHOW_NOTIFICATION:-1}" == 1 ] || return 0
-	local title="${WOR_APP_TITLE:-WoR-Flasher}" body
+	local title="${WOR_APP_TITLE:-WoR-Flasher}" body windows_name="${2:-Windows}"
 	if [ "$1" == success ];then
-		body="Finished flashing ${DEVICE:-the drive}. It is ready to boot on your Raspberry Pi."
+		body="Finished preparing $windows_name media on ${DEVICE:-the drive}. It is ready to boot on your Raspberry Pi."
 	else
-		body="Flashing stopped before it finished. Open ${title} for details."
+		body="Preparing $windows_name media stopped before it finished. Open ${title} for details."
 	fi
 	case "$(wor_host_platform)" in
 		macos)

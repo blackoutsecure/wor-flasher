@@ -43,7 +43,10 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
   - [Parameters](#parameters)
   - [Application setup](#application-setup)
     - [Existing Windows ISO](#existing-windows-iso)
+    - [Pi 3 low-memory image preparation](#pi-3-low-memory-image-preparation)
+    - [UEFI firmware defaults](#uefi-firmware-defaults)
     - [Pi 4 RAM unlock](#pi-4-ram-unlock)
+    - [Context-aware Advanced Options](#context-aware-advanced-options)
     - [Offline Windows setup](#offline-windows-setup)
     - [Customization templates](#customization-templates)
     - [WoR-PE options](#wor-pe-options)
@@ -74,6 +77,11 @@ WoR-Flasher downloads or imports Windows, adds the required UEFI firmware and av
 | Pi 5                 | 25H2 and newer           | Community/unofficial support only ([worproject FAQ](https://worproject.com/faq#is-raspberry-pi-5-or-newer-supported)); no native Pi hardware drivers; USB Ethernet is required for networking |
 
 Pi 3 and Pi 4 cannot run builds newer than `25163`, because those builds require ARMv8.1 atomics. WoR-Flasher rejects incompatible builds. Windows versions that run on these models are past end of support and should be treated as experimental or offline systems.
+
+Both GUIs list **Raspberry Pi 2 v1.2** separately from **Raspberry Pi 3**. Pi 2
+v1.2 still uses `RPI_MODEL=3` for firmware, drivers, boot configuration and image
+compatibility; summaries retain the board you selected. Earlier Pi 2 revisions
+are not supported by this ARM64 desktop route.
 
 ## Requirements
 
@@ -167,13 +175,18 @@ The overview image shows the shared installation workflow. On macOS, the same ch
 
 Both front-ends size windows from the active screen. The Linux GUI detects its desktop geometry with `xrandr`, `xdpyinfo` or `xwininfo`, clamps every requested width and height inside fixed screen margins, and falls back to the narrow product logo when a full-size illustration cannot fit. A conservative `1024x768` fallback is used when the display server exposes no geometry command.
 
-Linux follows the same staged route as macOS: partnership announcement, Windows version, Raspberry Pi model, target drive, installation mode, overview, Advanced Options, progress, and completion. Its overview and Advanced Options scroll inside their bounded windows, and `config.txt` opens in a separate Save/Back editor. Progress-window Abort and close both stop the installer tree before reporting failure.
+The macOS **Review flash settings** window grows to fit all settings when the available
+screen space permits, accounting for its title bar and panel border. Only a genuinely
+overflowing settings list gets a visible vertical scrollbar; the erase warning and
+Flash, Back and Advanced buttons remain outside the scrolling panel.
+
+Linux follows the same staged route as macOS: partnership announcement, Windows version, Raspberry Pi model, target drive, installation mode, overview, Advanced Options, progress, and completion. Its overview scrolls inside a bounded window; Advanced Options uses the available screen height and shows a vertical scrollbar only when its form overflows. `config.txt` opens in a separate Save/Back editor. Progress-window Abort and close both stop the installer tree before reporting failure.
 
 Window chrome remains native to each desktop. On Ubuntu, GNOME/Mutter draws the title bar and its controls; WoR-Flasher marks yad dialogs fixed-size so they support native minimize, restore, and close without allowing resize or maximize. Replacing those controls with imitation macOS traffic lights would remove native accessibility and window-manager behavior.
 
 The front-end is never chosen automatically. `DISPLAY` is also set over SSH and in CI, and a tool that erases a drive should do exactly what it was asked to do.
 
-An **Advanced Options** window is reachable from the confirmation screen on both platforms. It exposes every configuration-only option as a checkbox, plus an editable `config.txt`: [offline Windows setup](#offline-windows-setup), the [Pi 4 RAM unlock](#pi-4-ram-unlock), whether to use the latest UEFI firmware or drivers instead of the tested pinned versions (the pinned version is shown in each label), whether to skip the final written-image verification, and dry run. `APPLY_CUSTOM_CONFIG_TXT` controls whether the editable `config.txt` is applied at all; unchecking it dims the editor and leaves the UEFI firmware package's own default in place. A **Downloaded files** menu selects the [cache mode](#download-cache), since it has three settings rather than two.
+An **Advanced Options** window is reachable from the confirmation screen on both platforms. It shows [applicable options for the selected image and target](#context-aware-advanced-options), plus an editable `config.txt`: [offline Windows setup](#offline-windows-setup), the [Pi 4 RAM unlock](#pi-4-ram-unlock), [UEFI selection](#uefi-firmware-defaults), latest versus pinned drivers, whether to skip the final written-image verification, and dry run. Latest stable UEFI is selected by default for Pi 3; Pi 4/5 retain their pinned defaults. `APPLY_CUSTOM_CONFIG_TXT` controls whether the editable `config.txt` is applied at all; unchecking it dims the editor and leaves the UEFI firmware package's own default in place. A **Downloaded files** menu selects the [cache mode](#download-cache), since it has three settings rather than two.
 
 Administrator access is requested through a native password dialog on both platforms — there is no terminal to type into.
 
@@ -315,7 +328,7 @@ Every prompt has a matching environment variable.
 | Variable                    | Default                                    | Function                                                                                                                |
 | --------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
 | `DL_DIR`                    | `~/wor-flasher-files`                      | Where components are downloaded and Windows images are extracted                                                        |
-| `RPI_MODEL`                 | _ask_                                      | Target Raspberry Pi: `3`, `4` or `5`                                                                                    |
+| `RPI_MODEL`                 | _ask_                                      | Package route: `3` (Pi 3 / Pi 2 v1.2), `4` or `5`; the GUI lists Pi 2 v1.2 separately                                   |
 | `BID`                       | _ask_                                      | Exact Windows build ID, e.g. `22631.2861`                                                                               |
 | `WIN_LANG`                  | _ask_                                      | Windows language code, e.g. `en-us`                                                                                     |
 | `DEVICE`                    | _ask_                                      | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                                                           |
@@ -323,7 +336,7 @@ Every prompt has a matching environment variable.
 | `SOURCE_FILE`               | unset                                      | Path to an existing Windows ARM64 ISO, instead of downloading                                                           |
 | `CONFIG_TXT`                | shipped template                           | Body of `config.txt` written to the boot partition                                                                      |
 | `APPLY_CUSTOM_CONFIG_TXT`   | `1`                                        | `0` leaves the UEFI firmware package's own `config.txt` in place                                                        |
-| `OOBE_NETWORK_BYPASS`       | `1`                                        | `0` requires the standard network-connected Windows setup flow                                                          |
+| `OOBE_NETWORK_BYPASS`       | `1` (Windows 11 only)                     | `0` leaves the standard Windows 11 network/account setup flow; ignored for Windows 10                                  |
 | `WINDOWS_ACCOUNT_SETUP`     | `0`                                        | `1` creates the optional local Windows administrator configured in Advanced Options                                     |
 | `WINDOWS_ACCOUNT_USERNAME`  | unset                                      | Username for the optional local Windows account                                                                         |
 | `WINDOWS_ACCOUNT_PASSWORD`  | unset                                      | Password for the optional account; written to unattended setup only when enabled                                        |
@@ -331,8 +344,10 @@ Every prompt has a matching environment variable.
 | `WINDOWS_LOCALE`            | `en-US`                                    | Locale such as `en-US` or `en-GB` used when locale setup is enabled                                                     |
 | `PI4_AUTO_DISABLE_3GB`      | `1`                                        | Pi 4 only. `0` keeps the 3 GB RAM limit                                                                                 |
 | `PI4_UEFI_SHELL_UNLOCK`     | `0`                                        | Pi 4 only. `1` stages a one-time verified UEFI Shell handoff and restores the EFI loader after setting the RAM variable |
-| `UEFI_USE_LATEST`           | `0`                                        | `1` queries GitHub for the newest UEFI firmware instead of the pinned version                                           |
+| `UEFI_USE_LATEST`           | Pi 3: `1`; Pi 4/5: `0`                    | Unset follows the model default; explicit `1` queries latest stable UEFI, `0` uses the selected/configured version        |
+| `UEFI_VER_PI3` / `UEFI_VER_PI4` / `UEFI_VER_PI5` | `v1.39` / `v1.50` / `v0.3` | Per-model UEFI tag used when latest is off, and as the latest-lookup fallback                         |
 | `DRIVERS_USE_LATEST`        | `1`                                        | `0` uses the pinned driver package version                                                                              |
+| `DRIVER_VER`               | `v0.17`                                    | Driver release tag used when latest is off, and as the latest-lookup fallback                                           |
 | `SKIP_IMAGE_VERIFICATION`   | `0`                                        | `1` skips post-flash verification. Not recommended                                                                      |
 | `CHECK_FOR_UPDATES`         | `1`                                        | `0` disables the read-only release check                                                                                |
 | `NO_UPDATE`                 | `0`                                        | Legacy inverse of `CHECK_FOR_UPDATES`; `1` disables update checks                                                       |
@@ -362,6 +377,109 @@ SOURCE_FILE=/path/to/windows-arm64.iso ./install-wor.sh
 
 The build number and language are read from the filename where possible, and you are asked for them if not. Customized Windows images are not supported.
 
+### Pi 3 low-memory image preparation
+
+For the desktop ARM64 Pi 3 route (including Pi 2 v1.2), WoR-Flasher prepares
+`install.wim` as a **non-solid LZX WIM with 32 KiB compression chunks** before
+writing any target disk. Merely renaming a downloaded ESD to `.wim` does not
+change its solid LZMS compression. The explicit conversion is intended to reduce
+image-deployment memory pressure in WoR-PE on these 1 GB boards.
+
+This check covers downloaded images, imported ISO images, existing extracted
+caches, and resumed password retries, in both self-installation and recovery-media
+modes. It also runs during `DRY_RUN=1` preparation and with `USE_CACHE=2`: trusting
+downloaded files does not bypass the required image format. Pi 4/5 do not perform
+this conversion.
+
+All Windows editions and their metadata are preserved. Conversion writes to
+temporary storage next to the cached image; the original is replaced only after
+WIM integrity, non-solid LZX format, edition metadata and installation-partition
+capacity checks pass. An interrupted or failed conversion leaves the original
+image in place and removes its partial output. A compatible cached image is
+reused without recompression. Source ISO files and the existing PE boot image
+are not changed.
+
+Conversion can take several minutes and needs additional free space on the
+download volume. The preflight reserves the total uncompressed WIM blob size
+plus 512 MiB of headroom while retaining the original. The resulting WIM may
+be larger than the ESD; an image that will not fit the planned installation
+partition is rejected before disk writing.
+
+The log reports **Converting Windows 10/11 installation image to non-solid LZX**
+and, after successful replacement, **Pi 3 installation image ready**. This
+mitigates a plausible contributor to WoR-PE's `Win32Exception (14)` during
+`ApplyImage`; it does not guarantee that every Windows build can install or run
+within 1 GB RAM, and it does not fix separate CIM disk-discovery failures.
+A successful Mac/Linux flash still needs a real Pi boot/install test.
+
+### UEFI firmware defaults
+
+| Target | Default firmware selection | Pin retained for explicit selection and fallback |
+| ------ | -------------------------- | ----------------------------------------------- |
+| Pi 3 / Pi 2 v1.2 route | Latest stable release from `pftf/RPi3` | `v1.39` |
+| Pi 4 / Pi 400 | Pinned `v1.50` | `v1.50` |
+| Pi 5 | Pinned `v0.3` | `v0.3` |
+
+The Pi 3 route now queries GitHub's latest non-prerelease UEFI release by default,
+in both self-installation and recovery-media modes. Its latest-UEFI checkbox is
+checked by default and marked **Recommended** (green on macOS, matching the custom
+boot-config option). Latest is not a fixed tag: it is
+resolved during firmware preparation. If the lookup fails or returns no ZIP asset,
+the installer reports the problem and falls back to the retained pin.
+
+Unchecking **Use the latest UEFI firmware** reveals a **UEFI version** dropdown.
+Unchecking **Use the latest Windows ARM64 drivers** similarly reveals a **Driver
+version** dropdown where a driver package is available. The current configured
+version is retained when latest is already disabled. When first turning latest off
+for Pi 3 UEFI or Pi 3/4 ARM64 drivers, the dropdown starts at GitHub's latest
+compatible release and labels it **`version (latest) [recommended]`**, rather than
+selecting an older bundled fallback. The latest marker comes from GitHub's
+`releases/latest` response, not simply the first entry in the release history.
+
+Explicitly configured non-default versions and versions you have already selected
+are retained. Choose another tag to pin that version; checking latest again hides
+the dropdown and remembers its selection. Merely opening Advanced Options while
+latest remains enabled does not change the retained fallback. Pi 4/5 UEFI continue
+to start with their configured pins, not the latest-firmware recommendation.
+
+The lists come from each upstream GitHub repository's release catalogue, filtered
+to tags with an uploaded ZIP package for the selected Pi. Releases marked draft or
+prerelease are excluded. This is a package-availability list, not a guarantee that
+every historical version works on your hardware. Keep the recommended Pi 4 default
+unless deliberately testing another release.
+
+Catalogue requests are time-bounded, paginated and cached for five minutes. If
+GitHub is unavailable, the dropdown retains the current valid selection and shows a
+warning instead of silently choosing another version. Reopen Advanced Options to
+retry. If the latest lookup alone fails, available tags remain selectable but no
+tag is falsely labeled latest/recommended. macOS expands/collapses the rows in place; Linux refreshes the form when a
+latest checkbox changes, preserving pending edits. Back discards those pending edits.
+
+The selected tags are forwarded to the installer and shown in the overview. For
+configuration/non-interactive use, set `customization.uefiUseLatest` to `false` and
+`system.uefiVerPi3`, `system.uefiVerPi4` or `system.uefiVerPi5` as appropriate; drivers
+use `customization.driversUseLatest` and `system.driverVer`. For example:
+
+```bash
+RPI_MODEL=3 UEFI_USE_LATEST=0 UEFI_VER_PI3=v1.39 ./install-wor.sh
+```
+
+An explicit environment or configuration value overrides the model default. Omit
+`customization.uefiUseLatest` to follow model defaults; an existing configuration
+with `false` still requests pinned firmware. Merely opening and accepting Advanced
+Options does not turn an unchanged default into an override, so changing the
+selected model still selects the appropriate default.
+
+With the default `USE_CACHE=1`, a cached firmware package is reused only when it
+matches the resolved release and its integrity manifest. `USE_CACHE=2` deliberately
+trusts existing cached firmware/drivers without checking for a newer release,
+regardless of the latest checkboxes or selected tags. The version selectors warn
+about this mode; use `USE_CACHE=1` to obtain the explicitly selected versions.
+
+Pi 4 remains pinned because of its documented Ethernet and microSD regressions.
+Pi 3 reaching Windows PE with latest UEFI does not resolve the separate memory
+limitations of installing Windows on a 1 GB board.
+
 ### Pi 4 RAM unlock
 
 On Raspberry Pi 4 only, the 3 GB RAM limit is disabled automatically after WoR-PE installs Windows and reboots. This setting is ignored for every other model. To keep the limit enabled:
@@ -377,14 +495,50 @@ The `specialize` answer-file command invokes the staged `Pi4Disable3GB.ps1` file
 > [!IMPORTANT]
 > **Set `PI4_AUTO_DISABLE_3GB=0` on Compute Module 4.** Per the [worproject FAQ](https://worproject.com/faq#does-it-work-on-the-compute-module-cm), CM4 requires the RAM limit set to 1 GB — not simply left at 3 GB — for USB to work at all, and PCIe does not work regardless. WoR-Flasher cannot distinguish a CM4 from a Pi 4/400, so do not rely on the automatic default for CM4 hardware.
 
+### Context-aware Advanced Options
+
+Both GUIs use the selected Windows build, Raspberry Pi model and installation mode to
+describe the settings. Inapplicable controls are omitted rather than shown disabled:
+
+- **Offline network/account setup bypass** appears only for Windows 11.
+- **Pi 4 RAM unlock** appears only for Pi 4/400.
+- **Latest Windows ARM64 drivers** appears only for Pi 3/4, which have a separate
+  driver package. It is checked by default and marked **Recommended** (green on macOS).
+  Pi 5 does not use that download.
+- **Windows image language** is omitted for an imported or previously extracted ISO;
+  changing a language preference cannot change the language already inside that image.
+  Keyboard and regional settings remain separately configurable.
+
+The offline-setup bypass is not displayed, summarized or applied for Windows 10,
+even if its saved preference or configuration value is enabled. Switching back to
+Windows 11 restores that preference. Local-account creation and regional settings
+remain separately configurable for both Windows versions.
+
+In **Install Windows onto this drive** mode, setup, account and regional settings apply
+to Windows installed on that drive. In **Create a recovery drive** mode, they apply when
+WoR-PE later installs Windows on the destination drive. Recovery mode is installation
+media, not just a repair environment, so these working customization options remain
+available. The Advanced Options explanation and overview identify that scope; custom
+`config.txt` and written-image verification apply to the recovery media itself.
+
+Switching models does not reset a hidden option's preference, but the engine ignores it
+while it is inapplicable. Returning to the overview refreshes the displayed values.
+On macOS, Advanced Options sizes its introductory text to its wrapped content and uses
+compact top padding. It measures the visible controls and fits them into a single
+window without a scroll area when space permits. If they exceed the available screen
+height, it shows a visible vertical scrollbar and scrolls only the options body.
+OK and Back stay accessible outside the scrolling area. Linux uses automatic vertical
+scrollbar visibility within the screen-bounded form; neither interface requires
+scrolling merely because an inapplicable control was included in a size estimate.
+
 ### Offline Windows setup
 
-Enabled by default. WoR-Flasher writes a minimal Microsoft unattended-setup answer file that hides the OOBE network and online-account screens, so setup can continue with a local account when Pi networking is not ready yet. It does not automate accounts, licenses, partitions or privacy choices by default.
+Enabled by default for Windows 11 only. WoR-Flasher writes a minimal Microsoft unattended-setup answer file that hides the OOBE network and online-account screens, so setup can continue with a local account when Pi networking is not ready yet. Windows 10 does not receive this bypass; its normal setup screens remain unless separately configured by another setting. This option does not automate accounts, licenses, partitions or privacy choices by default.
 
-Advanced Options can optionally configure a Windows local administrator account and a locale profile before the first boot. The account username and password are written to `Autounattend.xml` only when explicitly enabled; the password is never shown in summaries or logs, but Windows setup necessarily stores it in plaintext on the prepared media temporarily. Remove `Autounattend.xml` after setup completes. Regional settings are enabled by default and initially use the current host locale when it matches a Windows locale, otherwise `en-US`; a selection made during the current GUI run is retained when returning to Advanced Options. The locale profile applies one value such as `en-US` or `en-GB` to the Windows keyboard/input, system, user and UI locale settings.
+Advanced Options can optionally configure a Windows local administrator account and a locale profile before the first boot. These settings work even with offline OOBE and Pi 4 RAM unlock disabled, in both installation modes. The account username and password are written to `Autounattend.xml` only when explicitly enabled; the password is never shown in summaries or logs, but Windows setup necessarily stores it in plaintext on the prepared media temporarily. Remove `Autounattend.xml` after setup completes. Regional settings are enabled by default and initially use the current host locale when it matches a Windows locale, otherwise `en-US`; a selection made during the current GUI run is retained when returning to Advanced Options. The locale profile applies one value such as `en-US` or `en-GB` to the Windows keyboard/input, system, user and UI locale settings.
 
 ```bash
-OOBE_NETWORK_BYPASS=0 ./install-wor.sh  # require network
+OOBE_NETWORK_BYPASS=0 ./install-wor.sh  # keep the standard Windows 11 setup flow
 ```
 
 ### Customization templates
@@ -400,7 +554,7 @@ OOBE_NETWORK_BYPASS=0 ./install-wor.sh  # require network
 | `pi5.config.txt`                | `config.txt` body for Pi 5                                   |
 | `pi4-ram-unlock.ps1`            | PowerShell action that clears the Pi 4 3 GB limit            |
 | `pi4-ram-unlock-specialize.xml` | Answer-file fragment that runs the above during `specialize` |
-| `oobe-network-bypass.xml`       | Answer-file fragment for offline OOBE                        |
+| `oobe-network-bypass.xml`       | Answer-file fragment for Windows 11 offline OOBE             |
 
 Edit these directly to customize what gets written. Both the CLI and the GUI start from the same template, so they produce identical media. Updating your checkout picks up any changes to them.
 
@@ -427,13 +581,22 @@ Mode `1` refreshes changed, missing, extra or outdated cached content. Delete `~
 ## What to expect
 
 1. Downloads and verifies the PE installer, UEFI firmware, drivers and Windows image.
-2. Extracts or imports the Windows image.
+2. Extracts or imports the Windows image, then normalizes Pi 3 desktop installation
+   images to non-solid LZX where necessary, including previously cached images.
 3. Creates FAT32 `WOR_BOOT` and ExFAT `WOR_INSTALL` partitions.
 4. Copies the startup and installation files and updates `boot.wim`.
 5. Verifies the partition layout, filesystems, boot files, WIM images and the copied `install.wim` checksum.
 6. Unmounts and ejects the drive.
 
 Downloads and final verification take a long time, especially on slow SD cards. Progress is shown for long operations. **Do not remove the drive until WoR-Flasher reports success.**
+
+Once a Windows build is selected, progress and result messages name its version:
+for example, **Preparing the Windows 10 image**, **Downloading Windows 11 ESD
+image**, and **Verifying the written Windows 10 image**. Cache-reuse messages,
+copying and setup subtasks, and desktop result notifications use the same selected
+version. Messages follow the build being prepared, including imported ISOs, rather
+than retaining a previous wizard selection. Generic startup and hardware-only
+messages remain unchanged.
 
 ![Next steps after flashing](assets/next-steps.png)
 
@@ -504,13 +667,19 @@ Each macOS GUI attempt accepts one password submission. If it is rejected, WoR-F
 
 On macOS, `Written image verified successfully` confirms the copied data, but partition finalization must still finish. If the finalizer fails, the media is not confirmed ready to boot. The installer requires worker readiness before disk preparation and pre-creates user-owned result files.
 
-GUI launches normally have no terminal, so the default `sudo` policy scopes cached authorization to the parent process. The finalizer launches the external `sudo` command directly from the authenticated shell, rather than running the GUI wrapper inside another background shell. This avoids the immediate `Administrator authentication is no longer reusable` startup failure without allowing a second password prompt. The worker script is passed as a fixed command argument instead of relying on detached stdin. Parent-scoped authorization and startup failures are covered by mock-only regression tests; an end-to-end flash with the correction still needs confirmation. Keep the diagnostic log rather than repeatedly reflashing after a startup error.
+GUI launches normally have no terminal, so the default `sudo` policy scopes cached authorization to the parent process. The finalizer launches the external `sudo` command directly from the authenticated shell, rather than running the GUI wrapper inside another background shell. This avoids the immediate `Administrator authentication is no longer reusable` startup failure without allowing a second password prompt. The worker script is passed as a fixed command argument instead of relying on detached stdin. Regression tests simulate parent-scoped authorization and startup failures; the corrected macOS flashing path also completed in the user-confirmed Pi 3 / Windows 10 run described below. Keep the diagnostic log rather than repeatedly reflashing after a startup error.
 
 The same worker applies a geometry-driven Pi 3 GPT bootstrap before written-image verification, then waits for the final retag request. Pi 3 first-stage firmware cannot discover the GPT directly, but a hybrid MBR is not a Windows-compatible solution: Windows Boot Manager can interpret it as MBR while UEFI identifies the boot partition as GPT, causing `BlInitializeLibrary failed 0xc00000bb`.
 
 The shared `src/lib/pi3-hybrid-mbr.py` helper (historical filename retained for launcher compatibility) follows the [upstream WoR FAT bootstrap approach](https://worproject.com/guides/how-to-install/from-other-os) without copying its fixed-geometry patch. It validates the GPT checksums and actual FAT32 layout, keeps a single protective `0xEE` MBR entry, and derives a sector-0 FAT header whose reserved-sector count and metadata offsets reach the existing boot files. Only sector 0 is written; the GPT, real FAT boot sector, allocation tables and files are unchanged. Unsupported geometry fails explicitly before that write, including non-512-byte FAT sectors and a partition offset plus FAT reserved area exceeding 65535 sectors. The helper reads back its write; the macOS worker also runs its read-only `--check` after the final partition updates. Pi 4 and Pi 5 do not use this bootstrap.
 
-Offline tests check both Windows-compatible MBR shape and identical firmware-file reads through the synthetic FAT view, including fragmented files, different filesystem geometries and final `sgdisk` retagging. They do not establish successful Windows boot on physical Pi 3 hardware. A previously flashed hybrid-MBR card must be flashed again successfully with the corrected app; rebuilding or reopening the app alone does not change the card.
+WoR-PE later recreates the installed boot partition (normally 128 MiB), so the installer-media bootstrap must be refreshed again **on the Pi, before the first installed-Windows reboot**. Pi 3 desktop media now always carries `Pi3BootRefresh.exe` in WoR-PE's pre-finalization hook, independently of Windows 10/11, self-install/recovery mode, cache mode, and optional account, locale or OOBE settings. The helper uses WoR's selected target disk and both destination-volume extents, not a hardcoded disk number or the recovery-media drive. Pi 2 v1.2 uses this same Pi 3-compatible desktop route; Pi 4 and Pi 5 do not use it.
+
+The native ARM64 helper works offline in stock Windows PE, without Python, PowerShell or an added interpreter. It validates the actual disk, GPT checksums, partition bounds and FAT32 geometry, saves the original 512-byte sector in `<installed Windows>\Windows\Logs\WoR-Flasher\pi3-sector0-before-*.bin`, writes only sector 0, flushes and verifies its read-back, and verifies that the inspected GPT/FAT metadata is unchanged. An already-correct bootstrap needs no write. A missing helper, invalid target, backup failure or verification failure aborts WoR-PE finalization instead of reporting a bootable installation. Optional answer-file and Pi 4 customization failures remain non-fatal.
+
+WoR-PE 1.1 has a pre-finalization export defect: it supplies the Windows partition letter for both `WOR_DISK_BOOTPARTITION` and `WOR_DISK_WINDOWSPARTITION`. The Pi 3 helper detects that duplicate, verifies that the Windows volume belongs to the selected disk, and identifies that disk's partition 1 through Windows device-control metadata. It does not guess `B:`, decrement a drive letter or choose a volume by its label. Missing, ambiguous or wrong-disk matches still stop the repair; the physical boot/Windows extents must remain distinct and match the GPT. This also handles the self-install layout where the temporary image partition is partition 3 and Windows is partition 4, before final cleanup.
+
+Offline tests compare the native helper byte-for-byte with the desktop helper, recreate the 1536 MiB-to-128 MiB post-install change on a sparse disk image, check firmware-file reads through the resulting FAT view, and exercise target mismatches, backup/write failures and read-back checks. On **2026-10-05**, the user confirmed that a fresh macOS-prepared **Windows 10 installation on Raspberry Pi 3 Model B** succeeded with the automatic bootstrap refresh and the WoR-PE duplicate-drive workaround. This is user-reported hardware validation of that route, not certification of Windows 11, recovery-media mode, other Pi boards or IoT Core. Updated app/source files affect newly prepared media, not cards already flashed. Do not erase a successfully installed Windows system just to refresh its bootstrap.
 
 These late writes do not depend on a cached `sudo` timestamp remaining valid during long copies. macOS therefore does not start the ineffective background timestamp refresher. ISO images attached by the current user are also detached without `sudo`, so ISO cleanup does not consume the disk-write password prompt.
 
@@ -544,7 +713,7 @@ If you rebuild or move `WoR-Flasher.app` (for example after re-running the packa
 <details>
 <summary><b>Rainbow screen</b></summary>
 
-The Raspberry Pi firmware did not start UEFI. Reflash the drive and wait for verification to finish. Also update the Pi EEPROM bootloader, and avoid `UEFI_USE_LATEST=1` unless you are intentionally testing firmware.
+The Raspberry Pi firmware did not start UEFI. Reflash the drive using the [model-specific firmware default](#uefi-firmware-defaults) and wait for verification and partition finalization to finish. Pi 3 uses latest stable UEFI by default. On Pi 4/5, also check the EEPROM bootloader; retain pinned UEFI unless deliberately testing another version.
 
 On Pi 4, three ACT LED blinks indicate that `start4.elf` is missing, four indicate that it failed to launch, and seven indicate that `RPI_EFI.fd` is missing.
 
@@ -560,7 +729,7 @@ On Pi 3 or Pi 4, use Windows 11 build `22631.2861` or another compatible `22631.
 <details>
 <summary><b>PXE boot, or no local boot option</b></summary>
 
-Reflash with the default pinned UEFI firmware and wait for `Written image verified successfully`. WoR-Flasher pins Pi 4 UEFI to v1.50, because v1.52 and v1.53 do not boot from microSD ([pftf/RPi4#285](https://github.com/pftf/RPi4/issues/285)). Avoid `UEFI_USE_LATEST=1` on a Pi 4 for the same reason.
+Reflash with the [model-specific firmware default](#uefi-firmware-defaults) and wait for verification and partition finalization to finish. Pi 3 defaults to latest stable UEFI. WoR-Flasher still pins Pi 4 UEFI to v1.50, because v1.52 and v1.53 do not boot from microSD ([pftf/RPi4#285](https://github.com/pftf/RPi4/issues/285)). Avoid `UEFI_USE_LATEST=1` on a Pi 4 for the same reason.
 
 During first boot, Windows Setup creates Windows Boot Manager. If an installed system has lost that entry, open `Boot Maintenance Manager > Boot Options > Add Boot Option`, select `EFI\Microsoft\Boot\bootmgfw.efi`, and place it above the network boot entries.
 
@@ -698,8 +867,8 @@ Building on Botspot's original work, this maintained source adds:
 | Installer flow        | One shared `install-wor.sh` engine with the GUI as a presentation layer, so validation, settings, downloads and flashing do not drift between front-ends                 |
 | Progress and failures | File-backed progress reporting, real installer exit codes, abort handling, durable error markers and retained failure logs with a configurable `WOR_LOG_FILE` path       |
 | Safety                | Boot-drive protection, free-space preflight, cached-payload SHA-256 manifests, written-image verification and clearer cache modes                                        |
-| Windows setup         | Offline-OOBE support and the Pi 4 RAM-unlock action delivered to the installed OS through WoR-PE's `prefinalize.cmd` hook, rather than only copying files to media roots |
-| Firmware and drivers  | Tested Pi 4 UEFI pinning, including the v1.50 choice that avoids both the v1.51 zero-MAC bug and the v1.52/v1.53 microSD boot regression                                 |
+| Windows setup         | Windows 11 offline-OOBE support and the Pi 4 RAM-unlock action delivered to the installed OS through WoR-PE's `prefinalize.cmd` hook, rather than only copying files to media roots |
+| Firmware and drivers  | Latest stable Pi 3 UEFI by default; Pi 4 remains pinned to v1.50 to avoid the v1.51 zero-MAC bug and the v1.52/v1.53 microSD boot regression                             |
 | Quality               | Cross-platform static checks, ShellCheck, loopback-drive integration tests, XML validation, mutation-tested anti-drift checks and macOS/Linux CI                         |
 
 These additions are maintained directly by Blackout Secure in cooperation with Botspot and the wider Windows on Raspberry community.

@@ -57,6 +57,8 @@ gui_runtime_complete() { #Input: runtime directory. Do not source a partial engi
     install-wor.sh \
     src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh \
     src/lib/node-runtime.mjs src/lib/macos-disk-alerts.js src/updater.mjs \
+    src/lib/pi3-boot-refresh/Pi3BootRefresh.exe src/lib/pi3-boot-refresh/manifest.json \
+    src/lib/pi3-boot-refresh/GO-LICENSE.txt \
     src/config/metadata.json src/config/metadata.schema.json \
     config-templates/config.json config-templates/config.schema.json \
     config-templates/pi3.config.txt config-templates/pi4.config.txt config-templates/pi5.config.txt \
@@ -256,11 +258,11 @@ open_url() { #Input: url
 }
 
 kill_process_tree() { #Input: pid. Stops it and everything it started; most of the flash runs under sudo.
-  local pid="$1" child
+  local pid="$1" child allow_sudo="${2:-1}"
   for child in $(pgrep -P "$pid" 2>/dev/null) ;do
-    kill_process_tree "$child"
+    kill_process_tree "$child" "$allow_sudo"
   done
-  kill -TERM "$pid" 2>/dev/null || command sudo -n kill -TERM "$pid" 2>/dev/null
+  kill -TERM "$pid" 2>/dev/null || { [ "$allow_sudo" != 1 ] || command sudo -n kill -TERM "$pid" 2>/dev/null; }
 }
 
 gui_start_disk_alert_handler() { #Runs only the optional macOS alert automation, separate from the flash and progress window.
@@ -1079,8 +1081,27 @@ for (let i = 0; i < rows.length; i++) {
   widestValue = Math.max(widestValue, Math.ceil(bounds.size.width))
 }
 const width = Math.min(760, screenFrame.size.width - 40, Math.max(560, 214 + widestValue + 72))
-const height = Math.min(620, screenFrame.size.height - 60, Math.max(320, rows.length * rowHeight + 16 + 220))
-window = worMakeWindow({ width: width, height: height, title: windowTitle, delegate: controller })
+const settingsHeight = rows.length * rowHeight + 16
+window = worMakeWindow({ width: width, height: 1, title: windowTitle, delegate: controller })
+const chromeHeight = Number(window.frame.size.height) - Number(window.contentView.frame.size.height)
+const maximumHeight = Math.max(1, Math.floor(Number(screenFrame.size.height) - chromeHeight))
+const scrollView = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(24, 86, width - 48, settingsHeight))
+scrollView.borderType = $.NSBezelBorder
+scrollView.hasHorizontalScroller = false
+scrollView.hasVerticalScroller = false
+scrollView.autohidesScrollers = false
+scrollView.scrollerStyle = $.NSScrollerStyleLegacy
+scrollView.tile
+//The panel border reduces its viewport; include it before deciding whether any rows overflow.
+const panelBorderHeight = settingsHeight - Number(scrollView.contentSize.height)
+const height = Math.min(maximumHeight, Math.max(320, settingsHeight + panelBorderHeight + 220))
+window.setContentSize($.NSMakeSize(width, height))
+window.center
+scrollView.frame = $.NSMakeRect(24, 86, width - 48, height - 220)
+scrollView.tile
+const needsScrolling = settingsHeight > Number(scrollView.contentSize.height)
+scrollView.hasVerticalScroller = needsScrolling
+scrollView.tile
 
 const content = window.contentView
 
@@ -1101,12 +1122,9 @@ warning.textColor = $.NSColor.systemRedColor
 warning.frame = $.NSMakeRect(24, height - 114, width - 48, 22)
 content.addSubview(warning)
 
-const documentHeight = Math.max(rows.length * rowHeight + 16, height - 210)
-const scrollView = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(24, 86, width - 48, height - 220))
-scrollView.borderType = $.NSBezelBorder
-scrollView.hasVerticalScroller = true
-scrollView.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
-const documentView = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width - 48, documentHeight))
+const documentWidth = Number(scrollView.contentSize.width)
+const documentHeight = Math.max(settingsHeight, Number(scrollView.contentSize.height))
+const documentView = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, documentWidth, documentHeight))
 scrollView.documentView = documentView
 content.addSubview(scrollView)
 
@@ -1122,10 +1140,12 @@ for (let i = 0; i < rows.length; i++) {
   const value = $.NSTextField.labelWithString(rows[i].value)
   value.font = $.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightRegular)
   value.lineBreakMode = $.NSLineBreakByTruncatingMiddle
-  value.frame = $.NSMakeRect(214, y, width - 286, 20)
+  value.frame = $.NSMakeRect(214, y, Math.max(1, documentWidth - 222), 20)
   documentView.addSubview(value)
   y -= rowHeight
 }
+documentView.scrollPoint($.NSMakePoint(0, Math.max(0, documentHeight - Number(scrollView.contentSize.height))))
+scrollView.reflectScrolledClipView(scrollView.contentView)
 
 const guidance = $.NSTextField.labelWithString('Flash begins immediately after administrator approval. Use Advanced to change these settings.')
 guidance.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightRegular)
@@ -1171,29 +1191,120 @@ JXA
   printf '%s\n' "$result"
 }
 
-macos_advanced_options() { #Reads/updates OOBE_NETWORK_BYPASS, PI4_AUTO_DISABLE_3GB, UEFI_USE_LATEST, DRIVERS_USE_LATEST, SKIP_IMAGE_VERIFICATION, DRY_RUN, APPLY_CUSTOM_CONFIG_TXT, USE_CACHE, CONFIG_TXT, WIN_LANG, PLAY_SOUND, COMPLETION_SOUND.
-  local advanced_jxa checkbox_spec result status line i uefi_pinned pi4_applicable pi4_label config_scope lang_spec locale_spec l_code l_name sel_win_lang sound_spec sel_sound LC_ALL
+prepare_release_choices() { #Input: kind, current tag. Sets choices and a visible warning for either GUI.
+  local kind="$1" current="$2" versions latest_result tag
+  RELEASE_CHOICES='' RELEASE_CHOICES_WARNING='' RELEASE_CHOICES_LATEST='' RELEASE_CHOICES_LABELS=''
+  if versions="$(list_release_versions "$kind" 2>&1)";then
+    if ! grep -qxF "$current" <<<"$versions";then
+      RELEASE_CHOICES_WARNING="The configured version $current is not in the published release list."
+    fi
+    if [ "$(wor_advanced_recommended "$kind" "$RPI_MODEL")" == 1 ];then
+      if latest_result="$(list_release_versions "$kind" latest 2>&1)" && release_version_is_valid "$latest_result";then
+        RELEASE_CHOICES_LATEST="$latest_result"
+      else
+        RELEASE_CHOICES_WARNING="${RELEASE_CHOICES_WARNING:+$RELEASE_CHOICES_WARNING }Could not identify the latest recommended $kind release. $latest_result Keeping the current selection."
+        warning "$RELEASE_CHOICES_WARNING"
+      fi
+    fi
+  else
+    RELEASE_CHOICES_WARNING="$versions Only the current selection is available; reopen Advanced Options to retry."
+    versions=''
+    warning "$RELEASE_CHOICES_WARNING"
+  fi
+  if release_version_is_valid "$current";then
+    RELEASE_CHOICES="$(printf '%s\n%s\n%s\n' "$current" "$RELEASE_CHOICES_LATEST" "$versions" | awk 'NF && !seen[$0]++')"
+  else
+    RELEASE_CHOICES="$versions"
+    RELEASE_CHOICES_WARNING="The configured $kind version is invalid. Select an available release."
+    warning "$RELEASE_CHOICES_WARNING"
+  fi
+  RELEASE_CHOICES_DEFAULT="$(release_dropdown_version "$kind" "$current" "$RELEASE_CHOICES_LATEST")"
+  if grep -qxF "$RELEASE_CHOICES_DEFAULT" <<<"$RELEASE_CHOICES";then
+    RELEASE_CHOICES="$(printf '%s\n%s\n' "$RELEASE_CHOICES_DEFAULT" "$RELEASE_CHOICES" | awk 'NF && !seen[$0]++')"
+  fi
+  RELEASE_CHOICES_LABELS="$(
+    while IFS= read -r tag;do
+      [ -n "$tag" ] || continue
+      wor_release_version_label "$tag" "$RELEASE_CHOICES_LATEST"
+      printf '\n'
+    done <<<"$RELEASE_CHOICES"
+  )"
+  if [ "$USE_CACHE" == 2 ];then
+    RELEASE_CHOICES_WARNING="${RELEASE_CHOICES_WARNING:+$RELEASE_CHOICES_WARNING }Trust cache may reuse another version. Use checked cache to fetch this selection."
+  fi
+}
+
+release_choice_tag() { #Input: display label, available tags, verified latest tag. Validate before removing annotations.
+  local tag="${1%% *}"
+  if ! release_version_is_valid "$tag" || ! grep -qxF "$tag" <<<"$2" \
+    || [ "$1" != "$(wor_release_version_label "$tag" "$3")" ];then
+    warning "The selected release is not in the available choices."
+    return 1
+  fi
+  printf '%s' "$tag"
+}
+
+save_advanced_preferences() { #Keep automatic Linux form refreshes transactional until OK is clicked.
+  ADVANCED_ORIGINAL_VALUES=("$OOBE_NETWORK_BYPASS" "$PI4_AUTO_DISABLE_3GB" "${UEFI_USE_LATEST:-}" "$DRIVERS_USE_LATEST"
+    "$UEFI_VER_PI3" "$UEFI_VER_PI4" "$UEFI_VER_PI5" "$DRIVER_VER" "$SKIP_IMAGE_VERIFICATION" "$DRY_RUN"
+    "$USE_CACHE" "$WINDOWS_ACCOUNT_SETUP" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD"
+    "$WINDOWS_LOCALE_SETUP" "$WINDOWS_LOCALE" "$WIN_LANG" "$PLAY_SOUND" "$COMPLETION_SOUND" "$SHOW_NOTIFICATION"
+    "$APPLY_CUSTOM_CONFIG_TXT" "$CONFIG_TXT" "$DL_DIR" "${WOR_SELECTED_RELEASES:-}")
+}
+
+restore_advanced_preferences() {
+  OOBE_NETWORK_BYPASS="${ADVANCED_ORIGINAL_VALUES[0]}" PI4_AUTO_DISABLE_3GB="${ADVANCED_ORIGINAL_VALUES[1]}"
+  UEFI_USE_LATEST="${ADVANCED_ORIGINAL_VALUES[2]}" DRIVERS_USE_LATEST="${ADVANCED_ORIGINAL_VALUES[3]}"
+  UEFI_VER_PI3="${ADVANCED_ORIGINAL_VALUES[4]}" UEFI_VER_PI4="${ADVANCED_ORIGINAL_VALUES[5]}"
+  UEFI_VER_PI5="${ADVANCED_ORIGINAL_VALUES[6]}" DRIVER_VER="${ADVANCED_ORIGINAL_VALUES[7]}"
+  SKIP_IMAGE_VERIFICATION="${ADVANCED_ORIGINAL_VALUES[8]}" DRY_RUN="${ADVANCED_ORIGINAL_VALUES[9]}"
+  USE_CACHE="${ADVANCED_ORIGINAL_VALUES[10]}" WINDOWS_ACCOUNT_SETUP="${ADVANCED_ORIGINAL_VALUES[11]}"
+  WINDOWS_ACCOUNT_USERNAME="${ADVANCED_ORIGINAL_VALUES[12]}" WINDOWS_ACCOUNT_PASSWORD="${ADVANCED_ORIGINAL_VALUES[13]}"
+  WINDOWS_LOCALE_SETUP="${ADVANCED_ORIGINAL_VALUES[14]}" WINDOWS_LOCALE="${ADVANCED_ORIGINAL_VALUES[15]}"
+  WIN_LANG="${ADVANCED_ORIGINAL_VALUES[16]}" PLAY_SOUND="${ADVANCED_ORIGINAL_VALUES[17]}"
+  COMPLETION_SOUND="${ADVANCED_ORIGINAL_VALUES[18]}" SHOW_NOTIFICATION="${ADVANCED_ORIGINAL_VALUES[19]}"
+  APPLY_CUSTOM_CONFIG_TXT="${ADVANCED_ORIGINAL_VALUES[20]}" CONFIG_TXT="${ADVANCED_ORIGINAL_VALUES[21]}"
+  DL_DIR="${ADVANCED_ORIGINAL_VALUES[22]}"
+  WOR_SELECTED_RELEASES="${ADVANCED_ORIGINAL_VALUES[23]}"
+}
+
+macos_advanced_options() { #Collects customization and explicit release versions without changing them on Back.
+  local advanced_jxa checkbox_spec result status line i uefi_pinned oobe_applicable pi4_applicable drivers_applicable windows_family config_scope lang_spec locale_spec l_code l_name sel_win_lang sound_spec sel_sound LC_ALL
+  local uefi_versions driver_versions='' uefi_version_warning driver_version_warning='' selected_uefi selected_driver
+  local uefi_dropdown_default driver_dropdown_default="$DRIVER_VER" uefi_version_labels driver_version_labels=''
   uefi_pinned="$(uefi_pinned_version)"
-  #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4, so don't offer it as a live choice elsewhere
-  [ "$RPI_MODEL" == 4 ] && pi4_applicable=1 || pi4_applicable=0
+  windows_family="$(windows_version_label)"
+  advanced_option_applies oobe && oobe_applicable=1 || oobe_applicable=0
+  advanced_option_applies pi4 && pi4_applicable=1 || pi4_applicable=0
+  advanced_option_applies drivers && drivers_applicable=1 || drivers_applicable=0
   #in recovery mode this config.txt boots the installer media; WoR-PE writes the target drive's own copy
   config_scope="$(wor_config_scope "$CAN_INSTALL_ON_SAME_DRIVE")"
   #labels and caution flags come from gui.sh so the Linux dialog cannot describe these differently
-  checkbox_spec="$(wor_advanced_label oobe "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$OOBE_NETWORK_BYPASS	1	$(wor_advanced_caution oobe)
-$(wor_advanced_label pi4 "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$([ "$pi4_applicable" == 1 ] && echo "$PI4_AUTO_DISABLE_3GB" || echo 0)	$pi4_applicable	$(wor_advanced_caution pi4)
-$(wor_advanced_label uefi "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$UEFI_USE_LATEST	1	$(wor_advanced_caution uefi)
-$(wor_advanced_label drivers "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$DRIVERS_USE_LATEST	1	$(wor_advanced_caution drivers)
-$(wor_advanced_label verify "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$SKIP_IMAGE_VERIFICATION	1	$(wor_advanced_caution verify)
-$(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$DRY_RUN	1	$(wor_advanced_caution dryrun)"
+  checkbox_spec="$(wor_advanced_label oobe "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL" "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")	$OOBE_NETWORK_BYPASS	$oobe_applicable	$(wor_advanced_caution oobe)	0
+$(wor_advanced_label pi4 "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$PI4_AUTO_DISABLE_3GB	$pi4_applicable	$(wor_advanced_caution pi4)	0
+$(wor_advanced_label uefi "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$(uefi_use_latest)	1	$(wor_advanced_caution uefi "$RPI_MODEL")	$(wor_advanced_recommended uefi "$RPI_MODEL")
+$(wor_advanced_label drivers "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$DRIVERS_USE_LATEST	$drivers_applicable	$(wor_advanced_caution drivers)	$(wor_advanced_recommended drivers "$RPI_MODEL")
+$(wor_advanced_label verify "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL" "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")	$SKIP_IMAGE_VERIFICATION	1	$(wor_advanced_caution verify)	0
+$(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$DRY_RUN	1	$(wor_advanced_caution dryrun)	0"
 
   lang_spec=""
-  while IFS=: read -r l_code l_name ;do
-    [ -z "$l_code" ] && continue
-    lang_spec+="${l_code}	${l_name}"$'\n'
-  done < <(list_langs_preferred)
+  if advanced_option_applies language;then
+    while IFS=: read -r l_code l_name ;do
+      [ -z "$l_code" ] && continue
+      lang_spec+="${l_code}	${l_name}"$'\n'
+    done < <(list_langs_preferred)
+  fi
 
   locale_spec="$(list_windows_locale_options)"
   sound_spec="$(wor_sound_options)"
+  prepare_release_choices uefi "$uefi_pinned"
+  uefi_versions="$RELEASE_CHOICES" uefi_version_warning="$RELEASE_CHOICES_WARNING"
+  uefi_dropdown_default="$RELEASE_CHOICES_DEFAULT" uefi_version_labels="$RELEASE_CHOICES_LABELS"
+  if [ "$drivers_applicable" == 1 ];then
+    prepare_release_choices drivers "$DRIVER_VER"
+    driver_versions="$RELEASE_CHOICES" driver_version_warning="$RELEASE_CHOICES_WARNING"
+    driver_dropdown_default="$RELEASE_CHOICES_DEFAULT" driver_version_labels="$RELEASE_CHOICES_LABELS"
+  fi
 
   advanced_jxa="$(wor_jxa_window_lib; cat <<'JXA'
 ObjC.import('AppKit')
@@ -1220,6 +1331,16 @@ const soundSpec = ObjC.unwrap(args.objectAtIndex(20) || '')
 const playSoundDefault = ObjC.unwrap(args.objectAtIndex(21) || '1')
 const soundDefault = ObjC.unwrap(args.objectAtIndex(22) || '')
 const showNotificationDefault = ObjC.unwrap(args.objectAtIndex(23) || '1')
+const contextText = ObjC.unwrap(args.objectAtIndex(24))
+const setupTitle = ObjC.unwrap(args.objectAtIndex(25))
+const uefiVersions = ObjC.unwrap(args.objectAtIndex(26)).split('\n').filter(Boolean)
+const currentUefiVersion = ObjC.unwrap(args.objectAtIndex(27))
+const driverVersions = ObjC.unwrap(args.objectAtIndex(28)).split('\n').filter(Boolean)
+const currentDriverVersion = ObjC.unwrap(args.objectAtIndex(29))
+const uefiVersionWarning = ObjC.unwrap(args.objectAtIndex(30))
+const driverVersionWarning = ObjC.unwrap(args.objectAtIndex(31))
+const uefiVersionLabels = ObjC.unwrap(args.objectAtIndex(32)).split('\n').filter(Boolean)
+const driverVersionLabels = ObjC.unwrap(args.objectAtIndex(33)).split('\n').filter(Boolean)
 
 const soundOptions = []
 let initialSoundIdx = 0
@@ -1236,7 +1357,7 @@ if (soundSpec && soundSpec.length > 0) {
 
 const rows = checkboxSpec.split('\n').map(function(line) {
   const parts = line.split('\t')
-  return { label: parts[0], checked: parts[1] === '1', enabled: parts[2] !== '0', caution: parts[3] === '1' }
+  return { label: parts[0], checked: parts[1] === '1', enabled: parts[2] !== '0', caution: parts[3] === '1', recommended: parts[4] === '1' }
 })
 
 const langOptions = []
@@ -1292,6 +1413,7 @@ editMenu.addItemWithTitleActionKeyEquivalent('Select All', 'selectAll:', 'a')
 
 let window, applyConfigCheckbox, editConfigButton, cachePopup, winLangPopup, accountCheckbox, accountUsernameField, accountPasswordField, localeCheckbox, localePopup, playSoundCheckbox, soundPopup, soundLabel, notificationCheckbox
 let checkboxes = []
+let versionRows = []
 let confirmed = false
 let configTxtValue = configTxtDefault
 
@@ -1363,6 +1485,16 @@ const Controller = ObjC.registerSubclass({
     'okClicked:': {
       types: ['void', ['id']],
       implementation: function() {
+        for (let i = 0; i < versionRows.length; i++) {
+          const item = versionRows[i]
+          if (checkboxes[item.checkboxIndex].state != 1 && item.popup.indexOfSelectedItem < 0) {
+            const alert = $.NSAlert.alloc.init
+            alert.messageText = 'Select a released version or enable latest'
+            alert.informativeText = 'The release list could not provide a usable selection.'
+            alert.runModal
+            return
+          }
+        }
         confirmed = true
         app.stopModalWithCode($.NSOKButton)
         window.orderOut(null)
@@ -1380,6 +1512,12 @@ const Controller = ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function() {
         updateConfigEditableState()
+      }
+    },
+    'releaseChoiceToggled:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        layoutAdvancedOptions()
       }
     },
     'editConfigClicked:': {
@@ -1456,20 +1594,24 @@ app.setDelegate(controller)
 
 const screenFrame = $.NSScreen.mainScreen.visibleFrame
 const rowHeight = 26
-const sectionHeaderCount = soundOptions.length > 0 ? 8 : 7
 const desiredWidth = 640
-//height grows with the number of advanced-option rows, so clamp both dimensions to the visible screen instead of assuming they fit
-const desiredHeight = (rows.length + 1) * rowHeight + 20 + 220 + 60 + 8 + sectionHeaderCount * 30
-  + (soundOptions.length > 0 ? rowHeight * 3 + 8 : 0)
 const width = Math.min(desiredWidth, screenFrame.size.width - 40)
-const height = Math.min(desiredHeight, screenFrame.size.height - 60)
 //fixed layout: no drag-resize and no zoom/maximize button, only minimize (and restore) via the titlebar
-window = worMakeWindow({ width: width, height: height, title: windowTitle + ' | Advanced Options', delegate: controller })
+window = worMakeWindow({ width: width, height: 1, title: windowTitle + ' | Advanced Options', delegate: controller })
 
-const content = window.contentView
-content.autoresizingMask = $.NSViewWidthSizable | $.NSViewHeightSizable
-
-let y = height - 40
+//Lay out downward from zero, then measure and position the actual controls before showing the window.
+const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, width, 0))
+content.autoresizesSubviews = false
+let y = 0
+const contextLabel = $.NSTextField.wrappingLabelWithString(contextText)
+contextLabel.font = $.NSFont.systemFontOfSize(12)
+//Measure with room for the overflow scrollbar so wrapped text stays readable in either layout.
+const contextWidth = width - 40 - Number($.NSScroller.scrollerWidthForControlSizeScrollerStyle($.NSControlSizeRegular, $.NSScrollerStyleLegacy))
+const contextHeight = Math.ceil(Number(contextLabel.cell.cellSizeForBounds($.NSMakeRect(0, 0, contextWidth, 2000)).height))
+contextLabel.frame = $.NSMakeRect(20, y - contextHeight, width - 40, contextHeight)
+contextLabel.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+content.addSubview(contextLabel)
+y -= contextHeight + 16
 function addSectionHeader(title) {
   y -= 8
   const section = $.NSTextField.labelWithString(title)
@@ -1481,19 +1623,59 @@ function addSectionHeader(title) {
   y -= 24
 }
 
+function addVersionSelector(index) {
+  const versions = index === 2 ? uefiVersions : driverVersions
+  const labels = index === 2 ? uefiVersionLabels : driverVersionLabels
+  const current = index === 2 ? currentUefiVersion : currentDriverVersion
+  const warningText = index === 2 ? uefiVersionWarning : driverVersionWarning
+  const height = warningText.length > 0 ? 82 : 34
+  const view = $.NSView.alloc.initWithFrame($.NSMakeRect(20, y - height + 20, width - 40, height))
+  view.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+  const label = $.NSTextField.labelWithString(index === 2 ? 'UEFI version:' : 'Driver version:')
+  label.frame = $.NSMakeRect(0, height - 26, 120, 20)
+  label.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
+  view.addSubview(label)
+  const popup = $.NSPopUpButton.alloc.initWithFramePullsDown($.NSMakeRect(126, height - 30, width - 166, 26), false)
+  for (let i = 0; i < versions.length; i++) popup.addItemWithTitle($(labels[i]))
+  popup.selectItemAtIndex(versions.indexOf(current))
+  popup.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+  view.addSubview(popup)
+  if (warningText.length > 0) {
+    const note = $.NSTextField.wrappingLabelWithString(warningText)
+    note.frame = $.NSMakeRect(0, 0, width - 40, 44)
+    note.font = $.NSFont.systemFontOfSize(11)
+    note.textColor = $.NSColor.systemOrangeColor
+    note.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+    view.addSubview(note)
+  }
+  content.addSubview(view)
+  versionRows.push({ view: view, index: Number(content.subviews.count) - 1, height: height, popup: popup, versions: versions, checkboxIndex: index })
+  y -= height
+}
+
 for (let i = 0; i < rows.length; i++) {
-  if (i === 0) addSectionHeader('Windows setup')
+  if (!rows[i].enabled) {
+    checkboxes.push(null)
+    continue
+  }
+  if (i < 2 && (i === 0 || !rows[0].enabled)) addSectionHeader(setupTitle)
   if (i === 2) addSectionHeader('Firmware and drivers')
   if (i === 4) addSectionHeader('Validation')
   const checkbox = $.NSButton.checkboxWithTitleTargetAction(rows[i].label, undefined, undefined)
   if (rows[i].caution) worAnnotateCheckbox(checkbox, rows[i].label, 'Not recommended', $.NSColor.systemRedColor)
+  else if (rows[i].recommended) worAnnotateCheckbox(checkbox, rows[i].label, 'Recommended', $.NSColor.systemGreenColor)
   checkbox.frame = $.NSMakeRect(20, y, width - 40, 20)
   checkbox.state = rows[i].checked ? 1 : 0
   checkbox.enabled = rows[i].enabled
+  if (i === 2 || i === 3) {
+    checkbox.target = controller
+    checkbox.action = 'releaseChoiceToggled:'
+  }
   checkbox.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
   content.addSubview(checkbox)
   checkboxes.push(checkbox)
   y -= rowHeight
+  if (i === 2 || i === 3) addVersionSelector(i)
 }
 
 addSectionHeader('Downloads')
@@ -1627,6 +1809,87 @@ editConfigButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMinYMargin
 content.addSubview(editConfigButton)
 updateConfigEditableState()
 
+const baselineFrames = []
+for (let i = 0; i < Number(content.subviews.count); i++) {
+  const view = content.subviews.objectAtIndex(i)
+  const frame = view.frame
+  baselineFrames.push({ view: view, x: Number(frame.origin.x), y: Number(frame.origin.y), width: Number(frame.size.width), height: Number(frame.size.height) })
+}
+let scrollView = null
+let bodyHeight = 0
+let needsScrolling = false
+let scrollHeight = 0
+
+function layoutAdvancedOptions() {
+const topPadding = 8
+content.removeFromSuperview
+if (scrollView) {
+  scrollView.documentView = $()
+  scrollView.removeFromSuperview
+  scrollView = null
+}
+content.autoresizesSubviews = false
+content.setFrameSize($.NSMakeSize(width, 0))
+let removedHeight = 0
+for (let i = 0; i < baselineFrames.length; i++) {
+  const entry = baselineFrames[i]
+  const selector = versionRows.find(function(item) { return item.index === i })
+  if (selector) {
+    const hidden = checkboxes[selector.checkboxIndex].state == 1
+    entry.view.hidden = hidden
+    if (hidden) {
+      removedHeight += selector.height
+      continue
+    }
+  }
+  entry.view.frame = $.NSMakeRect(entry.x, entry.y + removedHeight, entry.width, entry.height)
+}
+const contentViews = content.subviews
+let minimumY = 0
+let maximumY = 0
+for (let i = 0; i < Number(contentViews.count); i++) {
+  const frame = contentViews.objectAtIndex(i).frame
+  if (contentViews.objectAtIndex(i).isHidden) continue
+  minimumY = Math.min(minimumY, Number(frame.origin.y))
+  maximumY = Math.max(maximumY, Number(frame.origin.y) + Number(frame.size.height))
+}
+bodyHeight = Math.ceil(maximumY - minimumY) + 20 + topPadding
+content.setFrameSize($.NSMakeSize(width, bodyHeight))
+for (let i = 0; i < Number(contentViews.count); i++) {
+  const view = contentViews.objectAtIndex(i)
+  if (view.isHidden) continue
+  const frame = view.frame
+  view.setFrameOrigin($.NSMakePoint(Number(frame.origin.x), Number(frame.origin.y) - minimumY + 20))
+}
+content.autoresizesSubviews = true
+
+const chromeHeight = Number(window.frame.size.height) - Number(window.contentView.frame.size.height)
+const fixedHeight = 70 + topPadding
+const maximumBodyHeight = Math.max(1, Math.floor(Number(screenFrame.size.height) - chromeHeight - fixedHeight))
+scrollHeight = Math.min(bodyHeight, maximumBodyHeight)
+needsScrolling = bodyHeight > maximumBodyHeight
+window.setContentSize($.NSMakeSize(width, scrollHeight + fixedHeight))
+window.center
+
+if (needsScrolling) {
+  scrollView = $.NSScrollView.alloc.initWithFrame($.NSMakeRect(0, 70, width, scrollHeight))
+  scrollView.hasVerticalScroller = true
+  scrollView.hasHorizontalScroller = false
+  scrollView.autohidesScrollers = false
+  //Keep the overflow affordance visible even when macOS normally fades overlay scrollbars.
+  scrollView.scrollerStyle = $.NSScrollerStyleLegacy
+  window.contentView.addSubview(scrollView)
+  scrollView.tile
+  content.setFrameSize($.NSMakeSize(Number(scrollView.contentSize.width), bodyHeight))
+  scrollView.documentView = content
+  content.scrollPoint($.NSMakePoint(0, Math.max(0, bodyHeight - Number(scrollView.contentSize.height))))
+} else {
+  content.setFrameOrigin($.NSMakePoint(0, 70))
+  window.contentView.addSubview(content)
+}
+}
+layoutAdvancedOptions()
+
 const okButton = $.NSButton.buttonWithTitleTargetAction('OK', controller, 'okClicked:')
 okButton.bezelStyle = $.NSBezelStyleRounded
 okButton.keyEquivalent = '\r'
@@ -1634,7 +1897,7 @@ okButton.sizeToFit
 const okWidth = Math.max(96, okButton.frame.size.width)
 okButton.frame = $.NSMakeRect(width - 20 - okWidth, 20, okWidth, 32)
 okButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxYMargin
-content.addSubview(okButton)
+window.contentView.addSubview(okButton)
 
 const cancelButton = $.NSButton.buttonWithTitleTargetAction('Back', controller, 'cancelClicked:')
 cancelButton.bezelStyle = $.NSBezelStyleRounded
@@ -1643,7 +1906,7 @@ cancelButton.sizeToFit
 const cancelWidth = Math.max(96, cancelButton.frame.size.width)
 cancelButton.frame = $.NSMakeRect(width - 20 - okWidth - 8 - cancelWidth, 20, cancelWidth, 32)
 cancelButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMaxYMargin
-content.addSubview(cancelButton)
+window.contentView.addSubview(cancelButton)
 
 window.makeKeyAndOrderFront(null)
 if (!app.isActive) app.requestUserAttention($.NSInformationalRequest)
@@ -1663,7 +1926,7 @@ if (!confirmed) {
 
 const out = ['OK']
 for (let i = 0; i < checkboxes.length; i++) {
-  out.push(checkboxes[i].state == 1 ? '1' : '0')
+  out.push(checkboxes[i] ? (checkboxes[i].state == 1 ? '1' : '0') : (rows[i].checked ? '1' : '0'))
 }
 out.push(accountCheckbox.state == 1 ? '1' : '0')
 out.push(localeCheckbox.state == 1 ? '1' : '0')
@@ -1698,6 +1961,13 @@ if (soundPopup && soundOptions.length > 0) {
 }
 out.push(selectedSound)
 out.push(notificationCheckbox && soundOptions.length > 0 ? (notificationCheckbox.state == 1 ? '1' : '0') : showNotificationDefault)
+function selectedVersion(index, fallback) {
+  const item = versionRows.find(function(row) { return row.checkboxIndex === index })
+  if (!item || item.popup.indexOfSelectedItem < 0) return fallback
+  return item.versions[Number(item.popup.indexOfSelectedItem)]
+}
+out.push(selectedVersion(2, currentUefiVersion))
+out.push(selectedVersion(3, currentDriverVersion))
 out.push('---CONFIG_TXT---')
 out.push(configTxtValue)
 writeResult(out)
@@ -1705,21 +1975,30 @@ app.terminate(null)
 JXA
 )"
 
-  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$(wor_config_txt_label "$config_scope")" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" "$lang_spec" "$WIN_LANG" "$WINDOWS_ACCOUNT_SETUP" "$WINDOWS_LOCALE_SETUP" "$locale_spec" "$WOR_WINDOW_TITLE" "$sound_spec" "$PLAY_SOUND" "$(wor_completion_sound)" "$SHOW_NOTIFICATION" <<<"$advanced_jxa" 2>/dev/null)"
+  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$(wor_config_txt_label "$config_scope")" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" "$lang_spec" "$WIN_LANG" "$WINDOWS_ACCOUNT_SETUP" "$WINDOWS_LOCALE_SETUP" "$locale_spec" "$WOR_WINDOW_TITLE" "$sound_spec" "$PLAY_SOUND" "$(wor_completion_sound)" "$SHOW_NOTIFICATION" "$(wor_advanced_context "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")" "$(wor_setup_scope "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")" "$uefi_versions" "$uefi_dropdown_default" "$driver_versions" "$driver_dropdown_default" "$uefi_version_warning" "$driver_version_warning" "$uefi_version_labels" "$driver_version_labels" <<<"$advanced_jxa")" \
+    || { warning "Could not display Advanced Options. Keeping the current settings."; return 1; }
   #config.txt and account fields are user-editable bytes; BSD sed rejects malformed UTF-8 under the
   #desktop locale, so parse the machine-readable result in byte mode after AppKit has finished.
   LC_ALL=C
   status="$(printf '%s\n' "$result" | sed -n '1p')"
   [ "$status" == OK ] || return 1
+  selected_uefi="$(printf '%s\n' "$result" | sed -n '19p')"
+  selected_driver="$(printf '%s\n' "$result" | sed -n '20p')"
+  release_version_is_valid "$selected_uefi" && grep -qxF "$selected_uefi" <<<"$uefi_versions" \
+    || { warning "The selected UEFI release is not in the available choices. Keeping the current settings."; return 1; }
+  if [ "$drivers_applicable" == 1 ];then
+    release_version_is_valid "$selected_driver" && grep -qxF "$selected_driver" <<<"$driver_versions" \
+      || { warning "The selected driver release is not in the available choices. Keeping the current settings."; return 1; }
+  fi
 
   i=0
   while IFS= read -r line;do
     i=$((i+1))
     case "$i" in
-      1) OOBE_NETWORK_BYPASS="$line" ;;
+      1) [ "$oobe_applicable" == 1 ] && OOBE_NETWORK_BYPASS="$line" ;;
       2) [ "$pi4_applicable" == 1 ] && PI4_AUTO_DISABLE_3GB="$line" ;;
-      3) UEFI_USE_LATEST="$line" ;;
-      4) DRIVERS_USE_LATEST="$line" ;;
+      3) set_uefi_use_latest_choice "$line" ;;
+      4) [ "$drivers_applicable" == 1 ] && DRIVERS_USE_LATEST="$line" ;;
       5) SKIP_IMAGE_VERIFICATION="$line" ;;
       6) DRY_RUN="$line" ;;
       7) WINDOWS_ACCOUNT_SETUP="$line" ;;
@@ -1734,7 +2013,7 @@ JXA
   WINDOWS_ACCOUNT_PASSWORD="$(printf '%s\n' "$result" | sed -n '13p')"
   WINDOWS_LOCALE="$(printf '%s\n' "$result" | sed -n '14p')"
   sel_win_lang="$(printf '%s\n' "$result" | sed -n '15p')"
-  if is_known_win_lang "$sel_win_lang" ;then
+  if advanced_option_applies language && is_known_win_lang "$sel_win_lang" ;then
     WIN_LANG="$sel_win_lang"
   fi
   case "$(printf '%s\n' "$result" | sed -n '16p')" in
@@ -1745,6 +2024,12 @@ JXA
   case "$(printf '%s\n' "$result" | sed -n '18p')" in
     0 | 1) SHOW_NOTIFICATION="$(printf '%s\n' "$result" | sed -n '18p')" ;;
   esac
+  if [ "$(uefi_use_latest)" != 1 ] || [ "$selected_uefi" != "$uefi_dropdown_default" ];then
+    set_selected_release_version uefi "$selected_uefi" || return 1
+  fi
+  if [ "$drivers_applicable" == 1 ] && { [ "$DRIVERS_USE_LATEST" != 1 ] || [ "$selected_driver" != "$driver_dropdown_default" ]; };then
+    set_selected_release_version drivers "$selected_driver" || return 1
+  fi
 
   CONFIG_TXT="$(printf '%s\n' "$result" | sed -n '/^---CONFIG_TXT---$/,$p' | tail -n +2)"
 }
@@ -1753,9 +2038,10 @@ macos_choose_target() { #Input: current-run Windows/Pi defaults. Output: selecte
   local default_pi_label default_windows_label target_jxa result
   default_windows_label="${1:-Windows 11}"
   case "${2:-}" in
-    5) default_pi_label='Raspberry Pi 5' ;;
-    4) default_pi_label='Raspberry Pi 4 / Pi 400' ;;
-    3) default_pi_label='Raspberry Pi 3 / Pi 2 v1.2' ;;
+    5 | 'Raspberry Pi 5') default_pi_label='Raspberry Pi 5' ;;
+    4 | 'Raspberry Pi 4 / Pi 400') default_pi_label='Raspberry Pi 4 / Pi 400' ;;
+    3 | 'Raspberry Pi 3') default_pi_label='Raspberry Pi 3' ;;
+    'Raspberry Pi 2 v1.2') default_pi_label='Raspberry Pi 2 v1.2' ;;
     *) default_pi_label='Raspberry Pi 5' ;;
   esac
   target_jxa="$(wor_jxa_window_lib; cat <<'JXA'
@@ -1771,7 +2057,7 @@ const defaultWindows = ObjC.unwrap(args.objectAtIndex(7) || 'Windows 11')
 const defaultPiModel = ObjC.unwrap(args.objectAtIndex(8) || 'Raspberry Pi 5')
 const app = $.NSApplication.sharedApplication
 const windows = ['Windows 11', 'Windows 10']
-const piModels = ['Raspberry Pi 5', 'Raspberry Pi 4 / Pi 400', 'Raspberry Pi 3 / Pi 2 v1.2']
+const piModels = ObjC.unwrap(args.objectAtIndex(9)).split('\n').filter(Boolean)
 const defaultWindowsIdx = Math.max(0, windows.indexOf(defaultWindows))
 const defaultPiIdx = Math.max(0, piModels.indexOf(defaultPiModel))
 let window
@@ -1897,7 +2183,7 @@ allowTermination = true
 $.exit(0)
 JXA
 )"
-  result="$(wor_osascript -l JavaScript - "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" "$WOR_APP_TITLE" "$default_windows_label" "$default_pi_label" <<<"$target_jxa")"
+  result="$(wor_osascript -l JavaScript - "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" "$WOR_APP_TITLE" "$default_windows_label" "$default_pi_label" "$(wor_rpi_board_options)" <<<"$target_jxa")"
   result="$(printf '%s\n' "$result" | awk 'index($0, "\t") { print; exit }')"
   result="${result%%__WOR_CANCEL__*}"
   result="$(printf '%s' "$result" | tr -d '\r')"
@@ -1917,17 +2203,12 @@ macos_start_cli() {
       target)
         target_choice="$(macos_choose_target "$current_windows_ver" "$current_rpi_model")" || exit 0
         WINDOWS_VER="${target_choice%%$'\t'*}"
-        case "${target_choice#*$'\t'}" in
-          'Raspberry Pi 5') RPI_MODEL=5 ;;
-          'Raspberry Pi 4 / Pi 400') RPI_MODEL=4 ;;
-          'Raspberry Pi 3 / Pi 2 v1.2') RPI_MODEL=3 ;;
-          *) error "Unrecognized Raspberry Pi selection '${target_choice#*$'\t'}'" ;;
-        esac
+        select_rpi_board "${target_choice#*$'\t'}" || error "Unrecognized Raspberry Pi selection."
         current_windows_ver="$WINDOWS_VER"
-        current_rpi_model="$RPI_MODEL"
+        current_rpi_model="${target_choice#*$'\t'}"
         list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
         [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
-        [ -n "$BID" ] || error "No compatible Windows build is available for Raspberry Pi $RPI_MODEL."
+        [ -n "$BID" ] || error "No compatible Windows build is available for $(rpi_board_label)."
         set_default_config_txt
         [ -z "$WIN_LANG" ] && WIN_LANG="$(default_win_lang)"
         step=device
@@ -2554,8 +2835,10 @@ JXA
       printf '%s\nInstaller exit status: 1 (interrupted).\n' "$completion_text" >> "$output_log"
       rm -f "$progress_file" "$done_marker" "$abort_marker" "$auth_marker" "$error_marker"
       saved_log="$(gui_save_installer_log)"
-      wor_show_result_notification failure
+      wor_show_result_notification failure "$(windows_version_label)"
       macos_show_result_dialog "$completion_text
+
+$(windows_version_label) media was not completed.
 
 $DEVICE is now in an unusable state and has to be flashed again before it can boot.
 
@@ -2584,6 +2867,8 @@ Full log: $saved_log" '' '' "$saved_log"
       rm -f "$error_marker"
       completion_text="Process completed successfully.
 
+    $(windows_version_label) media preparation is complete.
+
     It is now safe to remove your USB drive."
       [ -z "$disk_alert_warning" ] || completion_text="$completion_text"$'\n\n'"$disk_alert_warning"
       completion_text="$completion_text"$'\n\n'"Full log: $saved_log"
@@ -2609,7 +2894,7 @@ Full log: $saved_log" '' '' "$saved_log"
       [ -z "$privacy_guidance" ] || privacy_guidance="$privacy_guidance
 
     "
-      completion_text="The Windows on Raspberry script stopped unexpectedly (exit code $installer_status).
+      completion_text="The $(windows_version_label) media preparation stopped unexpectedly (exit code $installer_status).
 
     $privacy_guidance$(gui_log_tail "$saved_log")
 
@@ -2618,7 +2903,7 @@ Full log: $saved_log"
     completion_image=''
     [ "$installer_status" == 0 ] && completion_image="$WOR_ASSETS_DIR/next-steps.png"
     #posted before the window opens, so it lands while the app is still in the background
-    [ "$installer_status" == 0 ] && wor_show_result_notification success || wor_show_result_notification failure
+    [ "$installer_status" == 0 ] && wor_show_result_notification success "$(windows_version_label)" || wor_show_result_notification failure "$(windows_version_label)"
     macos_show_result_dialog "$completion_text" "$completion_image" "$privacy_settings_url" "$saved_log" "$([ "${PLAY_SOUND:-1}" == 1 ] && wor_completion_sound)"
     exit "$installer_status"
   done
@@ -2743,18 +3028,13 @@ target_choice="$(yad "${yadflags[@]}" --width="$(wor_yad_width 620)" --height="$
   --text='<big><b>Choose Windows and Raspberry Pi target</b></big>' \
   --form --align=center --buttons-layout=center \
   --field='Windows version:CB' 'Windows 11!Windows 10!More options' \
-  --field='Raspberry Pi model:CB' 'Raspberry Pi 5!Raspberry Pi 4 / Pi 400!Raspberry Pi 3 / Pi 2 v1.2' \
+  --field='Raspberry Pi model:CB' "$(wor_rpi_board_options | paste -sd '!' -)" \
   --button='<b>Cancel</b>':1 --button='<b>Next</b>':0)"
 button=$?
 [ "$button" == 0 ] || exit 0
 WINDOWS_VER="$(printf '%s\n' "$target_choice" | sed -n '1p')"
 rpi_choice="$(printf '%s\n' "$target_choice" | sed -n '2p')"
-case "$rpi_choice" in
-  'Raspberry Pi 5') RPI_MODEL=5 ;;
-  'Raspberry Pi 4 / Pi 400') RPI_MODEL=4 ;;
-  'Raspberry Pi 3 / Pi 2 v1.2') RPI_MODEL=3 ;;
-  *) error "Unrecognized Raspberry Pi selection '$rpi_choice'" ;;
-esac
+select_rpi_board "$rpi_choice" || error "Unrecognized Raspberry Pi selection."
 
 case "$WINDOWS_VER" in
     'Windows 11' | 'Windows 10')
@@ -3087,15 +3367,14 @@ set_default_config_txt
 
 { #confirmation dialog and edit config.txt
 
-window_text="$(settings_summary_markup)
-
-To continue, click Flash. To review or change these settings, click Advanced. To cancel, close this window."
-
 #by default, if a windows image exists, don't delete it to rebuild it
 rm_img=FALSE
 existing_img_chk=()
 
 while true;do #repeat the Installation Overview window until Flash button clicked
+  window_text="$(settings_summary_markup)
+
+To continue, click Flash. To review or change these settings, click Advanced. To cancel, close this window."
 
   if [ "$DRY_RUN" == 1 ];then
     deletion_warning="DRY_RUN=1, so the target drive will not be modified."
@@ -3120,33 +3399,60 @@ while true;do #repeat the Installation Overview window until Flash button clicke
     #button: Advanced options
 
     refresh_prompt=() #this variable is populated if the Advanced Options window is repeated, to let the user know why
+    save_advanced_preferences
 
     while true;do #repeat the advanced options window until the DL_DIR is not changed, or until Cancel is clicked
       fields=()
+      release_refresh_file="$(mktemp)" || error "Could not create a release-selector refresh marker."
+      release_refresh_requested=0
       config_edit_file="$(mktemp)"
       printf '%s' "$CONFIG_TXT" > "$config_edit_file"
       config_editor_title="$WOR_WINDOW_TITLE | config.txt"
       config_editor_action="@yad --center --no-markup --width=$(wor_yad_width 700) --height=$(wor_yad_height 520) --title=$(printf '%q' "$config_editor_title") --window-icon=$(printf '%q' "$WOR_LOGO_PATH") --class=$(printf '%q' "$WOR_ICON_NAME") --text-info --editable --in-place --confirm-save='Save config.txt changes?' --filename=$(printf '%q' "$config_edit_file") --button=Close:0 >/dev/null"
       uefi_pinned="$(uefi_pinned_version)"
+      prepare_release_choices uefi "$uefi_pinned"
+      uefi_versions="$RELEASE_CHOICES" uefi_version_warning="$RELEASE_CHOICES_WARNING"
+      uefi_dropdown_default="$RELEASE_CHOICES_DEFAULT" uefi_version_labels="$RELEASE_CHOICES_LABELS" uefi_latest_tag="$RELEASE_CHOICES_LATEST"
+      driver_versions='' driver_version_warning='' driver_version_labels='' driver_latest_tag='' driver_dropdown_default="$DRIVER_VER"
+      if advanced_option_applies drivers;then
+        prepare_release_choices drivers "$DRIVER_VER"
+        driver_versions="$RELEASE_CHOICES" driver_version_warning="$RELEASE_CHOICES_WARNING"
+        driver_dropdown_default="$RELEASE_CHOICES_DEFAULT" driver_version_labels="$RELEASE_CHOICES_LABELS" driver_latest_tag="$RELEASE_CHOICES_LATEST"
+      fi
+      windows_family="$(windows_version_label)"
       #make entries for the customization toggles
-      #the engine ignores PI4_AUTO_DISABLE_3GB unless RPI_MODEL is 4; yad can't disable one field, so mark it and drop the value below
-      [ "$RPI_MODEL" == 4 ] && pi4_applicable=1 || pi4_applicable=0
-      #yad renders markup, so an inapplicable row is italicised rather than greyed out
-      pi4_label="$(wor_pi4_label "$RPI_MODEL")"
-      [ "$pi4_applicable" == 1 ] || pi4_label="<i>$pi4_label</i>"
-      fields+=("--field=Windows setup:LBL" '')
-      oobe_field=$((${#fields[@]} / 2 + 1))
-      fields+=("--field=$(wor_yad_label "$(wor_advanced_label oobe "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution oobe)")":CHK "$(wor_yad_bool "$OOBE_NETWORK_BYPASS")")
-      pi4_field=$((${#fields[@]} / 2 + 1))
-      fields+=("--field=$pi4_label":CHK "$(wor_yad_bool "$([ "$pi4_applicable" == 1 ] && echo "$PI4_AUTO_DISABLE_3GB" || echo 0)")")
+      oobe_field='' pi4_field='' drivers_field='' language_field='' uefi_version_field='' driver_version_field=''
+      if advanced_option_applies oobe || advanced_option_applies pi4;then
+        fields+=("--field=$(wor_setup_scope "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE"):LBL" '')
+      fi
+      if advanced_option_applies oobe;then
+        oobe_field=$((${#fields[@]} / 2 + 1))
+        fields+=("--field=$(wor_yad_label "$(wor_advanced_label oobe "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL" "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")" "$(wor_advanced_caution oobe)")":CHK "$(wor_yad_bool "$OOBE_NETWORK_BYPASS")")
+      fi
+      if advanced_option_applies pi4;then
+        pi4_field=$((${#fields[@]} / 2 + 1))
+        fields+=("--field=$(wor_pi4_label):CHK" "$(wor_yad_bool "$PI4_AUTO_DISABLE_3GB")")
+      fi
       fields+=("--field=Firmware and drivers:LBL" '')
       uefi_field=$((${#fields[@]} / 2 + 1))
-      fields+=("--field=$(wor_yad_label "$(wor_advanced_label uefi "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution uefi)")":CHK "$(wor_yad_bool "$UEFI_USE_LATEST")")
-      drivers_field=$((${#fields[@]} / 2 + 1))
-      fields+=("--field=$(wor_yad_label "$(wor_advanced_label drivers "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution drivers)")":CHK "$(wor_yad_bool "$DRIVERS_USE_LATEST")")
+      fields+=("--field=$(wor_yad_label "$(wor_advanced_label uefi "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution uefi "$RPI_MODEL")" "$(wor_advanced_recommended uefi "$RPI_MODEL")")":CHK "$(wor_yad_bool "$(uefi_use_latest)")")
+      if [ "$(uefi_use_latest)" != 1 ];then
+        uefi_version_field=$((${#fields[@]} / 2 + 1))
+        fields+=("--field=UEFI version:CB" "$(printf '%s\n' "$uefi_version_labels" | awk 'NF {v=v ? v "!" $0 : $0} END {print v}')")
+        [ -z "$uefi_version_warning" ] || fields+=("--field=$uefi_version_warning:LBL" '')
+      fi
+      if advanced_option_applies drivers;then
+        drivers_field=$((${#fields[@]} / 2 + 1))
+        fields+=("--field=$(wor_yad_label "$(wor_advanced_label drivers "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution drivers)" "$(wor_advanced_recommended drivers "$RPI_MODEL")")":CHK "$(wor_yad_bool "$DRIVERS_USE_LATEST")")
+        if [ "$DRIVERS_USE_LATEST" != 1 ];then
+          driver_version_field=$((${#fields[@]} / 2 + 1))
+          fields+=("--field=Driver version:CB" "$(printf '%s\n' "$driver_version_labels" | awk 'NF {v=v ? v "!" $0 : $0} END {print v}')")
+          [ -z "$driver_version_warning" ] || fields+=("--field=$driver_version_warning:LBL" '')
+        fi
+      fi
       fields+=("--field=Validation:LBL" '')
       verify_field=$((${#fields[@]} / 2 + 1))
-      fields+=("--field=$(wor_yad_label "$(wor_advanced_label verify "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution verify)")":CHK "$(wor_yad_bool "$SKIP_IMAGE_VERIFICATION")")
+      fields+=("--field=$(wor_yad_label "$(wor_advanced_label verify "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL" "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")" "$(wor_advanced_caution verify)")":CHK "$(wor_yad_bool "$SKIP_IMAGE_VERIFICATION")")
       dryrun_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL"):CHK" "$(wor_yad_bool "$DRY_RUN")")
       #in recovery mode this config.txt boots the installer media; WoR-PE writes the target drive's own copy
@@ -3161,13 +3467,13 @@ while true;do #repeat the Installation Overview window until Flash button clicke
         fields+=("--field=Download folder:DIR" "$DL_DIR")
       fi
       if [ -f "${DL_DIR}/winfiles_${BID}_${WIN_LANG}/alldone" ];then
-        windows_files_status='Already extracted and ready to use'
+        windows_files_status="$windows_family image already extracted and ready to use"
       elif [ -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ];then
-        windows_files_status='Already extracted and ready to use'
+        windows_files_status="$windows_family ISO files already extracted and ready to use"
       elif [ -n "$SOURCE_FILE" ];then
-        windows_files_status='Will be extracted from the selected ISO'
+        windows_files_status="$windows_family files will be extracted from the selected ISO"
       else
-        windows_files_status='Will download and extract the Windows image'
+        windows_files_status="Will download and extract the $windows_family image"
       fi
       windows_files_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Windows files:RO" "$windows_files_status")
@@ -3228,50 +3534,64 @@ while true;do #repeat the Installation Overview window until Flash button clicke
       [ "$WINDOWS_LOCALE_SETUP" == 1 ] || locale_value='@disabled@'
       locale_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=Windows locale":CB "$locale_value")
-      lang_items=""
-      curr_item=""
-      other_items=""
-      while IFS=: read -r l_code l_name ;do
-        [ -z "$l_code" ] && continue
-        entry="${l_code}: ${l_name}"
-        if [ "$l_code" == "$WIN_LANG" ];then
-          curr_item="$entry"
-        else
-          [ -n "$other_items" ] && other_items+="!${entry}" || other_items="${entry}"
-        fi
-      done < <(list_langs_preferred)
-      [ -n "$curr_item" ] && lang_items="${curr_item}!${other_items}" || lang_items="${other_items}"
-      language_field=$((${#fields[@]} / 2 + 1))
-      fields+=("--field=Choose Windows language":CB "$lang_items")
+      if advanced_option_applies language;then
+        lang_items=""
+        curr_item=""
+        other_items=""
+        while IFS=: read -r l_code l_name ;do
+          [ -z "$l_code" ] && continue
+          entry="${l_code}: ${l_name}"
+          if [ "$l_code" == "$WIN_LANG" ];then
+            curr_item="$entry"
+          else
+            [ -n "$other_items" ] && other_items+="!${entry}" || other_items="${entry}"
+          fi
+        done < <(list_langs_preferred)
+        [ -n "$curr_item" ] && lang_items="${curr_item}!${other_items}" || lang_items="${other_items}"
+        language_field=$((${#fields[@]} / 2 + 1))
+        fields+=("--field=Choose Windows language":CB "$lang_items")
+      fi
       fields+=("--field=Raspberry Pi boot config:LBL" '')
       config_button_value="$config_editor_action"
       [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ] || config_button_value='@disabled@'
-      account_username_update="${account_username_field}:$(printf '%q' "$account_username_value")"
-      account_password_update="${account_password_field}:$(printf '%q' "$account_password_value")"
-      locale_update="${locale_field}:$(printf '%q' "$locale_value")"
+      account_username_update="${account_username_field}:$(printf '%q' "$WINDOWS_ACCOUNT_USERNAME")"
+      account_password_update="${account_password_field}:$(printf '%q' "$WINDOWS_ACCOUNT_PASSWORD")"
+      locale_update="${locale_field}:$(printf '%q' "$locale_items")"
       config_checkbox_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_config_txt_label "$config_scope") (recommended):CHK" "$(wor_yad_bool "$APPLY_CUSTOM_CONFIG_TXT")")
       config_button_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=<b>View / Edit config.txt</b>:BTN" "$config_button_value")
+      release_toggle_fields="$uefi_field${drivers_field:+|$drivers_field}"
       changed_action="case \"\$1\" in
+        ${release_toggle_fields}) printf 'refresh\n' > $(printf '%q' "$release_refresh_file"); kill -USR1 \"\$YAD_PID\";;
         ${account_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' \"${account_username_update}\" \"${account_password_update}\"; else printf \"${account_username_field}:@disabled@\\n${account_password_field}:@disabled@\\n\"; fi;;
         ${locale_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' \"${locale_update}\"; else printf \"${locale_field}:@disabled@\\n\"; fi;;
         ${config_checkbox_field}) if [ \"\$2\" == TRUE ];then printf '%s\\n' \"${config_button_field}:${config_editor_action}\"; else printf '${config_button_field}:@disabled@\\n'; fi;;
       esac"
 
-      output="$(yad "${yadflags[@]}" --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 720)" --height="$(wor_yad_height 720)" --image-on-top \
-        "${refresh_prompt[@]}" \
-        --text=$'<big><b>Advanced Options</b></big>\nChanges apply to this flash only.' \
-        --form --scroll \
+      advanced_text=$'<big><b>Advanced Options</b></big>\n'"$(wor_advanced_context "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")"
+      [ "${#refresh_prompt[@]}" == 0 ] || advanced_text="${refresh_prompt[0]#--text=}"$'\n\n'"$advanced_text"
+      output="$(GTK_OVERLAY_SCROLLING=0 yad "${yadflags[@]}" --response=0 --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 720)" --height="$(wor_yad_height "$WOR_YAD_SCREEN_HEIGHT")" --image-on-top \
+        --text="$advanced_text" \
+        --form --scroll --vscroll-policy=auto \
         "${fields[@]}" \
         --button="<b>Back</b>":1 --button="<b>OK</b>":0
       )"
       button=$?
+      [ ! -s "$release_refresh_file" ] || release_refresh_requested=1
+      rm -f "$release_refresh_file"
       [ -f "$config_edit_file" ] && CONFIG_TXT="$(cat "$config_edit_file")"
       rm -f "$config_edit_file"
 
       if [ "$button" == 0 ];then #everything in this if statement is skipped if Cancel is clicked
         yad_field_value() { printf '%s\n' "$output" | sed -n "${1}p"; }
+        selected_uefi="$uefi_dropdown_default" selected_driver="$driver_dropdown_default"
+        if { [ -n "$uefi_version_field" ] && ! selected_uefi="$(release_choice_tag "$(yad_field_value "$uefi_version_field")" "$uefi_versions" "$uefi_latest_tag")"; } \
+          || { [ -n "$driver_version_field" ] && ! selected_driver="$(release_choice_tag "$(yad_field_value "$driver_version_field")" "$driver_versions" "$driver_latest_tag")"; };then
+          warning "Select a version from the published choices before continuing."
+          refresh_prompt=("--text=Select an available UEFI/driver version or enable latest.")
+          continue
+        fi
         if [ ! -f "${DL_DIR}/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ] && [ "$DL_DIR" != "$(yad_field_value "$working_dir_field")" ];then
           #DL_DIR was changed - only honor the value if it is allowed to be changed
           DL_DIR="$(yad_field_value "$working_dir_field")"
@@ -3293,13 +3613,27 @@ while true;do #repeat the Installation Overview window until Flash button clicke
             DRY_RUN=0
           fi
           #customization toggles
-          [ "$(yad_field_value "$oobe_field")" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
+          if [ -n "$oobe_field" ];then
+            [ "$(yad_field_value "$oobe_field")" == TRUE ] && OOBE_NETWORK_BYPASS=1 || OOBE_NETWORK_BYPASS=0
+          fi
           #keep the existing preference when the toggle wasn't applicable, so switching back to a Pi 4 doesn't lose it
-          if [ "$pi4_applicable" == 1 ];then
+          if [ -n "$pi4_field" ];then
             [ "$(yad_field_value "$pi4_field")" == TRUE ] && PI4_AUTO_DISABLE_3GB=1 || PI4_AUTO_DISABLE_3GB=0
           fi
-          [ "$(yad_field_value "$uefi_field")" == TRUE ] && UEFI_USE_LATEST=1 || UEFI_USE_LATEST=0
-          [ "$(yad_field_value "$drivers_field")" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
+          if [ "$(yad_field_value "$uefi_field")" == TRUE ];then
+            set_uefi_use_latest_choice 1
+          else
+            set_uefi_use_latest_choice 0
+          fi
+          if [ -n "$drivers_field" ];then
+            [ "$(yad_field_value "$drivers_field")" == TRUE ] && DRIVERS_USE_LATEST=1 || DRIVERS_USE_LATEST=0
+          fi
+          if [ -n "$uefi_version_field" ] || [ "$(uefi_use_latest)" != 1 ];then
+            set_selected_release_version uefi "$selected_uefi" || error "Invalid UEFI release selection."
+          fi
+          if [ -n "$drivers_field" ] && { [ -n "$driver_version_field" ] || [ "$DRIVERS_USE_LATEST" != 1 ]; };then
+            set_selected_release_version drivers "$selected_driver" || error "Invalid driver release selection."
+          fi
           [ "$(yad_field_value "$verify_field")" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
           [ "$(yad_field_value "$config_checkbox_field")" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
           case "$(yad_field_value "$cache_field")" in
@@ -3308,13 +3642,16 @@ while true;do #repeat the Installation Overview window until Flash button clicke
             'Reuse cached files'*) USE_CACHE=1 ;;
           esac
           [ "$(yad_field_value "$account_checkbox_field")" == TRUE ] && WINDOWS_ACCOUNT_SETUP=1 || WINDOWS_ACCOUNT_SETUP=0
-          WINDOWS_ACCOUNT_USERNAME="$(yad_field_value "$account_username_field")"
-          WINDOWS_ACCOUNT_PASSWORD="$(yad_field_value "$account_password_field")"
+          if [ "$WINDOWS_ACCOUNT_SETUP" == 1 ];then
+            WINDOWS_ACCOUNT_USERNAME="$(yad_field_value "$account_username_field")"
+            WINDOWS_ACCOUNT_PASSWORD="$(yad_field_value "$account_password_field")"
+          fi
           [ "$(yad_field_value "$locale_checkbox_field")" == TRUE ] && WINDOWS_LOCALE_SETUP=1 || WINDOWS_LOCALE_SETUP=0
-          WINDOWS_LOCALE="$(yad_field_value "$locale_field" | awk -F': ' '{print $1}')"
-          sel_lang="$(yad_field_value "$language_field")"
+          [ "$WINDOWS_LOCALE_SETUP" != 1 ] || WINDOWS_LOCALE="$(yad_field_value "$locale_field" | awk -F': ' '{print $1}')"
+          sel_lang=''
+          [ -z "$language_field" ] || sel_lang="$(yad_field_value "$language_field")"
           sel_code="${sel_lang%%:*}"
-          if is_known_win_lang "$sel_code" ;then
+          if [ -n "$language_field" ] && is_known_win_lang "$sel_code" ;then
             WIN_LANG="$sel_code"
           fi
           if [ -n "$sound_items" ];then
@@ -3327,13 +3664,19 @@ while true;do #repeat the Installation Overview window until Flash button clicke
           fi
           #end of parsing check-box values for advanced options window
 
+          if [ "$release_refresh_requested" == 1 ];then
+            refresh_prompt=()
+            continue
+          fi
           break #as the DL_DIR value was not changed, go back to the Installation Overview window
         fi
 
       else #button != OK
+        restore_advanced_preferences
         break #Don't save and go back to Installation Overview
       fi
     done #end of repeating the advanced options window
+    unset ADVANCED_ORIGINAL_VALUES
 
   else
     #User exited when reviewing information and customizing config.txt
@@ -3416,8 +3759,8 @@ if [ "$progress_aborted" == 1 ];then
   rm -f "$progress_fifo" "$progress_file" "$done_marker" "$auth_marker" "$abort_marker" "$error_marker"
   saved_log="$(gui_save_installer_log)"
   wor_play_result_sound failure
-  wor_show_result_notification failure
-  yad "${yadflags[@]}" --text="Flashing was stopped before it finished.\n\n$DEVICE is now in an unusable state and has to be flashed again before it can boot.\n\nFull log: $saved_log"
+  wor_show_result_notification failure "$(windows_version_label)"
+  yad "${yadflags[@]}" --text="Flashing was stopped before it finished.\n\n$(windows_version_label) media was not completed.\n\n$DEVICE is now in an unusable state and has to be flashed again before it can boot.\n\nFull log: $saved_log"
   exit 1
 fi
 
@@ -3436,21 +3779,23 @@ fi
 if [ "$exitcode" == 0 ];then
   rm -f "$output_log" "$error_marker"
   wor_play_result_sound success
-  wor_show_result_notification success
+  wor_show_result_notification success "$(windows_version_label)"
   #display "next steps" window
   linux_completion_image="$(wor_yad_image_for_screen "$WOR_ASSETS_DIR/next-steps.png" "$WOR_LOGO_PATH" 730 440)"
+  linux_completion_text="$(windows_version_label) media preparation is complete."
   yad --center --width="$(wor_yad_width 690)" --height="$(wor_yad_height 380)" --window-icon="$WOR_LOGO_PATH" --class="$WOR_ICON_NAME" --title="$WOR_WINDOW_TITLE" \
+    --text="$linux_completion_text" \
     --form --align=center --image-on-top --buttons-layout=center --image="$linux_completion_image" \
     --field="It is now safe to remove your USB drive.":LBL '' --button=Close:0 >/dev/null
 else
   #keep the log on failure; the dialog only shows a tail, and the GUI has no terminal to fall back on
   saved_log="$(gui_save_installer_log)"
   wor_play_result_sound failure
-  wor_show_result_notification failure
+  wor_show_result_notification failure "$(windows_version_label)"
   if installer_showed_own_error ;then
     : #install-wor.sh already displayed its own native error dialog.
   else
-    yad "${yadflags[@]}" --text="The Windows on Raspberry script stopped unexpectedly (exit code $exitcode).\n\n$(gui_log_tail "$saved_log")\n\nFull log: $saved_log"
+    yad "${yadflags[@]}" --text="The $(windows_version_label) media preparation stopped unexpectedly (exit code $exitcode).\n\n$(gui_log_tail "$saved_log")\n\nFull log: $saved_log"
   fi
   rm -f "$error_marker"
 fi
