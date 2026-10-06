@@ -145,6 +145,29 @@
               "default": "",
               "description": "New IoT password (12-127 UTF-16 characters), used only by the GUI post-boot SSH step. Prefer the masked GUI field; configuration files store plaintext and must not be committed."
             },
+            "host": {
+              "type": "string",
+              "maxLength": 253,
+              "default": "",
+              "description": "Pi local IP address or hostname for manual post-boot connection. Required when automaticAddress is false; retained but unused while automatic addressing is enabled. Editing never resolves or connects."
+            },
+            "automaticAddress": {
+              "type": "boolean",
+              "description": "Resolve the default IoT hostname minwinpc after Connect (recommended). Defaults to true when no host is specified; an existing explicit host defaults to manual. Does not configure DHCP or assign a static address."
+            },
+            "currentUsername": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 20,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,19}$",
+              "description": "Required current IoT administrator login, prefilled with the Microsoft factory username when unset. Cannot be blank or disabled by turning off personalization; separate from the desired new administrator name."
+            },
+            "currentPassword": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 127,
+              "description": "Required current IoT login password, prefilled with the Microsoft factory password when unset. Empty passwords are unsupported by the password-based IoT SSH flow. Prefer the masked Advanced Options field; configuration files store plaintext and must remain private."
+            },
             "languageSetup": {
               "type": "boolean",
               "default": true,
@@ -188,6 +211,16 @@
           "type": "boolean",
           "default": false,
           "description": "Explicit erase consent for non-interactive IoT Core deployment only. Ignored for inspection-only dry runs. Requires an explicitly selected safe whole disk."
+        },
+        "wipeIotDrive": {
+          "type": "boolean",
+          "default": false,
+          "description": "Zero and read-back every addressable sector of the selected safe drive before applying the verified IoT FFU. Slow, destructive and opt-in; requires confirmIotWipe plus normal erase consent. Not a secure erase or hardware repair."
+        },
+        "confirmIotWipe": {
+          "type": "boolean",
+          "default": false,
+          "description": "Separate explicit confirmation for a requested full-drive IoT wipe. GUI users confirm Wipe and Flash; automation must deliberately opt in. Dry runs never wipe."
         },
         "dryRun": {
           "type": "boolean",

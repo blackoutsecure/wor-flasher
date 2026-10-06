@@ -558,6 +558,14 @@ class HdmiTests(FileFixture):
                 self.write(hdmi_mode="custom", hdmi_config=custom)
             self.assertEqual(write.call_count, 0)
 
+    def test_full_wipe_preserves_the_verified_hdmi_overlay(self) -> None:
+        self.target.write_bytes(b"\xA5" * self.fixture.size)
+        self.write(hdmi_mode="720p60", wipe_entire_drive=True)
+        self.assertIn(b"hdmi_mode=4\r\n", self.read_config())
+        self.assertIn(b"kernel_old=1\r\n", self.read_config())
+        self.assertFalse(any(self.target.read_bytes()[len(self.fixture.disk):]))
+        self.assertEqual(self.source.read_bytes(), self.fixture.blob)
+
 
 class FileTests(FileFixture):
     def test_exact_final_extents_preserve_holes_and_size(self) -> None:
@@ -1070,6 +1078,127 @@ class GptCleanupTests(FileFixture):
             ffu.apply_to_file_fixture(self.source, self.target, size, allow_gpt_cleanup=True, progress=progress)
 
 
+class FullWipeTests(FileFixture):
+    def test_entire_drive_and_non_chunk_aligned_tail_are_zeroed_before_image_write(self) -> None:
+        size = ffu.WIPE_CHUNK_BYTES + 512
+        self.target.write_bytes(b"\xA5" * size)
+        phases: list[tuple[str, int]] = []
+
+        def progress(phase: str, percent: int) -> None:
+            phases.append((phase, percent))
+            if phase == "Verifying blank drive" and percent == 100:
+                self.assertFalse(any(self.target.read_bytes()), "every target byte must be zero before image writes")
+
+        ffu.apply_to_file_fixture(self.source, self.target, size, wipe_entire_drive=True, progress=progress)
+        self.assertTrue(self.target.read_bytes() == self.expected_target(size).replace(b"\xA5", b"\0"),
+                        "only the verified image extents may be nonzero after a full reset")
+        self.assertEqual(self.target.stat().st_size, size)
+        self.assertEqual(self.source.read_bytes(), self.fixture.blob)
+        self.assertLess(phases.index(("Wiping entire drive", 100)), phases.index(("Verifying blank drive", 0)))
+        self.assertLess(phases.index(("Verifying blank drive", 100)), phases.index(("Writing", 0)))
+        self.assertEqual(phases[-1], ("Verifying", 100))
+
+    def test_malformed_gpt_is_only_discarded_by_an_explicit_full_wipe(self) -> None:
+        size = 2 * 1024 * 1024
+        create_gpt_target(self.target, size)
+        original = bytearray(self.target.read_bytes())
+        original[512 + 16] ^= 1
+        self.target.write_bytes(original)
+        with self.assertRaises(ffu.TargetError):
+            ffu.apply_to_file_fixture(self.source, self.target, size, allow_gpt_cleanup=True)
+        self.assertEqual(self.target.read_bytes(), original)
+        ffu.apply_to_file_fixture(self.source, self.target, size, wipe_entire_drive=True)
+        self.assertEqual(self.target.read_bytes(), self.expected_target(size).replace(b"\xA5", b"\0"))
+
+    def test_blank_readback_failure_prevents_image_application(self) -> None:
+        original_read = ffu._read_target
+
+        def corrupt(fd: int, size: int, offset: int, sector: int) -> bytes:
+            data = original_read(fd, size, offset, sector)
+            return b"\x01" + data[1:]
+
+        with mock.patch.object(ffu, "_read_target", side_effect=corrupt):
+            with mock.patch.object(ffu, "_write_all", wraps=ffu._write_all) as writes:
+                with self.assertRaisesRegex(ffu.ApplyError, "full-wipe readback mismatch"):
+                    self.apply(wipe_entire_drive=True)
+                self.assertTrue(writes.called)
+                self.assertTrue(all(not any(call.args[1]) for call in writes.call_args_list))
+        self.assertEqual(self.target.read_bytes(), bytes(TARGET_SIZE))
+
+    def test_source_and_target_failures_stop_before_the_first_wipe_write(self) -> None:
+        for changed in ("source", "geometry", "identity"):
+            with self.subTest(changed=changed):
+                self.source.write_bytes(self.fixture.blob)
+                self.target.write_bytes(self.original)
+                context = contextlib.ExitStack()
+                with context, mock.patch.object(ffu, "_write_all") as writes:
+                    def progress(phase: str, percent: int) -> None:
+                        if phase == "Wiping entire drive" and percent == 0:
+                            if changed == "source":
+                                self.source.write_bytes(self.fixture.blob + b"x")
+                            elif changed == "geometry":
+                                context.enter_context(mock.patch.object(ffu, "_device_geometry", return_value=(1, 512)))
+                                context.enter_context(mock.patch.object(ffu, "_check_target", side_effect=ffu.TargetError("geometry changed")))
+                            else:
+                                context.enter_context(mock.patch.object(ffu, "_target_id", return_value="changed"))
+                    with self.assertRaises(ffu.FfuError):
+                        self.apply(wipe_entire_drive=True, progress=progress)
+                    self.assertEqual(writes.call_count, 0)
+                self.assertEqual(self.target.read_bytes(), self.original)
+
+    def test_interrupted_wipe_never_reaches_image_writes_or_completion(self) -> None:
+        size = ffu.WIPE_CHUNK_BYTES + 512
+        self.target.write_bytes(b"\xA5" * size)
+        phases: list[tuple[str, int]] = []
+
+        def interrupt(phase: str, percent: int) -> None:
+            phases.append((phase, percent))
+            if phase == "Wiping entire drive" and percent > 0:
+                raise ffu.InterruptedApply(signal.SIGINT)
+
+        with self.assertRaises(ffu.InterruptedApply):
+            ffu.apply_to_file_fixture(self.source, self.target, size, wipe_entire_drive=True, progress=interrupt)
+        self.assertFalse(any(phase in ("Writing", "Verifying") for phase, _ in phases))
+        self.assertNotIn(("Wiping entire drive", 100), phases)
+        self.assertEqual(self.target.read_bytes()[-512:], b"\xA5" * 512)
+
+    def test_invalid_source_never_reaches_wipe(self) -> None:
+        self.source.write_bytes(self.fixture.blob[:-1])
+        with mock.patch.object(ffu, "_wipe_target") as wiped:
+            with self.assertRaises(ffu.FfuError):
+                self.apply(wipe_entire_drive=True)
+            wiped.assert_not_called()
+
+    def test_production_wipe_requires_both_prior_identities(self) -> None:
+        for identities in ({}, {"expected_sha256": "1" * 64}, {"expected_target_id": "-1:2:3"}):
+            with self.subTest(identities=identities), mock.patch.object(ffu, "_open_path") as opened:
+                with self.assertRaisesRegex(ffu.TargetError, "full-drive wipe requires"):
+                    ffu.apply_ffu(self.source, self.target, TARGET_SIZE, wipe_entire_drive=True, **identities)
+                opened.assert_not_called()
+        with self.assertRaisesRegex(ffu.TargetError, "not both"):
+            self.apply(wipe_entire_drive=True, allow_gpt_cleanup=True)
+        with self.assertRaisesRegex(ffu.TargetError, "must be a boolean"):
+            self.apply(wipe_entire_drive="true")
+
+    def test_same_size_target_replacement_blocks_wipe(self) -> None:
+        with mock.patch.object(ffu, "_wipe_target") as wiped:
+            with self.assertRaisesRegex(ffu.TargetError, "changed since confirmation"):
+                ffu._apply(self.source, self.target, TARGET_SIZE, True, None,
+                           expected_target_id="-2088985291:687:16777240", wipe_entire_drive=True)
+            wiped.assert_not_called()
+
+    def test_cli_forwards_full_wipe_and_signed_identity(self) -> None:
+        with mock.patch.object(ffu, "apply_ffu") as applied:
+            self.assertEqual(ffu.main([
+                "apply", str(self.source), "/dev/rdisk99", "--target-size", str(TARGET_SIZE),
+                "--expected-target-id=-2088985291:687:16777240",
+                "--expected-sha256", "1" * 64, "--wipe-entire-drive",
+            ]), 0)
+            self.assertTrue(applied.call_args.kwargs["wipe_entire_drive"])
+            self.assertEqual(applied.call_args.kwargs["expected_target_id"], "-2088985291:687:16777240")
+            self.assertFalse(applied.call_args.kwargs["allow_gpt_cleanup"])
+
+
 class ApprovalAndCliTests(FileFixture):
     def test_target_identity_is_metadata_only(self) -> None:
         for host, mode, path in (
@@ -1105,8 +1234,21 @@ class ApprovalAndCliTests(FileFixture):
         self.assertEqual(result.sha256, hashlib.sha256(self.fixture.blob).hexdigest())
         self.assertNotEqual(self.target.read_bytes(), self.original)
 
+    def test_signed_native_device_identity_is_preserved_and_checked(self) -> None:
+        for device, raw_device in ((-2088985291, 16777240), (42, -16777240)):
+            with self.subTest(device=device, raw_device=raw_device):
+                native = types.SimpleNamespace(st_dev=device, st_ino=687, st_rdev=raw_device)
+                expected = f"{device}:687:{raw_device}"
+                self.assertEqual(ffu._target_id(native), expected)
+                with mock.patch.object(ffu, "_target_id", return_value=expected):
+                    result = ffu._apply(self.source, self.target, TARGET_SIZE, True, None, expected_target_id=expected)
+                    self.assertEqual(result.sha256, hashlib.sha256(self.fixture.blob).hexdigest())
+                with mock.patch.object(ffu, "_target_id", return_value=f"{device}:688:{raw_device}"):
+                    with self.assertRaisesRegex(ffu.TargetError, "changed since confirmation"):
+                        ffu._apply(self.source, self.target, TARGET_SIZE, True, None, expected_target_id=expected)
+
     def test_malformed_confirmation_identity_rejected_before_source_open(self) -> None:
-        for value in ("", "a:b:c", "1:2", "1:2:3\n", "-1:2:3"):
+        for value in ("", "a:b:c", "1:2", "1:2:3\n", "1:-2:3", "--1:2:3", "1:2:--3"):
             with self.subTest(value=value), mock.patch.object(ffu, "_open_path") as opened:
                 with self.assertRaisesRegex(ffu.TargetError, "identity is malformed"):
                     ffu.apply_ffu(self.source, self.target, TARGET_SIZE, expected_target_id=value)
@@ -1460,11 +1602,19 @@ class MutationSensitivityTests(unittest.TestCase):
                         if node.left.args and isinstance(node.left.args[0], ast.Name) and node.left.args[0].id == "checked":
                             changes += 1
                             return ast.copy_location(ast.Constant(False), node)
+                if mutation == "wipe_readback" and isinstance(node.left, ast.Call):
+                    if isinstance(node.left.func, ast.Name) and node.left.func.id == "_read_target":
+                        if len(node.comparators) == 1 and isinstance(node.comparators[0], ast.Subscript):
+                            value = node.comparators[0].value
+                            if isinstance(value, ast.Name) and value.id == "zeros":
+                                changes += 1
+                                return ast.copy_location(ast.Constant(False), node)
                 return self.generic_visit(node)
 
             def visit_Expr(self, node: ast.Expr) -> ast.AST:
                 nonlocal changes
-                guard = {"approval": "_approve", "gpt": "_reject_existing_gpt", "gpt_readback": "_verify_gpt_cleanup"}.get(mutation)
+                guard = {"approval": "_approve", "gpt": "_reject_existing_gpt", "gpt_readback": "_verify_gpt_cleanup",
+                         "full_wipe": "_wipe_target"}.get(mutation)
                 if guard is not None and isinstance(node.value, ast.Call):
                     if isinstance(node.value.func, ast.Name) and node.value.func.id == guard:
                         changes += 1
@@ -1503,6 +1653,12 @@ class MutationSensitivityTests(unittest.TestCase):
 
     def test_gpt_cleanup_readback_guard_mutant_is_killed(self) -> None:
         self.assert_mutation_is_caught("gpt_readback", GptCleanupTests, "test_cleared_tail_is_verified_after_the_ffu_payload")
+
+    def test_full_wipe_mutant_is_killed(self) -> None:
+        self.assert_mutation_is_caught("full_wipe", FullWipeTests, "test_entire_drive_and_non_chunk_aligned_tail_are_zeroed_before_image_write")
+
+    def test_full_wipe_readback_mutant_is_killed(self) -> None:
+        self.assert_mutation_is_caught("wipe_readback", FullWipeTests, "test_blank_readback_failure_prevents_image_application")
 
 
 if __name__ == "__main__":

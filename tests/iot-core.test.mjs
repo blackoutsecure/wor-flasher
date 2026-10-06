@@ -445,6 +445,32 @@ INPUT
     assert.match(result.stderr, /partition layout changed since selection/);
   });
 
+  it("accepts macOS signed native device IDs without losing replacement protection", () => {
+    const result = run(`
+      HOST_OS=Darwin DEVICE=/dev/disk999 IOT_CORE_MINIMUM_BYTES=8000000000
+      IOT_CORE_TARGET_ID='' IOT_CORE_TARGET_BYTES='' IOT_CORE_TARGET_LAYOUT=''
+      resolve_path() { printf '%s\\n' "$1"; }
+      iot_core_boot_disks() { printf '/dev/mock-host\\n'; }
+      iot_core_protect_source_disks() { return 0; }
+      is_safe_target_device() { return 0; }
+      [() { if builtin [ "\${1:-}" == -b ];then return 0;fi; builtin [ "$@"; }
+      darwin_device_value() { case "$2" in .DeviceBlockSize) printf '512\\n';; *) printf 'FDisk_partition_scheme\\n';; esac; }
+      get_size_raw() { printf '16000000000\\n'; }
+      FAKE_ID=-2088985291:687:16777240
+      python3() {
+        [ "$2" == identify-target ] && [ "$3" == /dev/rdisk999 ] || return 91
+        printf '{"target_id":"%s"}\\n' "$FAKE_ID"
+      }
+      iot_core_validate_device preview || exit 92
+      printf '%s\\n' "$IOT_CORE_TARGET_ID"
+      FAKE_ID=-2088985291:688:16777240
+      if iot_core_validate_device;then exit 93;fi
+    `);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "-2088985291:687:16777240\n");
+    assert.match(result.stderr, /target device changed since it was selected/);
+  });
+
   it("never requests writing or GPT cleanup without erase consent and prior identities", () => {
     const result = run(`
       HOST_OS=Darwin DEVICE=/dev/disk999 SOURCE_FILE=/tmp/fixture.ffu
@@ -552,7 +578,7 @@ INPUT
     assert.deepEqual(result.stdout.trim().split("\n"), [
       "python3", join(root, "src/lib/iot-ffu.py"), "apply", "/tmp/fixture.ffu",
       "/dev/rdisk999", "--target-size", "16000000000", "--expected-sha256", hash,
-      "--expected-target-id", "1:2:3",
+      "--expected-target-id=1:2:3",
       "--allow-gpt-cleanup", "--hdmi-mode", "official", "--hdmi-config",
     ]);
   });
@@ -622,6 +648,69 @@ INPUT
     assert.equal(result.stdout, "fr-FR|0\nde-DE\n");
   });
 
+  it("loads current IoT connection preferences separately from desired account credentials", () => {
+    const result = run(`
+      unset IOT_CORE_HOST IOT_CORE_CURRENT_USERNAME IOT_CORE_CURRENT_PASSWORD
+      IOT_CORE_ACCOUNT_PASSWORD=Fixture-desired-456
+      load_config_json "$PWD/connection.json"
+      [ "$IOT_CORE_HOST" == pi-fixture.local ] && [ "$IOT_CORE_CURRENT_USERNAME" == RenamedAdmin ] || exit 91
+      [ "$IOT_CORE_CURRENT_PASSWORD" == Fixture-current-123 ] && [ "$IOT_CORE_ACCOUNT_PASSWORD" == Fixture-desired-456 ] || exit 92
+      IOT_CORE_HOST=explicit.local
+      load_config_json "$PWD/connection.json"
+      [ "$IOT_CORE_HOST" == explicit.local ] || exit 93
+    `, {"connection.json":JSON.stringify({userAccount:{iotCore:{
+      host:"pi-fixture.local", currentUsername:"RenamedAdmin", currentPassword:"Fixture-current-123",
+    }}})});
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout + result.stderr, /Fixture-(current|desired)-[0-9]+/);
+  });
+
+  it("preserves explicit manual addressing and false JSON values through export", () => {
+    const result = run(`
+      unset IOT_CORE_AUTOMATIC_ADDRESS IOT_CORE_HOST
+      [ "$(iot_core_automatic_address)" == 1 ] || exit 91
+      IOT_CORE_HOST=192.168.50.23
+      [ "$(iot_core_automatic_address)" == 0 ] || exit 92
+      unset IOT_CORE_HOST
+      load_config_json "$PWD/address.json"
+      export_installer_settings
+      bash -c 'printf "%s|%s\\n" "$IOT_CORE_AUTOMATIC_ADDRESS" "$IOT_CORE_HOST"'
+      IOT_CORE_AUTOMATIC_ADDRESS=1
+      load_config_json "$PWD/address.json"
+      [ "$(iot_core_automatic_address)" == 1 ] || exit 93
+    `, {"address.json":JSON.stringify({userAccount:{iotCore:{host:"192.168.50.23",automaticAddress:false}}})});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "0|192.168.50.23\n");
+  });
+
+  it("preserves explicit empty current-login configuration for validation instead of using factory values", () => {
+    const result = run(`
+      unset IOT_CORE_CURRENT_USERNAME IOT_CORE_CURRENT_PASSWORD
+      load_config_json "$PWD/empty-login.json"
+      [ "\${IOT_CORE_CURRENT_USERNAME+x}" == x ] && [ -z "$IOT_CORE_CURRENT_USERNAME" ] || exit 91
+      [ "\${IOT_CORE_CURRENT_PASSWORD+x}" == x ] && [ -z "$IOT_CORE_CURRENT_PASSWORD" ] || exit 92
+      load_config_json "$PWD/valid-login.json"
+      [ -z "$IOT_CORE_CURRENT_USERNAME" ] && [ -z "$IOT_CORE_CURRENT_PASSWORD" ] || exit 93
+    `, {
+      "empty-login.json": JSON.stringify({userAccount:{iotCore:{currentUsername:"",currentPassword:""}}}),
+      "valid-login.json": JSON.stringify({userAccount:{iotCore:{currentUsername:"Administrator",currentPassword:"Fixture-current-123"}}}),
+    });
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  for (const field of ["currentUsername", "currentPassword"]) {
+    it(`rejects non-string current login configuration for ${field}`, () => {
+      const result = run(`
+        unset IOT_CORE_CURRENT_USERNAME IOT_CORE_CURRENT_PASSWORD
+        load_config_json "$PWD/invalid-login.json"
+        printf 'UNEXPECTED_ACCEPTANCE\\n'
+      `, {"invalid-login.json": JSON.stringify({userAccount:{iotCore:{[field]:42}}})});
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /must be a string in configuration/);
+      assert.doesNotMatch(result.stdout, /UNEXPECTED_ACCEPTANCE/);
+    });
+  }
+
   it("passes HDMI customization through the same privileged FFU writer without a separate sudo or mount", () => {
     const config = "hdmi_group=1\nhdmi_mode=4";
     const result = run(`
@@ -636,11 +725,49 @@ INPUT
     assert.equal(argumentsPassed[0], "python3");
     assert.equal(argumentsPassed[2], "apply");
     assert.deepEqual(argumentsPassed.slice(-4), ["--hdmi-mode", "custom", "--hdmi-config", config]);
-    for (const required of ["--expected-sha256", "--expected-target-id", "--allow-gpt-cleanup"]) {
+    for (const required of ["--expected-sha256", "--expected-target-id=1:2:3", "--allow-gpt-cleanup"]) {
       assert.ok(argumentsPassed.includes(required));
     }
   });
 
+  it("requires separate full-wipe consent and forwards the signed identity safely to the existing writer", () => {
+    const result = run(`
+      HOST_OS=Darwin DEVICE=/dev/disk999 SOURCE_FILE=/tmp/fixture.ffu WOR_IOT_CONFIRM_ERASE=1
+      IOT_CORE_SHA256=${hash} IOT_CORE_TARGET_BYTES=16000000000 IOT_CORE_TARGET_ID=-2088985291:687:16777240
+      IOT_CORE_WIPE_DRIVE=1 WOR_IOT_CONFIRM_WIPE=0
+      sudo() { printf 'UNEXPECTED_WIPE\\n' >&2; return 91; }
+      if iot_core_apply;then exit 92;fi
+      WOR_IOT_CONFIRM_WIPE=1
+      sudo() { printf '%s\\0' "$@"; }
+      iot_core_apply || exit 93
+    `);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /separate explicit wipe confirmation/);
+    assert.doesNotMatch(result.stderr, /UNEXPECTED_WIPE/);
+    const args = result.stdout.split("\0").slice(0, -1);
+    assert.equal(args[0], "python3");
+    assert.equal(args[2], "apply");
+    assert.ok(args.includes("--wipe-entire-drive"));
+    assert.ok(args.includes("--expected-target-id=-2088985291:687:16777240"));
+    assert.ok(!args.includes("--allow-gpt-cleanup"));
+  });
+
+  it("loads full-wipe settings without discarding an explicit false and exports separate consent", () => {
+    const result = run(`
+      unset IOT_CORE_WIPE_DRIVE WOR_IOT_CONFIRM_WIPE
+      load_config_json "$PWD/reset.json"
+      export_installer_settings
+      printf '%s|%s\\n' "$IOT_CORE_WIPE_DRIVE" "$WOR_IOT_CONFIRM_WIPE"
+      IOT_CORE_WIPE_DRIVE=1
+      load_config_json "$PWD/reset.json"
+      printf '%s|%s\\n' "$IOT_CORE_WIPE_DRIVE" "$WOR_IOT_CONFIRM_WIPE"
+      WOR_IOT_CONFIRM_WIPE=1
+      iot_core_clear_target_approval
+      printf '%s\\n' "$WOR_IOT_CONFIRM_WIPE"
+    `, {"reset.json": JSON.stringify({execution:{wipeIotDrive:false,confirmIotWipe:false}})});
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "0|0\n1|0\n0\n");
+  });
   it("never reports success or ejects after an application/verification error", () => {
     const result = run(`
       WOR_IMAGE_FAMILY=iot-core WOR_TARGET_BOARD=pi3-b SOURCE_FILE="$PWD/image.ffu"

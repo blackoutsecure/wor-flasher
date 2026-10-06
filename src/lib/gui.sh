@@ -27,6 +27,8 @@ wor_iot_option_label() { #Input: IoT option key. Labels shared by both Advanced 
 		file) printf 'Custom Image file' ;;
 		cache) printf 'Download folder' ;;
 		dryrun) printf 'Inspect only; do not write the drive' ;;
+		wipeDrive) printf 'Fully wipe selected drive before flashing' ;;
+		wipeHelp) printf 'Zeros and verifies every sector after source verification and a separate Wipe and Flash confirmation. Slow and destructive; not a secure erase or a repair for failing hardware.' ;;
 		playSound) printf 'Play a completion sound' ;;
 		sound) printf 'Completion sound' ;;
 		notification) printf 'Show a completion notification' ;;
@@ -37,10 +39,17 @@ wor_iot_option_label() { #Input: IoT option key. Labels shared by both Advanced 
 		accountSetup) printf 'Change IoT administrator after first boot' ;;
 		accountUsername) printf 'IoT administrator username' ;;
 		accountPassword) printf 'New IoT password' ;;
-		accountHelp) printf 'Optional post-boot SSH step; not desktop unattended setup. Boot the Pi, confirm its SSH identity and enter its current password. Account changes stay Pending until the new login is verified.' ;;
+		accountHelp) printf 'Optional post-boot SSH step. The Microsoft factory login is prefilled and editable. New account settings remain Pending until a fresh login verifies them.' ;;
 		languageSetup) printf 'Apply IoT language after first boot' ;;
 		language) printf 'IoT language' ;;
 		languageHelp) printf 'Defaults to the host language, like desktop Windows. The selected language must already be installed in IoT Core; it is applied under DefaultAccount and remains Pending until verified.' ;;
+		connectionTitle) printf 'Post-boot connection' ;;
+		automaticAddress) printf 'Automatic address' ;;
+		automaticAddressHelp) printf 'Looks up the default IoT hostname after Connect. Uncheck to enter a known IP or hostname. This finds the Pi; it does not configure DHCP or a static IP.' ;;
+		connectionHost) printf 'Pi local address' ;;
+		connectionUsername) printf 'Current IoT username' ;;
+		connectionPassword) printf 'Current IoT password' ;;
+		connectionHelp) printf 'Current username and password are always required; IoT SSH does not allow an empty password. Replace the factory login if changed. The address may be left blank until first boot.' ;;
 		verification) printf 'Download/import and full image verification begin after Flash. Package and FFU integrity, board compatibility and written-image read-back are required; these checks cannot be disabled.' ;;
 		*) warning "Unknown IoT option label: $1"; return 1 ;;
 	esac

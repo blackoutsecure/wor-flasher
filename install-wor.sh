@@ -40,7 +40,22 @@
 #WOR_FLASHER_VERSION below is the single source of truth for its version line.
 #
 #Version history
-#Unreleased - Add a separate validated ARM32 IoT Core FFU workflow for Pi 2 and Pi 3 Model B.
+#2.1.0 - Add a separate validated ARM32 IoT Core FFU workflow for Pi 2 and Pi 3 Model B.
+#             Reuse saved Advanced Options for optional Connect to Pi on the normal completion screen;
+#               do not reopen a duplicate connection form or start personalization when Complete is clicked.
+#             Keep the Windows/Pi selection screen compact without the IoT explanatory paragraph;
+#               supported-board filtering and deferred image preparation remain unchanged.
+#             Prefill the published Microsoft factory login for IoT personalization, with editable
+#               current credentials kept separate from optional new passwords and host sudo access.
+#             Collect the Pi address and current IoT login in Advanced Options, preserve Save/Back
+#               and reuse those values after first boot without exposing passwords in command arguments.
+#             Always require nonblank current IoT login credentials, independently of optional account
+#               and language changes; reject unsupported empty SSH passwords before connecting.
+#             Default the post-boot Pi address to automatic hostname lookup, with an explicit
+#               manual IP override and no changes to the device DHCP/static network configuration.
+#             Accept signed native macOS device identities without weakening target-replacement checks.
+#             Offer an explicitly confirmed full-drive wipe before IoT flashing, with every sector
+#               zeroed and verified before applying the image through the existing authorized writer.
 #             Preserve the desktop ARM64 route; reject unsupported ARM64 IoT Core and board combinations.
 #             Import/download verified IoT delivery packages natively and bind consent to the target identity.
 #             Defer official Microsoft IoT image preparation until Flash; keep local imports,
@@ -2938,6 +2953,8 @@ WOR_INSTALLER_SETTINGS=(DIRECTORY DL_DIR RPI_MODEL WOR_TARGET_BOARD BID WIN_LANG
   IOT_CORE_HDMI_MODE IOT_CORE_HDMI_CONFIG
   IOT_CORE_ACCOUNT_SETUP IOT_CORE_ACCOUNT_USERNAME
   IOT_CORE_LANGUAGE_SETUP IOT_CORE_LANGUAGE
+  IOT_CORE_HOST IOT_CORE_AUTOMATIC_ADDRESS
+  IOT_CORE_WIPE_DRIVE WOR_IOT_CONFIRM_WIPE
   CONFIG_TXT APPLY_CUSTOM_CONFIG_TXT PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS WINDOWS_ACCOUNT_SETUP WINDOWS_ACCOUNT_USERNAME WINDOWS_ACCOUNT_PASSWORD WINDOWS_LOCALE_SETUP WINDOWS_LOCALE UEFI_USE_LATEST DRIVERS_USE_LATEST
   UEFI_VER_PI3 UEFI_VER_PI4 UEFI_VER_PI5 DRIVER_VER
   PI4_UEFI_SHELL_UNLOCK SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE DRY_RUN WOR_APP_TITLE WOR_RUN_ID)
@@ -2953,6 +2970,8 @@ export_installer_settings() { #Exports every collected setting, so the installer
   : "${IOT_CORE_HDMI_MODE:=$(iot_core_hdmi_mode)}" "${IOT_CORE_HDMI_CONFIG:=}"
   : "${IOT_CORE_ACCOUNT_SETUP:=0}" "${IOT_CORE_ACCOUNT_USERNAME:=Administrator}"
   : "${IOT_CORE_LANGUAGE_SETUP:=1}" "${IOT_CORE_LANGUAGE:=$(iot_core_language)}"
+  : "${IOT_CORE_AUTOMATIC_ADDRESS:=$(iot_core_automatic_address)}" "${IOT_CORE_HOST:=}"
+  : "${IOT_CORE_WIPE_DRIVE:=0}" "${WOR_IOT_CONFIRM_WIPE:=0}"
   export "${WOR_INSTALLER_SETTINGS[@]}"
 }
 
@@ -3058,6 +3077,16 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
     local var_name="$1"
     local jq_expr="$2"
     local current="${!var_name:-}"
+    if [ "${3:-}" == preserve-empty ];then
+      declare -p "$var_name" >/dev/null 2>&1 && return 0
+      local encoded_value string_value
+      encoded_value="$(val_from_json "($jq_expr) | @json")" || error "Cannot read $var_name from configuration."
+      [ -n "$encoded_value" ] || return 0
+      string_value="$(jq -er 'select(type == "string")' <<<"$encoded_value")" \
+        || error "$var_name must be a string in configuration."
+      printf -v "$var_name" '%s' "$string_value"
+      return 0
+    fi
     if [ -z "$current" ];then
       local json_val
       json_val="$(val_from_json "$jq_expr")"
@@ -3107,6 +3136,8 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   set_if_unset "WOR_IMAGE_FAMILY" '.media.imageFamily // .WOR_IMAGE_FAMILY // empty'
   set_if_unset "WOR_IMAGE_ARCH" '.media.architecture // .WOR_IMAGE_ARCH // empty'
   set_bool_if_unset "WOR_IOT_CONFIRM_ERASE" '[.execution.confirmIotErase, .WOR_IOT_CONFIRM_ERASE] | map(select(. != null)) | first'
+  set_bool_if_unset "IOT_CORE_WIPE_DRIVE" '[.execution.wipeIotDrive, .IOT_CORE_WIPE_DRIVE] | map(select(. != null)) | first'
+  set_bool_if_unset "WOR_IOT_CONFIRM_WIPE" '[.execution.confirmIotWipe, .WOR_IOT_CONFIRM_WIPE] | map(select(. != null)) | first'
   set_bool_if_unset "WOR_IOT_DOWNLOAD" '[.media.downloadIotImage, .WOR_IOT_DOWNLOAD] | map(select(. != null)) | first'
   set_if_unset "DEVICE" '.target.device // .device // .DEVICE // empty'
   set_bool_if_unset "CAN_INSTALL_ON_SAME_DRIVE" '.target.canInstallOnSameDrive // .canInstallOnSameDrive // .CAN_INSTALL_ON_SAME_DRIVE // empty'
@@ -3133,6 +3164,10 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   set_bool_if_unset "IOT_CORE_ACCOUNT_SETUP" '[.userAccount.iotCore.enabled, .IOT_CORE_ACCOUNT_SETUP] | map(select(. != null)) | first'
   set_if_unset "IOT_CORE_ACCOUNT_USERNAME" '.userAccount.iotCore.username // .IOT_CORE_ACCOUNT_USERNAME // empty'
   set_if_unset "IOT_CORE_ACCOUNT_PASSWORD" '.userAccount.iotCore.password // .IOT_CORE_ACCOUNT_PASSWORD // empty'
+  set_if_unset "IOT_CORE_HOST" '.userAccount.iotCore.host // .IOT_CORE_HOST // empty'
+  set_bool_if_unset "IOT_CORE_AUTOMATIC_ADDRESS" '[.userAccount.iotCore.automaticAddress, .IOT_CORE_AUTOMATIC_ADDRESS] | map(select(. != null)) | first'
+  set_if_unset "IOT_CORE_CURRENT_USERNAME" '.userAccount.iotCore.currentUsername // .IOT_CORE_CURRENT_USERNAME // empty' preserve-empty
+  set_if_unset "IOT_CORE_CURRENT_PASSWORD" '.userAccount.iotCore.currentPassword // .IOT_CORE_CURRENT_PASSWORD // empty' preserve-empty
   set_bool_if_unset "IOT_CORE_LANGUAGE_SETUP" '[.userAccount.iotCore.languageSetup, .IOT_CORE_LANGUAGE_SETUP] | map(select(. != null)) | first'
   set_if_unset "IOT_CORE_LANGUAGE" '.userAccount.iotCore.language // .IOT_CORE_LANGUAGE // empty'
   set_bool_if_unset "WINDOWS_LOCALE_SETUP" '.userAccount.localeSetup // .windowsLocaleSetup // .WINDOWS_LOCALE_SETUP // empty'

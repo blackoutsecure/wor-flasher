@@ -88,6 +88,17 @@ iot_core_personalization_requested() {
   [ "${IOT_CORE_ACCOUNT_SETUP:-0}" == 1 ] || [ "${IOT_CORE_LANGUAGE_SETUP:-1}" == 1 ]
 }
 
+iot_core_automatic_address() { #Existing explicit addresses stay manual unless automatic mode is deliberately selected.
+  local automatic="${IOT_CORE_AUTOMATIC_ADDRESS:-}"
+  if [ -z "$automatic" ];then
+    [ -n "${IOT_CORE_HOST:-}" ] && automatic=0 || automatic=1
+  fi
+  case "$automatic" in
+    0 | 1) printf '%s\n' "$automatic" ;;
+    *) warning "IOT_CORE_AUTOMATIC_ADDRESS must be 0 or 1."; return 1 ;;
+  esac
+}
+
 iot_core_next_steps() {
   if [ "${DRY_RUN:-0}" == 1 ];then
     printf 'The FFU passed inspection only. No drive was written. Turn off dry run to apply and verify the image.'
@@ -96,9 +107,13 @@ iot_core_next_steps() {
     if iot_core_personalization_requested;then
       printf '\n\nIoT personalization is Pending after first boot. Requested language: %s%s. Finish the SSH personalization step; flash verification does not verify account or language configuration.' \
         "$(iot_core_language)" "$([ "${IOT_CORE_ACCOUNT_SETUP:-0}" == 1 ] && printf '; administrator change requested')"
-      printf '\nFor a CLI run, use: python3 "%s/src/lib/iot-account.py" configure --interactive' "$DIRECTORY"
-      [ "${IOT_CORE_LANGUAGE_SETUP:-1}" != 1 ] || printf ' --language %s' "$(iot_core_language)"
-      [ "${IOT_CORE_ACCOUNT_SETUP:-0}" == 1 ] || printf ' --language-only'
+      if [ "${RUN_MODE:-cli}" == gui ];then
+        printf '\nOnce the Pi has booted, choose Connect to Pi to use your saved Advanced Options. Complete/Close exits without connecting or changing the Pi.'
+      else
+        printf '\nFor a CLI run, use: python3 "%s/src/lib/iot-account.py" configure --interactive' "$DIRECTORY"
+        [ "${IOT_CORE_LANGUAGE_SETUP:-1}" != 1 ] || printf ' --language %s' "$(iot_core_language)"
+        [ "${IOT_CORE_ACCOUNT_SETUP:-0}" == 1 ] || printf ' --language-only'
+      fi
     fi
   fi
 }
@@ -224,6 +239,10 @@ iot_core_validate_options() {
     warning "IoT Core FFU validation and written-image verification cannot be skipped."
     return 1
   fi
+  case "${IOT_CORE_WIPE_DRIVE:-0}:${WOR_IOT_CONFIRM_WIPE:-0}" in
+    0:0 | 0:1 | 1:0 | 1:1) ;;
+    *) warning "IOT_CORE_WIPE_DRIVE and WOR_IOT_CONFIRM_WIPE must be 0 or 1."; return 1 ;;
+  esac
   if [ "${WINDOWS_ACCOUNT_SETUP:-0}" == 1 ];then
     warning "Desktop account customization does not apply to IoT Core. Disable WINDOWS_ACCOUNT_SETUP and provision the IoT image separately."
     return 1
@@ -336,6 +355,7 @@ iot_core_clear_target_approval() {
   IOT_CORE_TARGET_BYTES=''
   IOT_CORE_TARGET_LAYOUT=''
   WOR_IOT_CONFIRM_ERASE=0
+  WOR_IOT_CONFIRM_WIPE=0
 }
 
 iot_core_validate_device() {
@@ -377,7 +397,7 @@ iot_core_validate_device() {
   is_macos && target="/dev/r${DEVICE#/dev/}"
   identity="$(python3 "$DIRECTORY/src/lib/iot-ffu.py" identify-target "$target" --json)" \
     || { warning "Could not obtain a stable identity for the target device."; return 1; }
-  identity="$(jq -er '.target_id | select(type == "string" and test("^[0-9]+:[0-9]+:[0-9]+$"))' <<<"$identity")" \
+  identity="$(jq -er '.target_id | select(type == "string" and test("^-?[0-9]+:[0-9]+:-?[0-9]+$"))' <<<"$identity")" \
     || { warning "Target identity is missing or malformed."; return 1; }
   if [ -n "${IOT_CORE_TARGET_ID:-}" ] && { [ "$identity" != "$IOT_CORE_TARGET_ID" ] || [ "$bytes" != "$IOT_CORE_TARGET_BYTES" ]; };then
     warning "The target device changed since it was selected. Re-select it and review the erase confirmation."
@@ -393,8 +413,9 @@ iot_core_validate_device() {
 }
 
 iot_core_summary() {
-  local expected_build='Not selected' minimum='Not Assessed' hdmi
+  local expected_build='Not selected' minimum='Not Assessed' hdmi automatic
   hdmi="$(iot_core_hdmi_state)" || return 1
+  automatic="$(iot_core_automatic_address)" || return 1
   if [ -n "${IOT_CORE_PROFILE_JSON:-}" ];then
     expected_build="$(jq -r .expected_build <<<"$IOT_CORE_PROFILE_JSON")"
     minimum="$(jq -r .minimum_disk_bytes <<<"$IOT_CORE_PROFILE_JSON")"
@@ -419,12 +440,21 @@ iot_core_summary() {
   printf 'Minimum drive size\t%s bytes%s\n' "${IOT_CORE_MINIMUM_BYTES:-$minimum}" "$([ -n "${IOT_CORE_MINIMUM_BYTES:-}" ] || printf ' (planned profile; image verification pending)')"
   printf 'Current partition scheme\t%s\n' "${IOT_CORE_TARGET_LAYOUT:-Not selected}"
   printf 'Target layout\tFixed MBR/EBR from the FFU; 512-byte sectors, at most 2 TiB\n'
-  printf 'Partition preparation\tAfter verified Flash: replace old GPT/MBR; erase existing data\n'
+  if [ "${IOT_CORE_WIPE_DRIVE:-0}" == 1 ];then
+    printf 'Drive reset\tFull wipe: zero and verify every sector before applying the image\n'
+    printf 'Partition preparation\tDiscard all old partition data after separate Wipe and Flash confirmation\n'
+  else
+    printf 'Drive reset\tOff (normal validated partition-metadata cleanup)\n'
+    printf 'Partition preparation\tAfter verified Flash: replace old GPT/MBR; erase existing data\n'
+  fi
   printf 'Partition sizes\tPreserved from the FFU; larger cards have unused space\n'
   printf 'Firmware and drivers\tIncluded in the FFU; no ARM64 packages or WoR-PE\n'
   printf 'HDMI display\t%s\n' "$(jq -r '.label + (if .recommended then " (Recommended)" else "" end)' <<<"$hdmi")"
   printf 'Customization\t%s; no desktop answer file or recovery mode\n' \
     "$([ "$(iot_core_hdmi_mode)" == official ] && printf 'Image defaults' || printf 'Display-only boot configuration override')"
+  printf 'Post-boot Pi address\t%s\n' "$([ "$automatic" == 1 ] \
+    && printf 'Automatic default-hostname lookup after Connect (Recommended)' \
+    || printf 'Manual: %s' "${IOT_CORE_HOST:-Not set}")"
   printf 'IoT administrator setup\t%s\n' "$([ "${IOT_CORE_ACCOUNT_SETUP:-0}" == 1 ] \
     && printf 'Pending after first boot (%s); SSH identity and new login must be verified' "${IOT_CORE_ACCOUNT_USERNAME:-Administrator}" \
     || printf 'Image default; no account changes requested')"
@@ -446,13 +476,22 @@ iot_core_summary() {
 }
 
 iot_core_apply() {
-  local target="$DEVICE"
+  local target="$DEVICE" preparation=(--allow-gpt-cleanup)
+  case "${IOT_CORE_WIPE_DRIVE:-0}" in
+    0 | 1) ;;
+    *) warning "IOT_CORE_WIPE_DRIVE must be 0 or 1."; return 1 ;;
+  esac
   [ "${WOR_IOT_CONFIRM_ERASE:-0}" == 1 ] && [ -n "${IOT_CORE_SHA256:-}" ] && [ -n "${IOT_CORE_TARGET_ID:-}" ] \
     || { warning "IoT writing and GPT cleanup require explicit erase consent and verified source/target identities."; return 1; }
+  if [ "${IOT_CORE_WIPE_DRIVE:-0}" == 1 ];then
+    [ "${WOR_IOT_CONFIRM_WIPE:-0}" == 1 ] \
+      || { warning "Full-drive wiping requires separate explicit wipe confirmation."; return 1; }
+    preparation=(--wipe-entire-drive)
+  fi
   is_macos && target="/dev/r${DEVICE#/dev/}"
   sudo python3 "$DIRECTORY/src/lib/iot-ffu.py" apply "$SOURCE_FILE" "$target" \
     --target-size "$IOT_CORE_TARGET_BYTES" --expected-sha256 "$IOT_CORE_SHA256" \
-    --expected-target-id "$IOT_CORE_TARGET_ID" --allow-gpt-cleanup \
+    --expected-target-id="$IOT_CORE_TARGET_ID" "${preparation[@]}" \
     --hdmi-mode "$(iot_core_hdmi_mode)" --hdmi-config "${IOT_CORE_HDMI_CONFIG:-}"
 }
 
@@ -525,6 +564,15 @@ iot_core_run() { #Separate full-image workflow; never reaches desktop download, 
     fi
     [ "${WOR_IOT_CONFIRM_ERASE:-0}" == 1 ] \
       || error "IoT Core deployment requires explicit erase confirmation. For automation set WOR_IOT_CONFIRM_ERASE=1 after verifying DEVICE; use DRY_RUN=1 to inspect first."
+    if [ "${IOT_CORE_WIPE_DRIVE:-0}" == 1 ] && [ "${WOR_IOT_CONFIRM_WIPE:-0}" != 1 ];then
+      if [ "$RUN_MODE" != gui ] && [ -t 0 ];then
+        printf 'Full wipe: every sector on %s (%s bytes) will be zeroed and verified, then the image will be applied. This can take a long time and cannot repair failing hardware.\n' "$DEVICE" "$IOT_CORE_TARGET_BYTES"
+        read -r -p "Type the full device path $DEVICE to confirm the entire-drive wipe: " choice
+        [ "$choice" != "$DEVICE" ] || WOR_IOT_CONFIRM_WIPE=1
+      fi
+      [ "${WOR_IOT_CONFIRM_WIPE:-0}" == 1 ] \
+        || error "Full-drive wiping was not confirmed. No image was downloaded and no drive was modified. Automation must explicitly set WOR_IOT_CONFIRM_WIPE=1 as well as erase consent."
+    fi
   fi
   STEP_NUM=0
   STEP_TOTAL=3
@@ -556,7 +604,10 @@ iot_core_run() { #Separate full-image workflow; never reaches desktop download, 
   emit_gui_progress "DISK_WRITE"$'\t'"1"$'\t'"$DEVICE"
   with_progress_capture iot_core_apply || apply_status=$?
   if [ "$apply_status" == 3 ];then
-    error "IoT Core target validation failed. GPT cleanup requires valid, consistent headers/tables on the confirmed 512-byte-sector disk. No unvalidated GPT layout is erased. See the log for the exact failure. If writing started, do not boot the incomplete target."
+    if [ "${IOT_CORE_WIPE_DRIVE:-0}" == 1 ];then
+      error "IoT full-drive reset failed its target-safety checks. See the log for the exact failure; if wiping started, the previous installation may be incomplete. Do not boot an unverified target."
+    fi
+    error "IoT Core target validation failed. GPT cleanup requires valid, consistent headers/tables on the confirmed 512-byte-sector disk. No unvalidated GPT layout is erased. For a deliberately fresh start on a verified safe drive, enable Fully wipe selected drive before flashing in Advanced Options. See the log for the exact failure. If writing started, do not boot the incomplete target."
   elif [ "$apply_status" != 0 ];then
     error "IoT Core application or read-back verification failed. The target is not verified bootable; do not treat this run as successful."
   fi

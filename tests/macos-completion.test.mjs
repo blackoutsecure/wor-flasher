@@ -19,7 +19,7 @@ const engineHelpers = ["select_rpi_board", "get_os_name", "windows_version_label
 const helpers = [
   "gui_start_installer", "installer_showed_own_error", "gui_update_last_log",
   "gui_save_installer_log", "gui_log_tail", "macos_password_retry_dialog", "macos_show_result_dialog",
-  "gui_iot_validate_target",
+  "gui_iot_validate_target", "gui_iot_confirm_wipe",
 ].map((name) => {
   const match = gui.match(new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m"));
   assert.ok(match, `Missing ${name}`);
@@ -31,8 +31,14 @@ assert.ok(start >= 0 && end > start);
 const flow = gui.slice(start, end);
 const completion = gui.match(/^  completion_jxa="\$\(wor_jxa_window_lib; cat <<'JXA'\n([\s\S]*?)\nJXA$/m);
 assert.ok(completion, "Missing completion JXA");
+const linuxCompletion = gui.match(/^linux_show_completion_dialog\(\) \{[\s\S]*?^\}/m);
+assert.ok(linuxCompletion, "Missing Linux completion helper");
 
-function runFlow({ installerStatus = 0, dialogStatus = 0, fallbackStatus = 0, abort = false, progressStatus = 0, ownError = false, iot = false } = {}) {
+function runFlow({
+  installerStatus = 0, dialogStatus = 0, fallbackStatus = 0, abort = false,
+  progressStatus = 0, ownError = false, iot = false, personalization = false,
+  connect = false, dryRun = false,
+} = {}) {
   const directory = mkdtempSync(join(tmpdir(), "wor-completion-"));
   try {
     for (const path of ["bin", "tmp", "logs"]) mkdirSync(join(directory, path));
@@ -59,7 +65,8 @@ exit "$TEST_INSTALLER_STATUS"
       cli_script="$TEST_DIRECTORY/installer.sh"
       WOR_ICON_PATH=mock-icon WOR_LOGO_PATH=mock-logo WOR_APP_TITLE=WoR-Flasher WOR_WINDOW_TITLE="WoR-Flasher test"
       WOR_ASSETS_DIR="$TEST_DIRECTORY/assets" WIN_LANG=en-us GUI_PROGRESS_EARLY=1 PLAY_SOUND=0 WIN11_MIN_BUILD=22000
-      IOT_CORE_LANGUAGE_SETUP=0
+      IOT_CORE_LANGUAGE_SETUP="$TEST_PERSONALIZATION" IOT_CORE_LANGUAGE=en-US DRY_RUN="$TEST_DRY_RUN"
+      RUN_MODE=gui
       is_macos() { return 0; }
       error() { printf "error: %s\\n" "$*" >&2; exit 1; }
       warning() { printf "warning: %s\\n" "$*" >&2; }
@@ -69,6 +76,7 @@ exit "$TEST_INSTALLER_STATUS"
       export_installer_settings() { :; }
       gui_start_disk_alert_handler() { :; }
       gui_stop_disk_alert_handler() { :; }
+      gui_iot_account_setup() { printf 'saved settings\\n' >> "$TEST_DIRECTORY/personalization"; }
       wor_jxa_window_lib() { :; }
       wor_show_result_notification() { printf '%s\\n' "$1" >> "$TEST_DIRECTORY/notifications"; }
       kill_process_tree() { printf '%s\\n' "$1" > "$TEST_DIRECTORY/stopped"; }
@@ -110,6 +118,7 @@ exit "$TEST_INSTALLER_STATUS"
           printf 'fixture custom result renderer failed\\n' >&2
           return "$TEST_DIALOG_STATUS"
         fi
+        if [ "$TEST_CONNECT" == 1 ];then printf '__WOR_CONNECT__\\n';else printf '__WOR_CLOSE__\\n';fi
       }
       osascript() {
         cat > "$TEST_DIRECTORY/fallback-script"
@@ -118,6 +127,7 @@ exit "$TEST_INSTALLER_STATUS"
           printf 'fixture fallback renderer failed\\n' >&2
           return "$TEST_FALLBACK_STATUS"
         fi
+        if [ "$TEST_CONNECT" == 1 ];then printf 'Connect to Pi\\n';else printf 'Complete\\n';fi
       }
       open() { printf '%s\\0' "$@" > "$TEST_DIRECTORY/open-args"; }
       macos_start_cli
@@ -128,6 +138,8 @@ exit "$TEST_INSTALLER_STATUS"
         TEST_DIALOG_STATUS: String(dialogStatus), TEST_FALLBACK_STATUS: String(fallbackStatus),
         TEST_ABORT: abort ? "1" : "0", TEST_PROGRESS_STATUS: String(progressStatus),
         TEST_OWN_ERROR: ownError ? "1" : "0", TEST_IOT: iot ? "1" : "0", PATH: `${directory}/bin:${process.env.PATH}`,
+        TEST_PERSONALIZATION: personalization ? "1" : "0", TEST_CONNECT: connect ? "1" : "0",
+        TEST_DRY_RUN: dryRun ? "1" : "0",
       },
     });
     const read = (name) => existsSync(join(directory, name)) ? readFileSync(join(directory, name), "utf8") : "";
@@ -137,6 +149,7 @@ exit "$TEST_INSTALLER_STATUS"
       logMode: existsSync(join(directory, "logs/run.log")) ? statSync(join(directory, "logs/run.log")).mode & 0o777 : null,
       dialog: args("dialog-args"), fallback: args("fallback-args"), open: args("open-args"),
       fallbackScript: read("fallback-script"), notifications: read("notifications"), stopped: read("stopped"),
+      personalization: read("personalization"),
     };
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -144,6 +157,45 @@ exit "$TEST_INSTALLER_STATUS"
 }
 
 describe("macOS progress-to-result handoff", () => {
+  it("closes successful IoT completion without opening another form or starting personalization", () => {
+    const result = runFlow({ iot: true, personalization: true });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.personalization, "");
+  });
+
+  it("never connects after both completion renderers fail", () => {
+    const result = runFlow({ iot: true, personalization: true, connect: true, dialogStatus: 7, fallbackStatus: 8 });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.personalization, "");
+    assert.equal(result.open[0], "-t");
+    assert.match(result.log, /Fallback result dialog failed/);
+  });
+
+  for (const fallback of [false, true]) {
+    it(`uses saved settings only after Connect to Pi is selected in the ${fallback ? "fallback" : "native"} completion dialog`, () => {
+      const result = runFlow({ iot: true, personalization: true, connect: true, dialogStatus: fallback ? 7 : 0 });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.personalization, "saved settings\n");
+      assert.equal(result.dialog[10], "connect");
+      assert.match(result.dialog[3], /Connect to Pi/);
+    });
+  }
+
+  for (const options of [
+    { iot: false, personalization: true },
+    { iot: true, personalization: false },
+    { iot: true, personalization: true, dryRun: true },
+    { iot: true, personalization: true, installerStatus: 1 },
+    { iot: true, personalization: true, abort: true },
+  ]) {
+    it(`does not offer or start personalization for ${JSON.stringify(options)}`, () => {
+      const result = runFlow({ ...options, connect: true });
+      assert.equal(result.personalization, "");
+      assert.equal(result.dialog.length, 10);
+      assert.notEqual(result.dialog[10], "connect");
+    });
+  }
+
   it("uses the same success dialog, log and notification for IoT with accurate image-specific next steps", () => {
     const result = runFlow({ iot: true });
     assert.equal(result.status, 0, result.stderr);
@@ -233,6 +285,60 @@ describe("macOS progress-to-result handoff", () => {
   });
 });
 
+describe("Explicit native completion action", () => {
+  const start = completion[1].indexOf("const Controller =");
+  const end = completion[1].indexOf("const controller =", start);
+  for (const allowed of [false, true]) {
+    for (const event of ["okClicked:", "windowWillClose:", "connectClicked:"]) {
+      it(`${event} ${allowed ? "with" : "without"} Connect to Pi never confuses closing and connecting`, () => {
+        const context = vm.createContext({
+          connectAllowed: allowed, completionAction: "__WOR_CLOSE__",
+          ObjC: { registerSubclass: (definition) => definition },
+          app: { stopModalWithCode() {} }, window: { orderOut() {} }, $: { NSOKButton: 1 },
+        });
+        vm.runInContext(completion[1].slice(start, end), context);
+        vm.runInContext(`Controller.methods[${JSON.stringify(event)}].implementation()`, context);
+        assert.equal(context.completionAction, allowed && event === "connectClicked:" ? "__WOR_CONNECT__" : "__WOR_CLOSE__");
+      });
+    }
+  }
+});
+
+describe("Linux completion action", () => {
+  for (const allow of [0, 1]) {
+    for (const response of [0, 1, 252, 2, 7]) {
+      it(`handles response ${response} with connect ${allow ? "enabled" : "disabled"} without another form`, () => {
+        const directory = mkdtempSync(join(tmpdir(), "wor-linux-completion-"));
+        try {
+          const result = spawnSync("bash", ["-c", `
+            ${linuxCompletion[0]}
+            WOR_LOGO_PATH=fixture-logo WOR_ICON_NAME=fixture-icon WOR_WINDOW_TITLE=fixture-title
+            wor_yad_width() { printf '%s' "$1"; }
+            wor_yad_height() { printf '%s' "$1"; }
+            warning() { printf '%s\\n' "$*" >&2; }
+            yad() { printf '%s\\0' "$@" > "$TEST_DIRECTORY/arguments"; return ${response}; }
+            status=0
+            linux_show_completion_dialog 'Verified media; personalization is pending.' fixture-image ${allow} || status=$?
+            printf '%s|%s\\n' "$status" "$GUI_RESULT_ACTION"
+          `], { encoding: "utf8", timeout: 5000, env: { ...process.env, TEST_DIRECTORY: directory } });
+          assert.equal(result.status, 0, result.stderr);
+          const connects = allow === 1 && response === 2;
+          const error = response === 7 || (allow === 0 && response === 2);
+          assert.equal(result.stdout, `${error ? 1 : 0}|${connects ? "connect" : "close"}\n`);
+          const args = readFileSync(join(directory, "arguments"), "utf8").split("\0").slice(0, -1);
+          assert.equal(args.includes("--button=Connect to Pi:2"), allow === 1);
+          assert.ok(args.includes("--button=Close:0"));
+          assert.ok(args.includes("--field=It is now safe to remove your USB drive.:LBL"));
+          assert.doesNotMatch(args.join("\n"), /Current IoT (username|password)|Pi local address/);
+          if (error) assert.match(result.stderr, /no Pi connection was started/);
+        } finally {
+          rmSync(directory, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+});
+
 describe("macOS completion argument bounds", () => {
   const start = completion[1].indexOf("const args =");
   const end = completion[1].indexOf("$.NSProcessInfo.processInfo.processName");
@@ -251,6 +357,7 @@ describe("macOS completion argument bounds", () => {
           },
         } } } },
       });
+
       vm.runInContext(completion[1].slice(start, end), context);
       assert.equal(vm.runInContext("settingsUrl", context), "");
       assert.equal(vm.runInContext("imagePath", context), "");

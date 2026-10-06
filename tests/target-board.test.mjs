@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import vm from "node:vm";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const gui = readFileSync(join(root, "install-wor-gui.sh"), "utf8");
@@ -13,6 +14,7 @@ const end = gui.indexOf("\nmacos_start_cli() {", start);
 assert.ok(start >= 0 && end > start);
 const picker = gui.slice(start, end);
 const choices = ["Raspberry Pi 5", "Raspberry Pi 4 / Pi 400", "Raspberry Pi 3", "Raspberry Pi 2 v1.2"];
+const nativePicker = picker.match(/target_jxa="\$\(wor_jxa_window_lib; cat <<'JXA'\n([\s\S]*?)\nJXA/)[1];
 
 function run(body) {
   const directory = mkdtempSync(join(tmpdir(), "wor-board-choice-"));
@@ -30,6 +32,47 @@ function run(body) {
 }
 
 describe("Separate Raspberry Pi 2 v1.2 board entry", () => {
+  it("renders a compact native target picker with only the heading, selectors and buttons", () => {
+    const views = [];
+    const content = { addSubview(view) { views.push(view); } };
+    let windowOptions;
+    const makeLabel = (text) => ({ kind: "label", text });
+    const context = vm.createContext({
+      controller: {}, windowTitle: "WoR-Flasher", defaultWindowsIdx: 2, defaultPiIdx: 0,
+      windows: ["Windows 11", "Windows 10", "Windows 10 IoT Core (ARM32, legacy)"],
+      activeModels: ["Raspberry Pi 3 Model B", "Raspberry Pi 2 v1.2", "Raspberry Pi 2 v1.1"],
+      worMakeWindow(options) { windowOptions = options; return { contentView: content }; },
+      $: Object.assign((value) => value, {
+        NSScreen: { mainScreen: { visibleFrame: { size: { width: 1280, height: 800 } } } },
+        NSViewWidthSizable: 1, NSViewHeightSizable: 2, NSFontWeightSemibold: 1, NSBezelStyleRounded: 1,
+        NSMakeRect: (x, y, width, height) => ({ x, y, width, height }),
+        NSFont: { systemFontOfSizeWeight: () => ({}) },
+        NSColor: { secondaryLabelColor: "secondary" },
+        NSTextField: { labelWithString: makeLabel, wrappingLabelWithString: makeLabel },
+        NSButton: { buttonWithTitleTargetAction: (text) => ({ kind: "button", text }) },
+        NSPopUpButton: { alloc: { initWithFrame(frame) {
+          return { kind: "popup", frame, items: [], addItemWithTitle(text) { this.items.push(text); },
+            selectItemAtIndex(index) { this.selected = index; } };
+        } } },
+      }),
+    });
+    const start = nativePicker.indexOf("const screenFrame =");
+    const end = nativePicker.indexOf("\nworInstallWindowHandlers(controller)", start);
+    assert.ok(start >= 0 && end > start);
+    vm.runInContext(nativePicker.slice(start, end), context);
+    assert.equal(windowOptions.height, 260);
+    assert.deepEqual(views.filter(view => view.kind === "label").map(view => view.text), [
+      "Choose Windows and Raspberry Pi target", "Windows version:", "Raspberry Pi model:",
+    ]);
+    const popups = views.filter(view => view.kind === "popup");
+    assert.equal(popups.length, 2);
+    assert.deepEqual(popups[1].items, context.activeModels);
+    assert.equal(popups[0].selected, 2);
+    const buttons = views.filter(view => view.kind === "button");
+    assert.deepEqual(buttons.map(view => view.text), ["Cancel", "Next"]);
+    assert.ok(popups[1].frame.y > buttons[0].frame.y + buttons[0].frame.height);
+  });
+
   it("supplies four distinct choices to both GUI toolkits", () => {
     const result = run('wor_rpi_board_options; wor_rpi_board_options | paste -sd "!" -');
     assert.equal(result.status, 0, result.stderr);

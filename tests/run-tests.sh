@@ -1215,7 +1215,8 @@ SH
   [ "$(grep -cF 'It is now safe to remove your USB drive.' "$REPO_DIR/install-wor-gui.sh")" == 2 ] \
     && grep -qF 'completion_text="Process completed successfully.' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'linux_completion_image="$(wor_yad_image_for_screen' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- '--form --align=center --image-on-top --buttons-layout=center --image="$linux_completion_image"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'linux_show_completion_dialog "$linux_completion_text" "$linux_completion_image"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--form --align=center --image-on-top --buttons-layout=center --image="$image"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--field="It is now safe to remove your USB drive.":LBL' "$REPO_DIR/install-wor-gui.sh" \
     && pass "both success screens say when the USB drive is safe to remove" \
     || fail "a success screen does not tell the user the USB drive is safe to remove"

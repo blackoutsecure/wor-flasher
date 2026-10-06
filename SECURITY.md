@@ -7,7 +7,8 @@ next version; there are no long-term support branches.
 
 | Version                        | Supported                      |
 | ------------------------------ | ------------------------------ |
-| 2.0.x                          | Yes                            |
+| 2.1.x                          | Yes                            |
+| 2.0.x                          | No                             |
 | 1.0.x                          | No                             |
 | Upstream `Botspot/wor-flasher` | Report to [upstream][upstream] |
 
@@ -57,11 +58,21 @@ whole disk. The interesting failure modes follow from that:
 - **IoT Core target replacement.** Erase consent is bound to the selected device
   node, capacity and previewed partition scheme; disks backing the source, running installer and active log
   must not be targets. Failure to determine that relationship denies the write.
+  Native device IDs may be signed on macOS; their exact values, inode and raw
+  device identity remain bound through opening and writing.
 - **IoT Core GPT cleanup.** Cleanup is part of the confirmed FFU write, after
   independent complete-source verification and target binding. GPT headers/table
   CRCs and bounded sector ranges must validate before any cleanup write, and cleared
   metadata outside the final image extents is included in mandatory read-back.
   An invalid layout or a changed source/target must not reach destructive cleanup.
+- **Explicit IoT full-drive reset.** The opt-in full wipe needs a separate
+  confirmation as well as normal erase consent. It runs only after image
+  verification and all ordinary target protections. Every addressable sector
+  is zeroed and read back before image application; I/O failures, device/source
+  changes or interruptions stop the run. Unlike bounded GPT cleanup, it does
+  not trust old partition metadata or follow its offsets. It does not bypass
+  identity/root/source-disk guards, securely erase remapped flash blocks or
+  repair physically failing storage.
 - **IoT Core display overrides.** The unchanged, allowlisted FFU is verified before
   deriving an opt-in HDMI-only patch. Only the existing FAT16 boot config file
   and its directory size can change, within the existing allocation. Firmware
@@ -76,6 +87,11 @@ whole disk. The interesting failure modes follow from that:
   excluded. Passwords use masked controls, private temporary state and SSH stdin,
   not host command arguments, summaries or logs. Failed/partial updates remain
   unverified; never silently retry them under the old credentials.
+- **Automatic IoT address lookup.** Automatic mode resolves only the documented
+  default IoT hostname after Connect. It does not scan subnets or alter the Pi's
+  network configuration. Non-local or ambiguous automatic results stop before
+  SSH credentials are sent; the selected endpoint's SSH identity still needs
+  explicit confirmation and remains pinned during personalization.
 - **IoT Core language selection.** The language preference uses the same pinned
   SSH connection, but the actual IoTSettings operation must run as DefaultAccount,
   never the administrator. The selected tag must be installed, the temporary task

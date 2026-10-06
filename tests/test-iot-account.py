@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import io
 import json
 import os
 import socket
@@ -93,6 +94,99 @@ class AccountTests(unittest.TestCase):
         self.request = {"pairing": self.pairing, "confirmIdentity": True, "currentUsername": "Administrator",
                         "currentPassword": CURRENT, "accountUsername": "FixtureAdmin", "accountPassword": DESIRED}
 
+    def test_factory_login_defaults_are_public_metadata_not_new_account_preferences(self) -> None:
+        with mock.patch.object(account, "read_json") as read, mock.patch.object(account.subprocess, "run") as network:
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+                self.assertEqual(account.main(["login-defaults"]), 0)
+                self.assertEqual(json.loads(output.getvalue()), {
+                    "currentUsername": "Administrator", "currentPassword": "p@ssw0rd",
+                    "automaticHostname": "minwinpc",
+                })
+            read.assert_not_called()
+            network.assert_not_called()
+        preferences = account.account_preferences({})
+        self.assertFalse(preferences["accountSetup"])
+        self.assertEqual(preferences["accountPassword"], "")
+
+    def test_interactive_factory_defaults_and_explicit_logins(self) -> None:
+        for entered_username, entered_password, expected_username, expected_password in (
+            ("", "", "Administrator", "p@ssw0rd"),
+            ("Administrator", CURRENT, "Administrator", CURRENT),
+            ("RenamedAdmin", CURRENT, "RenamedAdmin", CURRENT),
+        ):
+            with self.subTest(username=entered_username), mock.patch("builtins.input", side_effect=[ADDRESS, "CONFIRM", entered_username]):
+                with mock.patch.object(account.getpass, "getpass", return_value=entered_password) as password:
+                    with mock.patch.object(account, "probe_device", return_value=self.pairing):
+                        with mock.patch.object(account, "configure_account", return_value={"state": "verified"}) as configured:
+                            with mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+                                self.assertEqual(account.main(["configure", "--interactive", "--language-only", "--language", "en-US"]), 0)
+                                self.assertNotIn(expected_password, output.getvalue())
+                request = configured.call_args.args[0]
+                self.assertEqual(request["currentUsername"], expected_username)
+                self.assertEqual(request["currentPassword"], expected_password)
+                self.assertFalse(request["accountSetup"])
+                self.assertEqual(request["accountPassword"], "")
+                if expected_username == "Administrator":
+                    self.assertIn("Enter for Microsoft factory default", password.call_args.args[0])
+                else:
+                    self.assertNotIn("factory default", password.call_args.args[0])
+
+    def test_missing_current_password_never_silently_uses_factory_login(self) -> None:
+        request = dict(self.request)
+        del request["currentPassword"]
+        with mock.patch.object(account.subprocess, "run") as network:
+            with self.assertRaises(account.AccountError):
+                account.configure_account(request)
+            network.assert_not_called()
+
+    def test_connection_preferences_are_validated_without_resolving_or_connecting(self) -> None:
+        with mock.patch.object(account.socket, "getaddrinfo") as lookup, mock.patch.object(account.subprocess, "run") as network:
+            default = account.account_preferences({"languageSetup": True})
+            self.assertEqual(default["host"], "")
+            self.assertTrue(default["automaticAddress"])
+            self.assertEqual(default["currentUsername"], "Administrator")
+            self.assertEqual(default["currentPassword"], "p@ssw0rd")
+            chosen = account.account_preferences({
+                "languageSetup": True, "host": "pi-fixture.local", "currentUsername": "RenamedAdmin",
+                "currentPassword": CURRENT,
+            })
+            self.assertEqual(chosen["host"], "pi-fixture.local")
+            self.assertFalse(chosen["automaticAddress"])
+            self.assertEqual(chosen["currentUsername"], "RenamedAdmin")
+            self.assertEqual(chosen["currentPassword"], CURRENT)
+            lookup.assert_not_called()
+            network.assert_not_called()
+
+    def test_connection_preferences_reject_invalid_fields_without_factory_fallback(self) -> None:
+        for fields in (
+            {"host": "https://192.168.50.23"},
+            {"host": "192.168.50.23\ninjected"}, {"host": "x" * 254},
+            {"currentUsername": ""}, {"currentUsername": "Guest"},
+            {"currentPassword": ""}, {"currentPassword": "\n"}, {"currentPassword": None},
+        ):
+            with self.subTest(fields=tuple(fields)), self.assertRaises(account.AccountError):
+                account.account_preferences(dict(fields, languageSetup=True))
+        for account_setup, language_setup in ((False, False), (False, True), (True, False), (True, True)):
+            for current_username, current_password in (("", CURRENT), ("   ", CURRENT), ("Administrator", "")):
+                with self.subTest(account_setup=account_setup, language_setup=language_setup,
+                                  missing="username" if not current_username.strip() else "password"):
+                    with self.assertRaises(account.AccountError):
+                        account.account_preferences({
+                            "accountSetup": account_setup, "accountUsername": "FixtureAdmin",
+                            "accountPassword": DESIRED, "languageSetup": language_setup,
+                            "currentUsername": current_username, "currentPassword": current_password,
+                        })
+
+    def test_disabling_customization_preserves_a_required_current_login_without_forcing_a_reset(self) -> None:
+        preferences = account.account_preferences({
+            "accountSetup": False, "languageSetup": False, "accountPassword": "",
+            "currentUsername": "Administrator", "currentPassword": "p@ssw0rd",
+        })
+        self.assertEqual(preferences["currentUsername"], "Administrator")
+        self.assertEqual(preferences["currentPassword"], "p@ssw0rd")
+        self.assertFalse(preferences["accountSetup"])
+        self.assertEqual(preferences["accountPassword"], "")
+
     def test_preferences_require_explicit_setup_and_strong_password(self) -> None:
         self.assertEqual(account.account_preferences({})["accountSetup"], False)
         self.assertTrue(account.account_preferences(
@@ -112,6 +206,42 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(pairing, self.pairing)
         self.assertEqual(run.call_args.args[0][0], "/fixture/ssh-keyscan")
         self.assertNotIn("input", run.call_args.kwargs)
+
+    def test_automatic_address_resolves_only_the_documented_default_hostname(self) -> None:
+        response = subprocess.CompletedProcess([], 0, f"{ADDRESS} {KEY_TYPE} {KEY}\n".encode(), b"")
+        with mock.patch.object(account.socket, "getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", (ADDRESS, 22))
+        ]) as lookup, mock.patch.object(account.subprocess, "run", return_value=response) as run:
+            self.assertEqual(account.probe_device("remembered-manual.local", automatic_address=True), self.pairing)
+        lookup.assert_called_once_with("minwinpc", 22, type=socket.SOCK_STREAM)
+        self.assertEqual(run.call_args.args[0][-1], ADDRESS)
+        self.assertNotIn("input", run.call_args.kwargs)
+
+    def test_automatic_address_never_scans_or_guesses_on_missing_or_ambiguous_lookup(self) -> None:
+        with mock.patch.object(account.socket, "getaddrinfo", side_effect=socket.gaierror), mock.patch.object(account.subprocess, "run") as run:
+            with self.assertRaisesRegex(account.AccountError, "Uncheck Automatic address"):
+                account.probe_device("", automatic_address=True)
+            run.assert_not_called()
+        with mock.patch.object(account.socket, "getaddrinfo", return_value=[
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.168.50.23", 22)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("192.168.50.24", 22)),
+        ]), mock.patch.object(account.subprocess, "run") as run:
+            with self.assertRaisesRegex(account.AccountError, "multiple addresses"):
+                account.probe_device("", automatic_address=True)
+            run.assert_not_called()
+
+    def test_automatic_address_is_validated_offline_and_manual_requires_a_value(self) -> None:
+        with mock.patch.object(account.socket, "getaddrinfo") as lookup, mock.patch.object(account.subprocess, "run") as run:
+            automatic = account.account_preferences({"automaticAddress": True, "host": "192.168.50.42"})
+            self.assertTrue(automatic["automaticAddress"])
+            self.assertEqual(automatic["host"], "192.168.50.42")
+            for automatic_value in ("TRUE", 1, None):
+                with self.assertRaises(account.AccountError):
+                    account.account_preferences({"automaticAddress": automatic_value, "host": ""})
+            with self.assertRaises(account.AccountError):
+                account.account_preferences({"automaticAddress": False, "host": ""})
+            lookup.assert_not_called()
+            run.assert_not_called()
 
     def test_remote_public_address_and_changed_pairing_fail_before_ssh(self) -> None:
         for address in ("8.8.8.8", "127.0.0.1", "0.0.0.0", "224.1.2.3"):

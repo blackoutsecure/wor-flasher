@@ -5,7 +5,7 @@ CLI:
     inspect FILE --json
     identify-target TARGET --json
     apply FILE TARGET --target-size BYTES [--expected-sha256 SHA256]
-        [--expected-target-id ID] [--allow-gpt-cleanup]
+        [--expected-target-id ID] [--allow-gpt-cleanup | --wipe-entire-drive]
         [--hdmi-mode official|720p60|1080p60|custom] [--hdmi-config TEXT]
 
 Only local, full, uncompressed, single-store Mobile/OneCore V1 FFUs are parsed.
@@ -31,6 +31,10 @@ any cleanup; malformed, orphaned or inconsistent GPT is refused. The selected
 disk's old MBR/GPT metadata is cleared, flushed and read back before FFU writes.
 Cleanup regions outside final FFU extents are checked again during readback.
 This is destructive layout replacement, not GPT repair, resizing or a secure erase.
+An explicit --wipe-entire-drive instead zeroes and reads back every addressable
+sector before image application, without trusting the old partition tables. It
+requires both prior identities and never runs before full source verification.
+It is not a hardware repair or a secure erase of flash-controller spare blocks.
 Linux device readback requires permission to invalidate the block cache (normally
 root); macOS uses the raw device and explicitly synchronizes its hardware cache.
 
@@ -80,6 +84,7 @@ MAX_DESCRIPTORS = 131072
 MAX_LOCATIONS = 16
 MAX_EXTENTS = 262144
 MAX_GPT_TABLE_BYTES = 1024 * 1024
+WIPE_CHUNK_BYTES = 4 * 1024 * 1024
 MAX_HDMI_CONFIG_BYTES = 512
 MAX_BOOT_CONFIG_BYTES = 4096
 SECTOR_SIZE = 512
@@ -614,6 +619,7 @@ def _source_stamp(fd: int) -> SourceStamp:
 
 
 def _target_id(value: os.stat_result) -> str:
+    #Darwin exposes signed dev_t values; preserve the native ID rather than truncating it.
     return f"{value.st_dev}:{value.st_ino}:{value.st_rdev}"
 
 
@@ -1128,18 +1134,61 @@ def _verify_gpt_cleanup(
                 raise ApplyError("GPT header remains after FFU application; do not boot this target")
 
 
+def _wipe_target(
+    source: BinaryIO, stamp: SourceStamp, info: ParsedFfu, target: int,
+    target_size: int, fixture: bool, progress: Optional[Progress],
+) -> None:
+    identity = _target_id(os.fstat(target))
+    target_stamp = _source_stamp(target)
+    zeros = bytes(WIPE_CHUNK_BYTES)
+
+    def guard() -> None:
+        _check_source(source, stamp)
+        _check_target(target, target_size, info.sector_size, fixture)
+        if _target_id(os.fstat(target)) != identity:
+            raise TargetError("target identity changed during the full wipe; stop using this target")
+
+    for phase in ("Wiping entire drive", "Verifying blank drive"):
+        guard()
+        last_percent = -1
+        if progress is not None:
+            progress(phase, 0)
+        for offset in range(0, target_size, WIPE_CHUNK_BYTES):
+            guard()
+            size = min(WIPE_CHUNK_BYTES, target_size - offset)
+            if phase == "Wiping entire drive":
+                _write_all(target, zeros[:size], offset, info.sector_size)
+            elif _read_target(target, size, offset, info.sector_size) != zeros[:size]:
+                raise ApplyError(f"full-wipe readback mismatch at byte {offset}; image was not applied")
+            percent = min(99, (offset + size) * 100 // target_size)
+            if progress is not None and percent != last_percent:
+                progress(phase, percent)
+            last_percent = percent
+        if phase == "Wiping entire drive":
+            _sync_target(target, fixture, before_readback=True)
+            target_stamp = _source_stamp(target)
+        elif _source_stamp(target) != target_stamp:
+            raise ApplyError("target changed during full-wipe verification; image was not applied")
+        guard()
+        if progress is not None:
+            progress(phase, 100)
+
+
 def _apply_plan(
     source: BinaryIO, stamp: SourceStamp, info: ParsedFfu, plan: WritePlan,
     target: int, target_size: int, fixture: bool, progress: Optional[Progress],
     allow_gpt_cleanup: bool = False,
     configured_blocks: tuple[ConfiguredBlock, ...] = (),
+    wipe_entire_drive: bool = False,
 ) -> None:
     _check_source(source, stamp)
     _check_target(target, target_size, info.sector_size, fixture)
     if not fixture:
         _sync_target(target, fixture, before_readback=True)
     cleanup: tuple[MetadataRegion, ...] = ()
-    if allow_gpt_cleanup:
+    if wipe_entire_drive:
+        _wipe_target(source, stamp, info, target, target_size, fixture, progress)
+    elif allow_gpt_cleanup:
         cleanup = _gpt_cleanup_plan(target, info, target_size)
         if cleanup:
             _clear_gpt_metadata(source, stamp, info, target, target_size, fixture, cleanup, progress)
@@ -1204,15 +1253,22 @@ def _apply(
     expected_target_id: Optional[str] = None,
     allow_gpt_cleanup: bool = False,
     hdmi_mode: str = "official", hdmi_config: str = "",
+    wipe_entire_drive: bool = False,
 ) -> ParsedFfu:
     hdmi_options(hdmi_mode, hdmi_config)
     if type(allow_gpt_cleanup) is not bool:
         raise TargetError("GPT cleanup authorization must be a boolean")
+    if type(wipe_entire_drive) is not bool:
+        raise TargetError("full-drive wipe authorization must be a boolean")
+    if wipe_entire_drive and allow_gpt_cleanup:
+        raise TargetError("choose a full-drive wipe or bounded GPT cleanup, not both")
+    if wipe_entire_drive and not fixture and (expected_sha256 is None or expected_target_id is None):
+        raise TargetError("full-drive wipe requires the verified image digest and confirmed target identity")
     if allow_gpt_cleanup and not fixture and (expected_sha256 is None or expected_target_id is None):
         raise TargetError("GPT cleanup requires the verified image digest and confirmed target identity")
     if expected_sha256 is not None and not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
         raise FfuError("expected SHA256 must be 64 lowercase hexadecimal characters")
-    if expected_target_id is not None and not re.fullmatch(r"[0-9]+:[0-9]+:[0-9]+", expected_target_id):
+    if expected_target_id is not None and not re.fullmatch(r"-?[0-9]+:[0-9]+:-?[0-9]+", expected_target_id):
         raise TargetError("expected target identity is malformed")
     with _source_handle(Path(path)) as (source, stamp):
         info = parse_ffu(source)
@@ -1233,7 +1289,7 @@ def _apply(
                 fcntl.flock(target, fcntl.LOCK_EX | fcntl.LOCK_NB)
             _apply_plan(
                 source, stamp, info, plan, target, target_size, fixture, progress,
-                allow_gpt_cleanup, configured_blocks,
+                allow_gpt_cleanup, configured_blocks, wipe_entire_drive,
             )
         finally:
             os.close(target)
@@ -1246,6 +1302,7 @@ def apply_ffu(
     expected_target_id: Optional[str] = None,
     allow_gpt_cleanup: bool = False,
     hdmi_mode: str = "official", hdmi_config: str = "",
+    wipe_entire_drive: bool = False,
 ) -> ParsedFfu:
     """Apply an approved FFU, optionally bound to the caller's prior inspection hash."""
     if sys.platform.startswith("linux"):
@@ -1256,7 +1313,7 @@ def apply_ffu(
         raise TargetError("only native Linux/macOS device targets are supported")
     return _apply(
         path, target_path, target_size, False, progress, expected_sha256, expected_target_id,
-        allow_gpt_cleanup, hdmi_mode, hdmi_config,
+        allow_gpt_cleanup, hdmi_mode, hdmi_config, wipe_entire_drive,
     )
 
 
@@ -1264,11 +1321,12 @@ def apply_to_file_fixture(
     path: Path, target_path: Path, target_size: int, *, progress: Optional[Progress] = None,
     allow_gpt_cleanup: bool = False,
     hdmi_mode: str = "official", hdmi_config: str = "",
+    wipe_entire_drive: bool = False,
 ) -> ParsedFfu:
     """TEST ONLY: use the real parser/writer on pre-sized regular files, never devices."""
     return _apply(
         path, target_path, target_size, True, progress, allow_gpt_cleanup=allow_gpt_cleanup,
-        hdmi_mode=hdmi_mode, hdmi_config=hdmi_config,
+        hdmi_mode=hdmi_mode, hdmi_config=hdmi_config, wipe_entire_drive=wipe_entire_drive,
     )
 
 
@@ -1312,6 +1370,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     apply_command.add_argument("--hdmi-mode", default="official")
     apply_command.add_argument("--hdmi-config", default="")
+    apply_command.add_argument(
+        "--wipe-entire-drive", action="store_true",
+        help="zero and verify every target sector before applying; requires both expected identity arguments",
+    )
     args = parser.parse_args(argv)
     try:
         if args.command == "hdmi-options":
@@ -1340,6 +1402,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 expected_target_id=args.expected_target_id,
                 allow_gpt_cleanup=args.allow_gpt_cleanup,
                 hdmi_mode=args.hdmi_mode, hdmi_config=args.hdmi_config,
+                wipe_entire_drive=args.wipe_entire_drive,
             )
             if args.hdmi_mode != "official":
                 print(f"HDMI configuration written and readback-verified: {hdmi_options(args.hdmi_mode, args.hdmi_config)['label']}", file=sys.stderr)

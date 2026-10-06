@@ -30,6 +30,9 @@ it("keeps IoT desired passwords out of installer settings and uses private nativ
 it("runs optional setup only after successful non-dry-run IoT media completion on both hosts", () => {
   assert.match(gui, /if \[ "\$installer_status" == 0 \] && is_iot_core && iot_core_personalization_requested && \[ "\$DRY_RUN" != 1 \];then/);
   assert.match(gui, /if is_iot_core && iot_core_personalization_requested && \[ "\$DRY_RUN" != 1 \];then/);
+  assert.match(gui, /if \[ "\$completion_connect" == 1 \] && \[ "\$GUI_RESULT_ACTION" == connect \];then/);
+  assert.match(gui, /if \[ "\$linux_completion_connect" == 1 \] && \[ "\$GUI_RESULT_ACTION" == connect \];then/);
+  assert.doesNotMatch(gui, /gui_iot_account_connection\(\)|Finish IoT personalization/);
   assert.match(native, /DefinePInvokeMethod\('NetUserSetInfo'/);
   assert.match(native, /level = 1003/);
   assert.match(native, /level = 0/);

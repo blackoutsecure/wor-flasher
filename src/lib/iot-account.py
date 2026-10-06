@@ -35,10 +35,44 @@ MARKER = "WOR_IOT_ACCOUNT_JSON:"
 LOCALE_MARKER = "WOR_IOT_LOCALE_JSON:"
 SCRIPT = Path(__file__).with_suffix(".ps1")
 KEY_TYPES = ("ssh-ed25519", "ecdsa-sha2-nistp256", "ssh-rsa")
+#Published Microsoft maker-image defaults, never a replacement for user-selected credentials.
+FACTORY_USERNAME = "Administrator"
+FACTORY_PASSWORD = "p@ssw0rd"
+AUTOMATIC_HOSTNAME = "minwinpc"
 
 
 class AccountError(ValueError):
     pass
+
+
+def factory_login_defaults() -> dict[str, str]:
+    return {"currentUsername": FACTORY_USERNAME, "currentPassword": FACTORY_PASSWORD,
+            "automaticHostname": AUTOMATIC_HOSTNAME}
+
+
+def validate_host_input(host: str, *, allow_empty: bool = False) -> None:
+    if type(host) is not str or len(host) > 253:
+        raise AccountError("Enter the Pi's local IP address or hostname, not a URL.")
+    if allow_empty and not host:
+        return
+    if not re.fullmatch(r"[A-Za-z0-9_.:%-]+", host):
+        raise AccountError("Enter the Pi's local IP address or hostname, not a URL.")
+
+
+def login_preferences(data: dict[str, Any]) -> dict[str, object]:
+    defaults = factory_login_defaults()
+    host = data.get("host", "")
+    username = data.get("currentUsername", defaults["currentUsername"])
+    password = data.get("currentPassword", defaults["currentPassword"])
+    automatic = data.get("automaticAddress", not host)
+    if not isinstance(host, str) or not isinstance(username, str) or not isinstance(password, str):
+        raise AccountError("Invalid IoT connection preferences.")
+    if type(automatic) is not bool:
+        raise AccountError("Automatic Pi address selection must be enabled or disabled.")
+    validate_host_input(host, allow_empty=automatic)
+    validate_username(username)
+    validate_password(password, new=False)
+    return {"host": host, "automaticAddress": automatic, "currentUsername": username, "currentPassword": password}
 
 
 def normalize_language(value: str) -> str:
@@ -50,7 +84,7 @@ def normalize_language(value: str) -> str:
 
 def account_preferences(data: dict[str, Any], *, metadata_only: bool = False) -> dict[str, object]:
     enabled = data.get("accountSetup", False)
-    username = data.get("accountUsername", "Administrator")
+    username = data.get("accountUsername", FACTORY_USERNAME)
     password = data.get("accountPassword", "")
     if type(enabled) is not bool or not isinstance(username, str) or not isinstance(password, str):
         raise AccountError("Invalid IoT account preferences.")
@@ -65,11 +99,14 @@ def account_preferences(data: dict[str, Any], *, metadata_only: bool = False) ->
     if type(language_setup) is not bool or not isinstance(language, str):
         raise AccountError("Invalid IoT language preferences.")
     language = normalize_language(language)
+    connection = login_preferences(data)
     return {"accountSetup": enabled, "accountUsername": username, "accountPassword": password,
-            "languageSetup": language_setup, "language": language}
+            "languageSetup": language_setup, "language": language, **connection}
 
 
 def validate_username(value: str) -> None:
+    if not value.strip():
+        raise AccountError("An IoT username is required and cannot be blank.")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,19}", value):
         raise AccountError("Use a 1-20 character IoT username containing letters, digits, dot, underscore or hyphen.")
     if value.casefold() in ("defaultaccount", "guest", "system", "wdagutilityaccount"):
@@ -77,6 +114,8 @@ def validate_username(value: str) -> None:
 
 
 def validate_password(value: str, *, new: bool) -> None:
+    if not new and not value:
+        raise AccountError("The current IoT password cannot be blank; this password-based SSH login requires a nonempty password.")
     length = len(value.encode("utf-16-le")) // 2
     if not (12 if new else 1) <= length <= 127 or any(ord(char) < 32 for char in value):
         raise AccountError("The new IoT password must contain 12-127 characters and no control characters." if new
@@ -96,13 +135,13 @@ def read_json() -> dict[str, Any]:
     return data
 
 
-def local_address(host: str) -> str:
-    if type(host) is not str or len(host) > 253 or not re.fullmatch(r"[A-Za-z0-9_.:%-]+", host):
-        raise AccountError("Enter the Pi's local IP address or hostname, not a URL.")
+def local_address(host: str, *, automatic: bool = False) -> str:
+    validate_host_input(host)
     try:
         addresses = socket.getaddrinfo(host, 22, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
-        raise AccountError("Cannot resolve the Pi's local address.") from exc
+        message = f"Automatic lookup could not resolve {AUTOMATIC_HOSTNAME}. Uncheck Automatic address and enter the Pi's IP address." if automatic else "Cannot resolve the Pi's local address."
+        raise AccountError(message) from exc
     candidates: list[str] = []
     for entry in addresses:
         numeric = entry[4][0]
@@ -116,6 +155,8 @@ def local_address(host: str) -> str:
             candidates.append(numeric)
     if not candidates:
         raise AccountError("The Pi address has no usable local network address.")
+    if automatic and len(candidates) != 1:
+        raise AccountError("Automatic lookup returned multiple addresses. Uncheck Automatic address and enter the Pi's IP address to identify the intended device.")
     return candidates[0]
 
 
@@ -134,8 +175,10 @@ def key_fingerprint(key_type: str, key: str) -> str:
     return "SHA256:" + base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii").rstrip("=")
 
 
-def probe_device(host: str) -> dict[str, object]:
-    address = local_address(host)
+def probe_device(host: str, *, automatic_address: bool = False) -> dict[str, object]:
+    if type(automatic_address) is not bool:
+        raise AccountError("Automatic Pi address selection must be enabled or disabled.")
+    address = local_address(AUTOMATIC_HOSTNAME if automatic_address else host, automatic=automatic_address)
     binary = shutil.which("ssh-keyscan")
     if binary is None:
         raise AccountError("OpenSSH client tools are required for post-boot IoT account setup.")
@@ -271,7 +314,7 @@ def ssh_operation(
 
 def configure_account(request: dict[str, Any]) -> dict[str, object]:
     pairing: dict[str, Any] = request.get("pairing", {})
-    current = request.get("currentUsername", "Administrator")
+    current = request.get("currentUsername", FACTORY_USERNAME)
     current_password = request.get("currentPassword", "")
     account_setup = request.get("accountSetup", True)
     language_setup = request.get("languageSetup", False)
@@ -352,7 +395,7 @@ def askpass() -> int:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("preferences", "probe", "configure", "askpass"))
+    parser.add_argument("command", choices=("login-defaults", "preferences", "probe", "configure", "askpass"))
     parser.add_argument("prompt", nargs="?")
     parser.add_argument("--interactive", action="store_true")
     parser.add_argument("--metadata-only", action="store_true")
@@ -362,19 +405,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.command == "askpass":
             return askpass()
+        if args.command == "login-defaults":
+            print(json.dumps(factory_login_defaults()))
+            return 0
         if args.interactive:
             if args.command != "configure":
                 raise AccountError("Interactive mode is only for post-boot account configuration.")
-            pairing = probe_device(input("Pi local address: ").strip())
+            host = input(f"Pi local address [Enter for automatic {AUTOMATIC_HOSTNAME}]: ").strip()
+            pairing = probe_device(host, automatic_address=not host)
             print(f"Resolved device: {pairing['address']}\nSSH identity: {pairing['fingerprint']}")
             if input("Verify this is your Pi; type CONFIRM to continue: ").strip() != "CONFIRM":
                 raise AccountError("Device identity was not confirmed; no credentials were sent.")
+            defaults = factory_login_defaults()
+            current_username = input(f"Current IoT administrator [{defaults['currentUsername']}]: ").strip() or defaults["currentUsername"]
+            use_factory = current_username.casefold() == defaults["currentUsername"].casefold()
+            prompt = "Current IoT password [Enter for Microsoft factory default]: " if use_factory else "Current IoT password: "
+            current_password = getpass.getpass(prompt)
+            if use_factory and not current_password:
+                current_password = defaults["currentPassword"]
             request: dict[str, Any] = {
                 "pairing": pairing, "confirmIdentity": True,
-                "currentUsername": input("Current IoT administrator [Administrator]: ").strip() or "Administrator",
-                "currentPassword": getpass.getpass("Current IoT password: "),
+                "currentUsername": current_username,
+                "currentPassword": current_password,
                 "accountSetup": not args.language_only,
-                "accountUsername": "Administrator" if args.language_only else (input("New IoT administrator [Administrator]: ").strip() or "Administrator"),
+                "accountUsername": FACTORY_USERNAME if args.language_only else (input(f"New IoT administrator [{FACTORY_USERNAME}]: ").strip() or FACTORY_USERNAME),
                 "accountPassword": "" if args.language_only else getpass.getpass("New IoT password (12-127 characters): "),
                 "languageSetup": args.language is not None,
                 "language": args.language or "en-US",
@@ -384,7 +438,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.command == "preferences":
             result = account_preferences(request, metadata_only=args.metadata_only)
         elif args.command == "probe":
-            result = probe_device(request.get("host", ""))
+            host = request.get("host", "")
+            result = probe_device(host, automatic_address=request.get("automaticAddress", not host))
         else:
             result = configure_account(request)
         print(json.dumps(result, ensure_ascii=True))

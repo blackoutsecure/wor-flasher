@@ -4,7 +4,7 @@
 
 ![Maintainer partnership banner](assets/partnership.png)
 
-[![Version](https://img.shields.io/badge/version-2.0.1-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
+[![Version](https://img.shields.io/badge/version-2.1.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
 [![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=555555&logo=githubactions&logoColor=ffffff&color=0a7ea4&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
 [![License](https://img.shields.io/badge/license-GPL--3.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnu&logoColor=ffffff)](LICENSE)
 [![Platform](https://img.shields.io/badge/host-Linux%20%7C%20macOS-0a7ea4?style=for-the-badge&labelColor=555555&logo=linux&logoColor=ffffff)](#requirements)
@@ -142,13 +142,27 @@ the FFU. Old GPT regions outside the FFU's final writes must remain cleared
 during final read-back. **This erases the existing installation**; selection,
 review, Advanced Options and dry run never perform cleanup.
 
-Malformed, orphaned, inconsistent or oversized GPT metadata fails before cleanup,
-rather than trusting unvalidated sector pointers. Direct helper invocations still
-refuse GPT unless `--allow-gpt-cleanup` is explicitly supplied together with the
-verified image digest and confirmed target identity; the normal Flash workflow
-supplies these only after erase confirmation. Cleanup is not a secure erase or
-GPT repair. Larger targets up to 2 TiB are supported, but additional capacity is
-left unused; the Windows partitions are not expanded.
+Malformed, orphaned, inconsistent or oversized GPT metadata fails before normal
+cleanup rather than trusting unvalidated sector pointers. To deliberately start
+over, enable **Fully wipe selected drive before flashing** in IoT Advanced
+Options. **Flash** then requires a separate **Wipe and Flash** confirmation
+showing the selected drive and capacity. Only after full source verification,
+target revalidation, administrator authentication and unmounting does the
+existing writer zero **every addressable sector**, flush and read back the
+blank drive, then apply and verify the FFU. This also discards damaged partition
+tables without following their pointers. Canceling the confirmation performs
+no image preparation or drive writes; canceling an active wipe leaves an
+incomplete drive, not a successful reset.
+
+Full wiping is off by default, can take a long time and does not repair failing
+hardware. Neither mode is a secure erase of controller-remapped or spare flash
+blocks. A missing, unreadable or changed device identity still blocks writing;
+a wipe is never offered as a way around host/source-disk or identity protection.
+For an existing GPT target, direct helper invocations require either `--allow-gpt-cleanup` or
+`--wipe-entire-drive`, together with the verified image digest and confirmed
+target identity. Use `--expected-target-id=VALUE` so signed native macOS device
+IDs are passed intact. Larger targets up to 2 TiB are supported, but additional
+capacity remains unused by Windows; the Windows partitions are not expanded.
 
 If selecting a card is rejected, the GUI shows the specific layout, capacity,
 sector-size or device-safety reason and offers **Choose another drive** instead
@@ -241,6 +255,10 @@ they are current or commercially licensed LTSC images.
    remain in `DL_DIR/iot-core` so existing verified caches are preserved.
    **Show a completion notification** is available for every image family
    in both GUIs, independently of completion sounds.
+   **Fully wipe selected drive before flashing** is an optional fresh-start
+   operation with its own **Wipe and Flash** confirmation. It clears and
+   verifies the entire selected drive before applying the verified image;
+   it does not change the card while editing options or during a dry run.
    **HDMI display** defaults to **1280 x 720 / 60 Hz (compatibility)**,
    marked **Recommended** (green beside the dropdown on macOS).
    On **2026-10-05**, the user reported that this preset resolved the monitor's
@@ -293,10 +311,56 @@ they are current or commercially licensed LTSC images.
    prepared cache is fully verified, never silently trusted. Written-image
    read-back and safe ejection must finish before removing the card.
    Requested language and administrator setup remain **Pending** at this point.
-   After the media result, move the card to the Pi, boot it on an isolated local
-   network, enter its local address and **current IoT** credentials, then confirm
-   the SSH fingerprint belongs to your Pi. This password is not the Mac's sudo
-   password. The app pins that identity and queries the installed UI languages
+   The normal completion screen offers **Connect to Pi** when personalization
+   was requested. Move the card to the Pi, boot it on an isolated local network,
+   then choose that button to use the values already saved in Advanced Options.
+   **Complete/Close** exits without connecting, and no separate connection form
+   opens automatically after completion. The SSH fingerprint still needs
+   confirmation before credentials are sent. This password is not the Mac's sudo
+   password. **Post-boot connection** in Advanced Options contains the Pi's local address,
+   **Current IoT username** and **Current IoT password**.
+   **Automatic address — Recommended** is checked by default when no address
+   was supplied. After **Connect to Pi**, it resolves the official image's default
+   hostname, `minwinpc`, to a private local address. This uses your network's
+   existing address assignment (typically DHCP); it does not configure DHCP,
+   assign a static IP or scan the network. Hostname resolution must be available
+   on the host/network. If the Pi has been renamed, cannot be resolved or has
+   multiple candidate addresses, uncheck Automatic address and enter its known
+   IP or hostname. Lookup or saved-login validation failure offers
+   **Advanced Options** for correction and retry, without reflashing or sending
+   credentials. Back leaves personalization pending; it does not start another
+   connection attempt.
+   The manual address field is enabled only when the checkbox is cleared;
+   switching back to automatic preserves any typed manual value for later use.
+   An existing explicit address stays manual unless automatic mode is chosen.
+   The current-login fields default to Microsoft's factory
+   **Administrator / `p@ssw0rd`** (with a zero), with the password masked and
+   both fields always enabled and editable; they have no opt-out checkbox.
+   The current username cannot be blank, and a nonempty current password is
+   required because the reviewed image uses OpenSSH's default
+   `PermitEmptyPasswords no`. Turning off account changes or language setup
+   does not remove these requirements. Save and Connect to Pi reject invalid current
+   credentials without connecting or replacing them with factory defaults.
+   Replace them if you already changed the device's
+   credentials. The optional **new password** field remains blank: these login
+   defaults never reset a customized account or set a desktop Windows password.
+   Save carries the connection values directly to the post-boot operation so they
+   do not need to be re-entered; Back discards pending edits. The address is not resolved
+   and no SSH connection is made while editing or flashing. Connect to Pi and SSH
+   identity confirmation are still required after moving the card to the Pi.
+   Current passwords stay out of installer exports, process arguments and
+   summaries; temporary native state and Linux stdin carry the masked values.
+   Optional private JSON configuration uses `userAccount.iotCore.host`,
+   `automaticAddress`, `currentUsername` and `currentPassword`; equivalent GUI
+   variables are `IOT_CORE_HOST`, `IOT_CORE_AUTOMATIC_ADDRESS`,
+   `IOT_CORE_CURRENT_USERNAME` and `IOT_CORE_CURRENT_PASSWORD`.
+   These current credentials are separate from `username`/`password`, which
+   request an administrator change. Do not commit credential-bearing config files.
+   The interactive helper also offers the factory login on Enter for
+   `Administrator`; an explicit username/password is retained. Change the
+   factory password before using the Pi on a shared network.
+   Pressing Enter at its address prompt selects automatic `minwinpc` lookup.
+   The app pins that identity and queries the installed UI languages
    using Microsoft's `IoTSettings` under the existing `DefaultAccount` session,
    as required by Microsoft. A temporary least-privilege task runs the command
    in that user context and is removed afterward. Unsupported/missing languages
@@ -430,6 +494,10 @@ There are two built-in front-ends over one engine:
 Both therefore write identical media from identical settings. The built-in GUI intentionally uses the engine directly because it needs shared functions and state while constructing its forms. The separate integration adapter below is a process-level contract for external tools, not an extra layer inside the GUI.
 
 ### Graphical interface
+
+The Windows/Pi selection screen contains the two selectors without the IoT
+explanatory paragraph. Compatible-board filtering and download-after-Flash
+behavior are unchanged.
 
 ```bash
 ./install-wor-gui.sh
@@ -595,6 +663,12 @@ IoT Core adds `WOR_IMAGE_FAMILY=iot-core` (or `--iot-core`),
 `WOR_TARGET_BOARD=pi2-v1.1|pi2-v1.2|pi3-b`, and a local FFU in `SOURCE_FILE`.
 The reviewed ISO/MSI packages are also accepted. Use `WOR_IOT_DOWNLOAD=1`
 with `SOURCE_FILE` empty, or `--iot-core-download`, for an explicit download.
+For an intentional full-drive reset, set `IOT_CORE_WIPE_DRIVE=1`. Non-interactive
+flashing additionally requires `WOR_IOT_CONFIRM_WIPE=1` and the normal
+`WOR_IOT_CONFIRM_ERASE=1`; none can bypass source or target safety checks.
+JSON equivalents are `execution.wipeIotDrive` and `execution.confirmIotWipe`,
+both defaulting to `false`. Interactive CLI runs require typing the selected
+device path, and the GUIs use the separate confirmation above.
 IoT-only `IOT_CORE_HDMI_MODE` defaults to recommended `720p60`; `official`,
 `1080p60` and `custom` remain explicit choices. The normal workflow forwards this
 selection to the FFU helper; direct low-level helper calls remain unmodified
@@ -1188,6 +1262,13 @@ These additions are maintained directly by Blackout Secure in cooperation with B
 - [BVM](https://github.com/Botspot/bvm) — Botspot's newer project: Windows 11 in a KVM virtual machine on ARM Linux, rather than on bare metal
 
 ## Versions
+
+- **2.1.0**
+  - Add the reviewed Windows 10 IoT Core ARM32 FFU workflow with deferred downloads, bound-target checks, validated GPT cleanup and mandatory read-back.
+  - Reuse the shared wizard, download folder, notifications and administrator-password retry flow for IoT and desktop Windows.
+  - Default IoT video to the recommended 720p/60 Hz compatibility preset, with optional video-only boot configuration editing.
+  - Add optional post-boot administrator setup and host-selected IoT language preferences over fingerprint-pinned SSH, with explicit pending and verification states.
+  - Accept valid signed macOS drive identities and offer a separately confirmed full-drive wipe before IoT imaging, with complete blank-drive read-back.
 
 - **2.0.1**
   - Package the macOS release as a verified compressed DMG containing the complete app, while retaining the unpacked local app.
