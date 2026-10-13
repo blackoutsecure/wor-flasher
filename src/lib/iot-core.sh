@@ -265,6 +265,17 @@ iot_core_validate_options() {
       | python3 "$DIRECTORY/src/lib/iot-account.py" preferences --metadata-only >/dev/null \
       || { warning "Invalid post-boot IoT administrator preferences."; return 1; }
   fi
+  if [ "$(iot_core_hdmi_mode)" == custom ];then
+    local boot_state boot_message
+    if ! boot_state="$(boot_config_state "${IOT_CORE_HDMI_CONFIG:-}" iot-core)";then
+      warning "Invalid IoT boot settings: $(jq -r .error <<<"$boot_state")"
+      return 1
+    fi
+    IOT_CORE_HDMI_CONFIG="$(jq -r .config <<<"$boot_state")" || return 1
+    while IFS= read -r boot_message ;do
+      [ -z "$boot_message" ] || warning "IoT boot configuration: $boot_message"
+    done < <(jq -r '.warnings[]' <<<"$boot_state")
+  fi
   iot_core_hdmi_state >/dev/null || return 1
   CAN_INSTALL_ON_SAME_DRIVE=1
 }

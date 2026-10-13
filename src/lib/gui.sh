@@ -33,7 +33,7 @@ wor_iot_option_label() { #Input: IoT option key. Labels shared by both Advanced 
 		sound) printf 'Completion sound' ;;
 		notification) printf 'Show a completion notification' ;;
 		hdmi) printf 'HDMI display' ;;
-		editHdmi) printf 'View / Edit config.txt (video only)' ;;
+		editHdmi) printf 'Boot Config Editor (video only)' ;;
 		hdmiHelp) printf 'Boot config.txt video settings only. Required IoT boot settings stay protected; Windows may select its own display mode.' ;;
 		hdmiEditorHelp) printf 'These HDMI key=value lines are merged into the existing IoT boot config.txt. Required Windows boot, memory and framebuffer settings are preserved. Use hdmi_group and hdmi_mode; optional: hdmi_force_hotplug and hdmi_drive. Save Advanced Options to apply them to newly flashed media.' ;;
 		accountSetup) printf 'Change IoT administrator after first boot' ;;
@@ -176,6 +176,10 @@ wor_completion_sound() { #Output: the sound to play, ignoring a value this host 
 
 # --- macOS (AppKit through JXA) ----------------------------------------------------------------
 #Linux has no equivalent of these calls; they are macOS-only by nature rather than by omission.
+
+wor_boot_config_jxa() { #Output: the shared native boot editor, shipped with the runtime.
+	cat "$DIRECTORY/src/lib/boot-config-gui.js"
+}
 
 wor_jxa_window_lib() { #Output: the JXA every window is built with, so no screen can drift from the others.
 	cat <<'JXA'

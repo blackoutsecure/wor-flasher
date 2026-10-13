@@ -80,6 +80,17 @@
 #               leave the FFU unchanged and keep account status Pending until a new login is verified.
 #             Preselect the shared host language for IoT Advanced Options, preserve explicit overrides
 #               and verify installed-language support under DefaultAccount during post-boot personalization.
+#             Show the pinned UEFI version as Recommended with a shared GUI badge when staying pinned,
+#               not using the latest firmware, is the tested default for the selected Pi model.
+#             Add an HDMI display selector to desktop Advanced Options for every Pi model, driving
+#               config.txt instead of a hardcoded Pi 4 override; official/recommended/custom match
+#               the IoT picker's pattern, with no invented per-model or per-Windows-version presets.
+#             Widen the progress window and truncate its detail line with an ellipsis instead of
+#               clipping long status text mid-word; keep a live percentage visible in that line
+#               while a long-running step (such as Pi 3 image recompression) is actively tracked.
+#             Add a simple Boot Config Editor with shared checkbox/dropdown controls and a separate
+#               Advanced Text Edit for user additions. Protect required UEFI entries, validate and
+#               normalize GUI/CLI settings before flashing, and keep IoT editing display-only.
 #---------------
 #2.0.1 - Distribute the macOS app in a verified compressed DMG while retaining the local app bundle.
 #        Package a self-contained install-wor.sh release asset for macOS and supported Linux hosts.
@@ -2620,7 +2631,7 @@ advanced_option_applies() { #Input: option key. Shared applicability for control
   if is_iot_core;then
     case "$1" in
       dryrun) return 0 ;;
-      oobe | pi4 | drivers | language | account | locale | uefi | verify | config) return 1 ;;
+      oobe | pi4 | drivers | language | account | locale | uefi | verify | config | hdmi) return 1 ;;
       *) warning "Unknown Advanced Options key: $1"; return 2 ;;
     esac
   fi
@@ -2631,7 +2642,7 @@ advanced_option_applies() { #Input: option key. Shared applicability for control
     language)
       [ -z "$SOURCE_FILE" ] && [ ! -f "$DL_DIR/winfiles_from_iso_${BID}_${WIN_LANG}/alldone" ]
       ;;
-    account | locale | uefi | verify | dryrun | config) return 0 ;;
+    account | locale | uefi | verify | dryrun | config | hdmi) return 0 ;;
     *) warning "Unknown Advanced Options key: $1"; return 2 ;;
   esac
 }
@@ -2652,19 +2663,141 @@ default_config_txt() { #Input: Pi model. Output: that model's shipped config.txt
   esac
 }
 
-set_default_config_txt() { #Sets CONFIG_TXT from the selected model's shipped template, unless the caller already supplied one.
-  is_iot_core && return 0
-  local previous_default
-  if [ -n "$CONFIG_TXT" ];then
-    #stepping back and choosing another model must not flash the previous model's boot config, but a
-    #config.txt the user has edited is theirs and is never overwritten
-    [ -n "${CONFIG_TXT_MODEL:-}" ] || return 0
-    [ "$CONFIG_TXT_MODEL" == "$RPI_MODEL" ] && return 0
-    previous_default="$(default_config_txt "$CONFIG_TXT_MODEL")"
-    [ "$CONFIG_TXT" == "$previous_default" ] || return 0
+#Like UEFI/driver pins, this is an unexamined upstream default, not a value tested by this fork;
+#keep it the recommended choice for Pi 4 rather than inventing new per-model/Windows-version presets.
+hdmi_recommended_lines() { #Input: Pi model. Output: that model's established HDMI override, or empty when none is recommended.
+  case "$1" in
+    4) printf '\nhdmi_drive=2\nhdmi_group=2\nhdmi_mode=87\nhdmi_cvt=1920 1200 60 6 0 0 0' ;;
+  esac
+}
+
+hdmi_recommended_label() { #Input: Pi model. Output: human-readable description of that model's recommended HDMI override.
+  case "$1" in
+    4) printf '1920 x 1200 / 60 Hz' ;;
+  esac
+}
+
+hdmi_mode_default() { #Input: Pi model. Output: 'recommended' when that model has an established override, otherwise 'official'.
+  [ -z "$(hdmi_recommended_lines "$1")" ] && printf 'official\n' || printf 'recommended\n'
+}
+
+hdmi_mode() { #Output: the effective HDMI display selection for the current Pi model.
+  printf '%s\n' "${HDMI_MODE:-$(hdmi_mode_default "$RPI_MODEL")}"
+}
+
+hdmi_mode_choices() { #Input: Pi model. Output: tab-separated value/label rows for the HDMI display picker, recommended choice annotated.
+  local model="$1" recommended
+  recommended="$(hdmi_recommended_lines "$model")"
+  printf 'official\tOfficial image default%s\n' "$([ -n "$recommended" ] || printf ' (recommended)')"
+  [ -z "$recommended" ] || printf 'recommended\t%s (recommended)\n' "$(hdmi_recommended_label "$model")"
+  printf 'custom\tCustom video settings\n'
+}
+
+hdmi_mode_from_label() { #Input: selected label, Pi model. Output: the matching HDMI mode value, defaulting to official.
+  local label="$1" model="$2" value item_label
+  while IFS=$'\t' read -r value item_label ;do
+    [ -n "$value" ] || continue
+    [ "$label" == "$item_label" ] && { printf '%s' "$value"; return 0; }
+  done < <(hdmi_mode_choices "$model")
+  printf 'official'
+}
+
+hdmi_mode_label() { #Output: human-readable label for the effective HDMI display selection, for the confirmation summary.
+  case "$(hdmi_mode)" in
+    custom) printf 'Custom (set in config.txt)' ;;
+    recommended) [ -n "$(hdmi_recommended_lines "$RPI_MODEL")" ] && printf 'Recommended (%s)' "$(hdmi_recommended_label "$RPI_MODEL")" || printf 'Official image default' ;;
+    *) printf 'Official image default' ;;
+  esac
+}
+
+config_txt_with_hdmi() { #Input: Pi model, HDMI mode. Output: that model's shipped config.txt with the given HDMI selection applied.
+  printf '%s' "$(default_config_txt "$1")"
+  [ "$2" != recommended ] || printf '%s' "$(hdmi_recommended_lines "$1")"
+}
+
+boot_config_context() { #Input: optional profile. Output: trusted defaults for the shared editor/validator.
+  if [ "${1:-desktop}" == iot-core ];then
+    jq -n '{profile: "iot-core"}'
+  else
+    jq -n --arg model "$RPI_MODEL" --arg official "$(config_txt_with_hdmi "$RPI_MODEL" official)" \
+      --arg recommended "$(config_txt_with_hdmi "$RPI_MODEL" recommended)" \
+      --arg choices "$(hdmi_mode_choices "$RPI_MODEL")" \
+      '{profile: "desktop", model: $model, official: $official, recommended: $recommended,
+        hdmiChoices: ($choices | split("\n") | map(select(length > 0) | split("\t") | {value: .[0], label: .[1]}))}'
   fi
-  CONFIG_TXT="$(default_config_txt "$RPI_MODEL")"
-  [ -n "$CONFIG_TXT" ] && CONFIG_TXT_MODEL="$RPI_MODEL"
+}
+
+boot_config_state() { #Input: config text, optional profile/mode. Output: normalized editor state or an explicit error.
+  local context values="${BOOT_CONFIG_SETTINGS:-}"
+  [ -n "$values" ] || values='{}'
+  [ "${2:-desktop}" == desktop ] || values='{}'
+  context="$(boot_config_context "${2:-desktop}")" || return 1
+  jq --arg config "$1" --arg mode "${3:-}" --argjson values "$values" \
+    '. + {config: $config, values: ($values | if type != "object" then error("bootSettings must be an object") else
+      map_values(if type == "boolean" then (if . then "1" else "0" end)
+        elif . == null then "" elif type == "number" or type == "string" then tostring
+        else error("Invalid boot setting value") end) end)}
+      + (if $mode == "" then {} else {hdmiMode: $mode} end)' <<<"$context" \
+    | python3 "$DIRECTORY/src/lib/boot-config.py"
+}
+
+boot_config_editor_context() { #Input: optional image profile. Native and Linux editors share one validator.
+  boot_config_context "${1:-desktop}" | jq --arg python "$(command -v python3)" \
+    --arg helper "$DIRECTORY/src/lib/boot-config.py" '. + {python: $python, helper: $helper}'
+}
+
+validate_boot_config() { #Normalize and validate the exact desktop config before image preparation or disk writes.
+  is_iot_core && return 0
+  [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ] || return 0
+  local state message
+  if ! state="$(boot_config_state "$CONFIG_TXT")";then
+    message="$(jq -r '.error // "Cannot validate boot settings."' <<<"$state")"
+    warning "Invalid boot configuration: $message"
+    return 1
+  fi
+  CONFIG_TXT="$(jq -r .config <<<"$state")" || return 1
+  HDMI_MODE="$(jq -r .hdmiMode <<<"$state")" || return 1
+  while IFS= read -r message ;do
+    [ -z "$message" ] || warning "Boot configuration: $message"
+  done < <(jq -r '.warnings[]' <<<"$state")
+}
+
+apply_boot_config_preferences() { #Apply structured JSON once, so subsequent GUI edits remain authoritative.
+  [ -n "${BOOT_CONFIG_SETTINGS:-}" ] && [ "$BOOT_CONFIG_SETTINGS" != '{}' ] || return 0
+  validate_boot_config || return 1
+  BOOT_CONFIG_SETTINGS=''
+}
+
+set_default_config_txt() { #Sets CONFIG_TXT from the selected model's shipped template and HDMI selection, unless the caller already supplied one.
+  is_iot_core && return 0
+  local previous_default previous_model previous_hdmi current_key previous_state previous_context next_state
+  current_key="$RPI_MODEL:$(hdmi_mode)"
+  if [ -n "$CONFIG_TXT" ];then
+    #stepping back and choosing another model or HDMI preference must not flash the previous
+    #combination's boot config, but a config.txt the user has edited is theirs and is never overwritten
+    [ -n "${CONFIG_TXT_MODEL:-}" ] || return 0
+    [ "$CONFIG_TXT_MODEL" == "$current_key" ] && return 0
+    previous_model="${CONFIG_TXT_MODEL%%:*}" previous_hdmi="${CONFIG_TXT_MODEL#*:}"
+    previous_default="$(config_txt_with_hdmi "$previous_model" "$previous_hdmi")"
+    if [ "$CONFIG_TXT" != "$previous_default" ];then
+      [[ "$CONFIG_TXT" == *'# >>> WoR-Flasher managed boot settings >>>'* ]] || return 0
+      previous_state="$(BOOT_CONFIG_SETTINGS='' RPI_MODEL="$previous_model" boot_config_state "$previous_default")" || return 1
+      if [ "$CONFIG_TXT" != "$(jq -r .config <<<"$previous_state")" ];then
+        [ "$previous_model" != "$RPI_MODEL" ] || return 0
+        previous_context="$(RPI_MODEL="$previous_model" boot_config_context)" || return 1
+        if ! next_state="$(boot_config_context | jq --arg config "$CONFIG_TXT" --argjson previous "$previous_context" \
+          '. + {config: $config, previousDefaults: $previous}' | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+          warning "Cannot adapt the managed boot settings to this model: $(jq -r .error <<<"$next_state")"
+          return 1
+        fi
+        CONFIG_TXT="$(jq -r .config <<<"$next_state")" HDMI_MODE="$(jq -r .hdmiMode <<<"$next_state")"
+        CONFIG_TXT_MODEL="$RPI_MODEL:$(hdmi_mode)"
+        return 0
+      fi
+    fi
+  fi
+  CONFIG_TXT="$(config_txt_with_hdmi "$RPI_MODEL" "$(hdmi_mode)")"
+  [ -n "$CONFIG_TXT" ] && CONFIG_TXT_MODEL="$current_key"
   return 0
 }
 
@@ -2795,6 +2928,7 @@ settings_summary() { #Output: tab-separated "label<TAB>value" lines describing t
   else
     printf 'Windows ARM64 drivers\tNo separate driver package for Pi %s\n' "$RPI_MODEL"
   fi
+  printf 'HDMI display\t%s\n' "$(hdmi_mode_label)"
   printf 'Custom config.txt\t%s%s\n' "$([ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ] && echo 'Applied' || echo "Using the firmware default")" \
     "$([ "$CAN_INSTALL_ON_SAME_DRIVE" == 0 ] && printf ' (recovery media only)')"
   printf 'Hide empty drives\t%s\n' "$([ "$HIDE_EMPTY_DRIVES" == 1 ] && echo 'Yes' || echo 'No')"
@@ -2955,13 +3089,15 @@ WOR_INSTALLER_SETTINGS=(DIRECTORY DL_DIR RPI_MODEL WOR_TARGET_BOARD BID WIN_LANG
   IOT_CORE_LANGUAGE_SETUP IOT_CORE_LANGUAGE
   IOT_CORE_HOST IOT_CORE_AUTOMATIC_ADDRESS
   IOT_CORE_WIPE_DRIVE WOR_IOT_CONFIRM_WIPE
-  CONFIG_TXT APPLY_CUSTOM_CONFIG_TXT PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS WINDOWS_ACCOUNT_SETUP WINDOWS_ACCOUNT_USERNAME WINDOWS_ACCOUNT_PASSWORD WINDOWS_LOCALE_SETUP WINDOWS_LOCALE UEFI_USE_LATEST DRIVERS_USE_LATEST
+  CONFIG_TXT APPLY_CUSTOM_CONFIG_TXT HDMI_MODE BOOT_CONFIG_SETTINGS PI4_AUTO_DISABLE_3GB OOBE_NETWORK_BYPASS WINDOWS_ACCOUNT_SETUP WINDOWS_ACCOUNT_USERNAME WINDOWS_ACCOUNT_PASSWORD WINDOWS_LOCALE_SETUP WINDOWS_LOCALE UEFI_USE_LATEST DRIVERS_USE_LATEST
   UEFI_VER_PI3 UEFI_VER_PI4 UEFI_VER_PI5 DRIVER_VER
   PI4_UEFI_SHELL_UNLOCK SKIP_IMAGE_VERIFICATION HIDE_EMPTY_DRIVES USE_CACHE DRY_RUN WOR_APP_TITLE WOR_RUN_ID)
 
 export_installer_settings() { #Exports every collected setting, so the installer subprocess runs exactly what was confirmed.
   #Empty carries automatic model selection without turning it into an explicit override.
   : "${UEFI_USE_LATEST:=}"
+  : "${HDMI_MODE:=}"
+  : "${BOOT_CONFIG_SETTINGS:=}"
   : "${WOR_TARGET_BOARD:=}"
   : "${WOR_IMAGE_FAMILY:=desktop}" "${WOR_IMAGE_ARCH:=}" "${WOR_IOT_CONFIRM_ERASE:=0}"
   : "${IOT_CORE_BUILD:=}" "${IOT_CORE_MINIMUM_BYTES:=}" "${IOT_CORE_SHA256:=}"
@@ -3149,6 +3285,8 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
 
   set_bool_if_unset "APPLY_CUSTOM_CONFIG_TXT" '.customization.applyCustomConfigTxt // .applyCustomConfigTxt // .APPLY_CUSTOM_CONFIG_TXT // empty'
   set_if_unset "CONFIG_TXT" '.customization.configTxt // .configTxt // .CONFIG_TXT // empty'
+  set_if_unset "HDMI_MODE" '.customization.hdmiMode // .hdmiMode // .HDMI_MODE // empty'
+  set_if_unset "BOOT_CONFIG_SETTINGS" '.customization.bootSettings // .BOOT_CONFIG_SETTINGS // empty'
   set_if_unset "IOT_CORE_HDMI_MODE" '.customization.iotHdmiMode // .IOT_CORE_HDMI_MODE // empty'
   set_if_unset "IOT_CORE_HDMI_CONFIG" '.customization.iotHdmiConfig // .IOT_CORE_HDMI_CONFIG // empty'
   set_bool_if_unset "OOBE_NETWORK_BYPASS" '.customization.oobeNetworkBypass // .oobeNetworkBypass // .OOBE_NETWORK_BYPASS // empty'
@@ -3316,6 +3454,12 @@ esac
 case "$APPLY_CUSTOM_CONFIG_TXT" in
   0 | 1) ;;
   *) error "Unknown value for APPLY_CUSTOM_CONFIG_TXT. Expected '0' or '1'.";;
+esac
+
+#Leave unset to follow the selected Pi model's default; explicit 'official'/'recommended'/'custom' always wins.
+case "${HDMI_MODE:-}" in
+  '' | official | recommended | custom) ;;
+  *) error "Unknown value for HDMI_MODE. Expected 'official', 'recommended' or 'custom'.";;
 esac
 
 #Set to 0 to show empty card-reader slots as selectable drives in WoR-PE. Written to the cached PE settings.ini before each run.
@@ -3803,7 +3947,8 @@ fi
 is_macos && { command -v sgdisk >/dev/null || error "sgdisk is required to partition $DEVICE correctly. Install it with 'brew install gptfdisk', then run this script again."; }
 
 #the GUI already picked one and exported it; a CLI run gets the same shipped template, so both write identical media
-set_default_config_txt
+set_default_config_txt || error "Could not prepare boot settings for the selected model."
+validate_boot_config || error "Correct the boot configuration before flashing. No target disk was written."
 
 if [ "$CLI_INTERACTIVE" == 1 ];then
   confirm_cli_installation

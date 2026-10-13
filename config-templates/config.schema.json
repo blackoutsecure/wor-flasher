@@ -82,7 +82,30 @@
         },
         "configTxt": {
           "type": "string",
-          "description": "Body of config.txt for the boot partition"
+          "description": "Body of config.txt for the boot partition. Validated and normalized before flashing; required UEFI boot entries cannot be overridden."
+        },
+        "bootSettings": {
+          "type": "object",
+          "description": "Structured desktop boot settings, using the same controls/validation as Boot Config Editor. Only settings applicable to the selected model/current config are accepted; required bootloader and memory settings are protected.",
+          "properties": {
+            "disable_overscan": { "type": "boolean" },
+            "enable_uart": { "type": "boolean" },
+            "uart_2ndstage": { "type": "boolean" },
+            "arm_boost": { "type": "boolean" },
+            "usb_max_current_enable": { "type": "boolean" },
+            "force_turbo": { "type": "boolean" },
+            "core_freq": { "type": ["integer", "null"], "minimum": 0 },
+            "hdmi_force_hotplug": { "type": "boolean" },
+            "hdmi_group": { "type": ["integer", "null"], "minimum": 0, "maximum": 2 },
+            "hdmi_mode": { "type": ["integer", "null"], "minimum": 0, "maximum": 107 },
+            "hdmi_drive": { "type": ["integer", "null"], "minimum": 1, "maximum": 2 }
+          },
+          "additionalProperties": false
+        },
+        "hdmiMode": {
+          "type": "string",
+          "enum": ["official", "recommended", "custom"],
+          "description": "Desktop HDMI display override written into config.txt: official image default, this Pi model's established override when one exists (Pi 4 only today), or custom settings (validated and normalized, preserving user additions). Unset follows the selected Pi model's default."
         },
         "iotHdmiMode": {
           "type": "string",

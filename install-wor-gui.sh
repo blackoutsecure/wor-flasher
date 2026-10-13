@@ -56,6 +56,7 @@ gui_runtime_complete() { #Input: runtime directory. Do not source a partial engi
   for path in \
     install-wor.sh \
     src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh \
+    src/lib/boot-config.py src/lib/boot-config-gui.js \
     src/lib/node-runtime.mjs src/lib/macos-disk-alerts.js src/updater.mjs \
     src/lib/pi3-boot-refresh/Pi3BootRefresh.exe src/lib/pi3-boot-refresh/manifest.json \
     src/lib/pi3-boot-refresh/GO-LICENSE.txt \
@@ -1290,7 +1291,7 @@ save_advanced_preferences() { #Keep automatic Linux form refreshes transactional
     "$UEFI_VER_PI3" "$UEFI_VER_PI4" "$UEFI_VER_PI5" "$DRIVER_VER" "$SKIP_IMAGE_VERIFICATION" "$DRY_RUN"
     "$USE_CACHE" "$WINDOWS_ACCOUNT_SETUP" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD"
     "$WINDOWS_LOCALE_SETUP" "$WINDOWS_LOCALE" "$WIN_LANG" "$PLAY_SOUND" "$COMPLETION_SOUND" "$SHOW_NOTIFICATION"
-    "$APPLY_CUSTOM_CONFIG_TXT" "$CONFIG_TXT" "$DL_DIR" "${WOR_SELECTED_RELEASES:-}")
+    "$APPLY_CUSTOM_CONFIG_TXT" "$CONFIG_TXT" "$DL_DIR" "${WOR_SELECTED_RELEASES:-}" "${HDMI_MODE:-}")
 }
 
 restore_advanced_preferences() {
@@ -1307,6 +1308,7 @@ restore_advanced_preferences() {
   APPLY_CUSTOM_CONFIG_TXT="${ADVANCED_ORIGINAL_VALUES[20]}" CONFIG_TXT="${ADVANCED_ORIGINAL_VALUES[21]}"
   DL_DIR="${ADVANCED_ORIGINAL_VALUES[22]}"
   WOR_SELECTED_RELEASES="${ADVANCED_ORIGINAL_VALUES[23]}"
+  HDMI_MODE="${ADVANCED_ORIGINAL_VALUES[24]}"
 }
 
 macos_advanced_options() { #Collects customization and explicit release versions without changing them on Back.
@@ -1317,6 +1319,7 @@ macos_advanced_options() { #Collects customization and explicit release versions
   local advanced_jxa checkbox_spec result status line i uefi_pinned oobe_applicable pi4_applicable drivers_applicable windows_family config_scope lang_spec locale_spec l_code l_name sel_win_lang sound_spec sel_sound LC_ALL
   local uefi_versions driver_versions='' uefi_version_warning driver_version_warning='' selected_uefi selected_driver
   local uefi_dropdown_default driver_dropdown_default="$DRIVER_VER" uefi_version_labels driver_version_labels=''
+  local hdmi_choices config_txt_official config_txt_recommended selected_hdmi boot_editor_context
   uefi_pinned="$(uefi_pinned_version)"
   windows_family="$(windows_version_label)"
   advanced_option_applies oobe && oobe_applicable=1 || oobe_applicable=0
@@ -1342,6 +1345,10 @@ $(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$DRY_RUN	
 
   locale_spec="$(list_windows_locale_options)"
   sound_spec="$(wor_sound_options)"
+  hdmi_choices="$(hdmi_mode_choices "$RPI_MODEL")"
+  config_txt_official="$(config_txt_with_hdmi "$RPI_MODEL" official)"
+  config_txt_recommended="$(config_txt_with_hdmi "$RPI_MODEL" recommended)"
+  boot_editor_context="$(boot_config_editor_context)" || return 1
   prepare_release_choices uefi "$uefi_pinned"
   uefi_versions="$RELEASE_CHOICES" uefi_version_warning="$RELEASE_CHOICES_WARNING"
   uefi_dropdown_default="$RELEASE_CHOICES_DEFAULT" uefi_version_labels="$RELEASE_CHOICES_LABELS"
@@ -1351,7 +1358,7 @@ $(wor_advanced_label dryrun "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")	$DRY_RUN	
     driver_dropdown_default="$RELEASE_CHOICES_DEFAULT" driver_version_labels="$RELEASE_CHOICES_LABELS"
   fi
 
-  advanced_jxa="$(wor_jxa_window_lib; cat <<'JXA'
+  advanced_jxa="$(wor_jxa_window_lib; wor_boot_config_jxa; cat <<'JXA'
 ObjC.import('AppKit')
 ObjC.import('Foundation')
 ObjC.import('stdlib')
@@ -1386,6 +1393,14 @@ const uefiVersionWarning = ObjC.unwrap(args.objectAtIndex(30))
 const driverVersionWarning = ObjC.unwrap(args.objectAtIndex(31))
 const uefiVersionLabels = ObjC.unwrap(args.objectAtIndex(32)).split('\n').filter(Boolean)
 const driverVersionLabels = ObjC.unwrap(args.objectAtIndex(33)).split('\n').filter(Boolean)
+const hdmiChoicesSpec = ObjC.unwrap(args.objectAtIndex(34))
+const configTxtOfficial = ObjC.unwrap(args.objectAtIndex(35))
+const configTxtRecommended = ObjC.unwrap(args.objectAtIndex(36))
+const bootConfigContext = JSON.parse(ObjC.unwrap(args.objectAtIndex(37)))
+const hdmiChoices = hdmiChoicesSpec.split('\n').filter(Boolean).map(function(line) {
+  const parts = line.split('\t')
+  return { value: parts[0], label: parts[1], recommended: parts[1].indexOf('(recommended)') >= 0 }
+})
 
 const soundOptions = []
 let initialSoundIdx = 0
@@ -1456,7 +1471,7 @@ editMenu.addItemWithTitleActionKeyEquivalent('Copy', 'copy:', 'c')
 editMenu.addItemWithTitleActionKeyEquivalent('Paste', 'paste:', 'v')
 editMenu.addItemWithTitleActionKeyEquivalent('Select All', 'selectAll:', 'a')
 
-let window, applyConfigCheckbox, editConfigButton, cachePopup, winLangPopup, accountCheckbox, accountUsernameField, accountPasswordField, localeCheckbox, localePopup, playSoundCheckbox, soundPopup, soundLabel, notificationCheckbox
+let window, applyConfigCheckbox, editConfigButton, hdmiPopup, hdmiBadge, cachePopup, winLangPopup, accountCheckbox, accountUsernameField, accountPasswordField, localeCheckbox, localePopup, playSoundCheckbox, soundPopup, soundLabel, notificationCheckbox
 let checkboxes = []
 let versionRows = []
 let confirmed = false
@@ -1468,9 +1483,34 @@ function updateConfigEditableState() {
   editConfigButton.alphaValue = enabled ? 1.0 : 0.5
 }
 
+//Reflects whichever HDMI choice configTxtValue currently matches, including a hand edit the dropdown never produced itself
+function syncHdmiFromConfig() {
+  const state = worBootConfigCall(bootConfigContext, {config: configTxtValue})
+  const index = hdmiChoices.findIndex(function(choice) { return choice.value === state.hdmiMode })
+  if (index >= 0) hdmiPopup.selectItemAtIndex(index)
+  hdmiBadge.hidden = !hdmiChoices[hdmiPopup.indexOfSelectedItem].recommended
+}
+
+function hdmiChanged() {
+  const choice = hdmiChoices[hdmiPopup.indexOfSelectedItem]
+  try {
+    const state = worBootConfigCall(bootConfigContext, {config: configTxtValue, hdmiMode: choice.value})
+    configTxtValue = state.config
+    const index = hdmiChoices.findIndex(function(item) { return item.value === state.hdmiMode })
+    if (index >= 0) hdmiPopup.selectItemAtIndex(index)
+    hdmiBadge.hidden = !hdmiChoices[hdmiPopup.indexOfSelectedItem].recommended
+  } catch (error) {
+    worBootConfigAlert(String(error.message || error))
+    syncHdmiFromConfig()
+  }
+}
+
 function editConfigTxt() {
-  const result = worEditText(configTxtValue, 'View / Edit config.txt', 'These settings control Raspberry Pi firmware and boot behavior.', iconPath)
-  if (result.saved) configTxtValue = result.text
+  const result = worEditBootConfig(configTxtValue, bootConfigContext, iconPath)
+  if (result.saved) {
+    configTxtValue = result.text
+    syncHdmiFromConfig()
+  }
 }
 
 function updateAccountEditableState() {
@@ -1538,6 +1578,12 @@ const Controller = ObjC.registerSubclass({
       types: ['void', ['id']],
       implementation: function() {
         updateConfigEditableState()
+      }
+    },
+    'hdmiChanged:': {
+      types: ['void', ['id']],
+      implementation: function() {
+        hdmiChanged()
       }
     },
     'releaseChoiceToggled:': {
@@ -1661,11 +1707,22 @@ function addVersionSelector(index) {
   label.frame = $.NSMakeRect(0, height - 26, 120, 20)
   label.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
   view.addSubview(label)
-  const popup = $.NSPopUpButton.alloc.initWithFramePullsDown($.NSMakeRect(126, height - 30, width - 166, 26), false)
+  //rows[index].caution means staying on this pinned version is the tested default, not a user departing from it
+  const pinnedRecommended = rows[index].caution
+  const badgeWidth = 112
+  const accessoryWidth = pinnedRecommended ? badgeWidth + 8 : 0
+  const popup = $.NSPopUpButton.alloc.initWithFramePullsDown($.NSMakeRect(126, height - 30, width - 166 - accessoryWidth, 26), false)
   for (let i = 0; i < versions.length; i++) popup.addItemWithTitle($(labels[i]))
   popup.selectItemAtIndex(versions.indexOf(current))
   popup.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
   view.addSubview(popup)
+  if (pinnedRecommended) {
+    const badge = $.NSTextField.labelWithString($('Recommended'))
+    badge.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightSemibold)
+    badge.textColor = $.NSColor.systemGreenColor
+    badge.frame = $.NSMakeRect(width - 40 - badgeWidth, height - 28, badgeWidth, 22)
+    view.addSubview(badge)
+  }
   if (warningText.length > 0) {
     const note = $.NSTextField.wrappingLabelWithString(warningText)
     note.frame = $.NSMakeRect(0, 0, width - 40, 44)
@@ -1822,15 +1879,35 @@ y -= rowHeight
 updateLocaleEditableState()
 
 addSectionHeader('Raspberry Pi boot config')
+const hdmiBadgeWidth = 112
+const hdmiLabel = $.NSTextField.labelWithString('HDMI display:')
+hdmiLabel.frame = $.NSMakeRect(20, y, 120, 20)
+hdmiLabel.autoresizingMask = $.NSViewMaxXMargin | $.NSViewMinYMargin
+content.addSubview(hdmiLabel)
+hdmiPopup = $.NSPopUpButton.alloc.initWithFramePullsDown($.NSMakeRect(146, y - 4, width - 186 - hdmiBadgeWidth - 8, 26), false)
+for (let i = 0; i < hdmiChoices.length; i++) hdmiPopup.addItemWithTitle($(hdmiChoices[i].label))
+hdmiPopup.target = controller
+hdmiPopup.action = 'hdmiChanged:'
+hdmiPopup.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
+content.addSubview(hdmiPopup)
+hdmiBadge = $.NSTextField.labelWithString($('Recommended'))
+hdmiBadge.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightSemibold)
+hdmiBadge.textColor = $.NSColor.systemGreenColor
+hdmiBadge.frame = $.NSMakeRect(width - 20 - hdmiBadgeWidth, y, hdmiBadgeWidth, 22)
+hdmiBadge.autoresizingMask = $.NSViewMinXMargin | $.NSViewMinYMargin
+content.addSubview(hdmiBadge)
+syncHdmiFromConfig()
+y -= rowHeight
+
 applyConfigCheckbox = $.NSButton.checkboxWithTitleTargetAction(applyConfigLabel, controller, 'applyConfigToggled:')
 worAnnotateCheckbox(applyConfigCheckbox, applyConfigLabel, 'Recommended', $.NSColor.systemGreenColor)
-applyConfigCheckbox.frame = $.NSMakeRect(20, y, width - 200, 20)
+applyConfigCheckbox.frame = $.NSMakeRect(20, y, width - 220, 20)
 applyConfigCheckbox.state = applyConfigDefault === '1' ? 1 : 0
 applyConfigCheckbox.autoresizingMask = $.NSViewWidthSizable | $.NSViewMinYMargin
 content.addSubview(applyConfigCheckbox)
-editConfigButton = $.NSButton.buttonWithTitleTargetAction('View / Edit…', controller, 'editConfigClicked:')
+editConfigButton = $.NSButton.buttonWithTitleTargetAction('Boot Config Editor...', controller, 'editConfigClicked:')
 editConfigButton.bezelStyle = $.NSBezelStyleRounded
-editConfigButton.frame = $.NSMakeRect(width - 160, y - 6, 140, 28)
+editConfigButton.frame = $.NSMakeRect(width - 188, y - 6, 168, 28)
 editConfigButton.autoresizingMask = $.NSViewMinXMargin | $.NSViewMinYMargin
 content.addSubview(editConfigButton)
 updateConfigEditableState()
@@ -1994,6 +2071,7 @@ function selectedVersion(index, fallback) {
 }
 out.push(selectedVersion(2, currentUefiVersion))
 out.push(selectedVersion(3, currentDriverVersion))
+out.push(hdmiChoices[hdmiPopup.indexOfSelectedItem].value)
 out.push('---CONFIG_TXT---')
 out.push(configTxtValue)
 writeResult(out)
@@ -2001,7 +2079,7 @@ app.terminate(null)
 JXA
 )"
 
-  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$(wor_config_txt_label "$config_scope")" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" "$lang_spec" "$WIN_LANG" "$WINDOWS_ACCOUNT_SETUP" "$WINDOWS_LOCALE_SETUP" "$locale_spec" "$WOR_WINDOW_TITLE" "$sound_spec" "$PLAY_SOUND" "$(wor_completion_sound)" "$SHOW_NOTIFICATION" "$(wor_advanced_context "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")" "$(wor_setup_scope "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")" "$uefi_versions" "$uefi_dropdown_default" "$driver_versions" "$driver_dropdown_default" "$uefi_version_warning" "$driver_version_warning" "$uefi_version_labels" "$driver_version_labels" <<<"$advanced_jxa")" \
+  result="$(wor_osascript -l JavaScript - "$checkbox_spec" "$CONFIG_TXT" "$APPLY_CUSTOM_CONFIG_TXT" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$(wor_config_txt_label "$config_scope")" "$USE_CACHE" "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" "$lang_spec" "$WIN_LANG" "$WINDOWS_ACCOUNT_SETUP" "$WINDOWS_LOCALE_SETUP" "$locale_spec" "$WOR_WINDOW_TITLE" "$sound_spec" "$PLAY_SOUND" "$(wor_completion_sound)" "$SHOW_NOTIFICATION" "$(wor_advanced_context "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")" "$(wor_setup_scope "$windows_family" "$CAN_INSTALL_ON_SAME_DRIVE")" "$uefi_versions" "$uefi_dropdown_default" "$driver_versions" "$driver_dropdown_default" "$uefi_version_warning" "$driver_version_warning" "$uefi_version_labels" "$driver_version_labels" "$hdmi_choices" "$config_txt_official" "$config_txt_recommended" "$boot_editor_context" <<<"$advanced_jxa")" \
     || { warning "Could not display Advanced Options. Keeping the current settings."; return 1; }
   #config.txt and account fields are user-editable bytes; BSD sed rejects malformed UTF-8 under the
   #desktop locale, so parse the machine-readable result in byte mode after AppKit has finished.
@@ -2010,6 +2088,7 @@ JXA
   [ "$status" == OK ] || return 1
   selected_uefi="$(printf '%s\n' "$result" | sed -n '19p')"
   selected_driver="$(printf '%s\n' "$result" | sed -n '20p')"
+  selected_hdmi="$(printf '%s\n' "$result" | sed -n '21p')"
   release_version_is_valid "$selected_uefi" && grep -qxF "$selected_uefi" <<<"$uefi_versions" \
     || { warning "The selected UEFI release is not in the available choices. Keeping the current settings."; return 1; }
   if [ "$drivers_applicable" == 1 ];then
@@ -2057,6 +2136,9 @@ JXA
     set_selected_release_version drivers "$selected_driver" || return 1
   fi
 
+  case "$selected_hdmi" in
+    official | recommended | custom) HDMI_MODE="$selected_hdmi" ;;
+  esac
   CONFIG_TXT="$(printf '%s\n' "$result" | sed -n '/^---CONFIG_TXT---$/,$p' | tail -n +2)"
 }
 
@@ -2335,9 +2417,10 @@ gui_iot_connection_state() { #Saved current login, with factory defaults only fo
 }
 
 gui_iot_options_state() { #Output: current IoT-only options, without changing a prepared source.
-  local mode="${GUI_IOT_SOURCE_MODE:-official}" source='' hdmi connection
+  local mode="${GUI_IOT_SOURCE_MODE:-official}" source='' hdmi connection boot_editor_context
   hdmi="$(iot_core_hdmi_state)" || return 1
   connection="$(gui_iot_connection_state)" || return 1
+  boot_editor_context="$(boot_config_editor_context iot-core)" || return 1
   if [ -z "${GUI_IOT_SOURCE_MODE:-}" ] && [ -n "$SOURCE_FILE" ] && [ "${WOR_IOT_DOWNLOAD:-0}" == 0 ];then mode=local;fi
   [ "$mode" != local ] || source="${GUI_IOT_LOCAL_SOURCE:-$SOURCE_FILE}"
   WOR_IOT_ACCOUNT_PASSWORD="${IOT_CORE_ACCOUNT_PASSWORD:-}" jq --arg mode "$mode" --arg source "$source" --arg downloadDir "$DL_DIR" \
@@ -2358,6 +2441,7 @@ gui_iot_options_state() { #Output: current IoT-only options, without changing a 
     --arg passwordLabel "$(wor_iot_option_label accountPassword)" --arg accountHelp "$(wor_iot_option_label accountHelp)" \
     --arg languageSetup "${IOT_CORE_LANGUAGE_SETUP:-1}" --arg language "$(iot_core_language)" \
     --argjson languages "$(iot_core_language_options | jq -Rn '[inputs | split("\t") | {value: .[0], label: .[1]}]')" \
+    --argjson bootEditor "$boot_editor_context" \
     --arg languageSetupLabel "$(wor_iot_option_label languageSetup)" --arg languageLabel "$(wor_iot_option_label language)" \
     --arg languageHelp "$(wor_iot_option_label languageHelp)" \
     --arg wipeDrive "${IOT_CORE_WIPE_DRIVE:-0}" --arg wipeLabel "$(wor_iot_option_label wipeDrive)" \
@@ -2368,7 +2452,7 @@ gui_iot_options_state() { #Output: current IoT-only options, without changing a 
     --arg automaticAddressLabel "$(wor_iot_option_label automaticAddress)" --arg automaticAddressHelp "$(wor_iot_option_label automaticAddressHelp)" \
     '{mode: $mode, source: $source, downloadDir: $downloadDir, dryRun: ($dryRun == "1"),
       playSound: ($playSound == "1"), completionSound: $completionSound, showNotification: ($showNotification == "1"),
-      hdmiMode: $hdmiMode, hdmiConfig: $hdmiConfig, hdmi: $hdmi,
+      hdmiMode: $hdmiMode, hdmiConfig: $hdmiConfig, hdmi: $hdmi, bootConfigContext: $bootEditor,
       accountSetup: ($accountSetup == "1"), accountUsername: $accountUsername,
       accountPassword: env.WOR_IOT_ACCOUNT_PASSWORD,
       languageSetup: ($languageSetup == "1"), language: $language, languages: $languages,
@@ -2632,7 +2716,7 @@ macos_iot_options() {
   local state options options_jxa saved state_file
   GUI_IOT_OPTIONS_SAVED=0
   state="$(gui_iot_options_state)" || return 1
-  options_jxa="$(wor_jxa_window_lib; cat <<'JXA'
+  options_jxa="$(wor_jxa_window_lib; wor_boot_config_jxa; cat <<'JXA'
 ObjC.import('AppKit')
 ObjC.import('Foundation')
 ObjC.import('stdlib')
@@ -2723,7 +2807,7 @@ function updateHdmiControls() {
   const selected = state.hdmi.choices[Number(hdmiPopup.indexOfSelectedItem)]
   const custom = selected.value === 'custom'
   const recommended = selected.recommended === true
-  const editWidth = 140
+  const editWidth = 168
   const badgeWidth = 112
   const accessoryWidth = custom ? editWidth + 8 : (recommended ? badgeWidth + 8 : 0)
   const popupX = Math.max(124, Math.min(198, innerWidth - accessoryWidth - Math.ceil(hdmiPopup.fittingSize.width)))
@@ -2761,11 +2845,14 @@ function hdmiChanged() {
   updateHdmiControls()
 }
 function editHdmi() {
-  const defaults = state.hdmi.choices.find(function (choice) { return choice.value === '720p60' }).settings
-  const result = worEditText(hdmiConfig, state.labels.editHdmi, state.labels.hdmiEditorHelp, iconPath, defaults)
+  const result = worEditBootConfig(hdmiConfig, state.bootConfigContext, iconPath)
   if (result.saved) {
     hdmiConfig = result.text
     hdmiEdited = true
+    const index = state.hdmi.choices.findIndex(function(choice) { return choice.value === result.hdmiMode })
+    if (index >= 0) hdmiPopup.selectItemAtIndex(index)
+    previousHdmi = result.hdmiMode
+    updateHdmiControls()
   }
 }
 function choosePath(directory) {
@@ -2921,7 +3008,7 @@ hdmiPopup.target = controller
 hdmiPopup.action = 'hdmiChanged:'
 content.addSubview(hdmiPopup)
 hdmiRecommendedBadge = addRecommendedBadge()
-editHdmiButton = $.NSButton.buttonWithTitleTargetAction('View / Edit…', controller, 'editHdmi:')
+editHdmiButton = $.NSButton.buttonWithTitleTargetAction('Boot Config Editor...', controller, 'editHdmi:')
 editHdmiButton.bezelStyle = $.NSBezelStyleRounded
 content.addSubview(editHdmiButton)
 const hdmiHelp = $.NSTextField.wrappingLabelWithString($(state.labels.hdmiHelp))
@@ -3044,7 +3131,7 @@ linux_iot_options() {
   local state mode source_choices selected_label official_label selected_sound sound_choices options
   local source download_dir dry_run play_sound sound notification settings refresh_file refresh_requested response changed_action height
   local source_field folder_field dryrun_field play_field sound_field notification_field hdmi_field
-  local hdmi_mode hdmi_label hdmi_choices hdmi_config hdmi_edit_file hdmi_editor hdmi_defaults saved
+  local hdmi_mode hdmi_label hdmi_choices hdmi_config hdmi_edit_file hdmi_editor saved editor_hdmi_mode
   local account_field account_username_field account_password_field account_setup account_username account_password
   local language_setup_field language_field language_setup language language_label language_choices
   local wipe_field wipe_drive
@@ -3085,13 +3172,12 @@ linux_iot_options() {
     if [ "$hdmi_mode" == custom ];then
       hdmi_edit_file="$(mktemp)" || { warning "Cannot create the pending HDMI editor file."; return 1; }
       register_file_cleanup "$hdmi_edit_file"
+      register_file_cleanup "${hdmi_edit_file}.editor.json"
       printf '%s' "$hdmi_config" > "$hdmi_edit_file" \
         || { rm -f "$hdmi_edit_file"; warning "Cannot initialize the pending HDMI editor."; return 1; }
-      hdmi_editor="@yad --center --no-markup --width=$(wor_yad_width 700) --height=$(wor_yad_height 520) --title=$(printf '%q' "$WOR_WINDOW_TITLE | $(wor_iot_option_label editHdmi)") --window-icon=$(printf '%q' "$WOR_LOGO_PATH") --class=$(printf '%q' "$WOR_ICON_NAME") --text=$(printf '%q' "$(wor_iot_option_label hdmiEditorHelp)") --text-info --editable --in-place --confirm-save='Save video settings?' --filename=$(printf '%q' "$hdmi_edit_file") --button=Close:0 >/dev/null"
+      hdmi_editor="@env NO_UPDATE=1 bash $(printf '%q' "$DIRECTORY/install-wor-gui.sh") --boot-config-editor $(printf '%q' "$hdmi_edit_file") $(printf '%q' "$RPI_MODEL") iot-core"
       fields+=("--field=$(wor_iot_option_label editHdmi):BT" "$hdmi_editor")
-      hdmi_defaults="$(jq -r '.hdmi.choices[] | select(.value == "720p60") | .settings' <<<"$state")"
-      fields+=("--field=Reset to 720p defaults:BT" "@bash -c $(printf '%q' "printf '%s\n' $(printf '%q' "$hdmi_defaults") > $(printf '%q' "$hdmi_edit_file")")")
-      height=$((height+70))
+      height=$((height+36))
     fi
     dryrun_field=$((${#fields[@]} / 2 + 1))
     fields+=("--field=$(wor_iot_option_label dryrun):CHK" "$(jq -r 'if .dryRun then "TRUE" else "FALSE" end' <<<"$state")")
@@ -3178,10 +3264,12 @@ $(wor_iot_option_label automaticAddressHelp)" "${form_fields[@]}" \
     refresh_requested=0
     [ ! -s "$refresh_file" ] || refresh_requested=1
     rm -f "$refresh_file"
+    editor_hdmi_mode=''
     if [ -n "$hdmi_edit_file" ];then
       hdmi_config="$(cat "$hdmi_edit_file")" \
         || { rm -f "$hdmi_edit_file"; warning "Cannot read the pending HDMI editor."; return 1; }
-      rm -f "$hdmi_edit_file"
+      [ ! -f "${hdmi_edit_file}.editor.json" ] || editor_hdmi_mode="$(jq -r .hdmiMode "${hdmi_edit_file}.editor.json")"
+      rm -f "$hdmi_edit_file" "${hdmi_edit_file}.editor.json"
     fi
     [ "$response" == 0 ] || return 0
     mode="$(sed -n '1p' <<<"$options")"
@@ -3214,6 +3302,9 @@ $(wor_iot_option_label automaticAddressHelp)" "${form_fields[@]}" \
     hdmi_label="$(sed -n "${hdmi_field}p" <<<"$options")"
     hdmi_mode="$(jq -er --arg label "$hdmi_label" '.hdmi.choices[] | select(.menu_label == $label) | .value' <<<"$state")" \
       || { warning "Invalid IoT HDMI mode. No preferences were changed."; return 1; }
+    if [ -n "$editor_hdmi_mode" ] && [ "$hdmi_mode" == "$(jq -r .hdmiMode <<<"$state")" ];then
+      hdmi_mode="$editor_hdmi_mode"
+    fi
     if [ "$hdmi_mode" == custom ] && [ -z "$hdmi_config" ] && [ "$(jq -r .hdmiMode <<<"$state")" != custom ];then
       hdmi_config="$(jq -r '.hdmiMode as $mode | .hdmi.choices[] | select(.value == $mode) | .settings' <<<"$state")"
       [ -n "$hdmi_config" ] || hdmi_config="$(jq -r .hdmi.custom <<<"$state")"
@@ -3281,7 +3372,8 @@ macos_start_cli() {
           list_bids 10 >/dev/null || error "Failed to retrieve available Windows versions."
           [ "$WINDOWS_VER" == 'Windows 11' ] && BID="$(get_bid 11)" || BID="$(get_bid 10)"
           [ -n "$BID" ] || error "No compatible Windows build is available for $(rpi_board_label)."
-          set_default_config_txt
+          set_default_config_txt || error "Could not prepare boot settings for the selected model."
+          apply_boot_config_preferences || error "Correct the structured boot settings before continuing."
           [ -z "$WIN_LANG" ] && WIN_LANG="$(default_win_lang)"
         fi
         if is_iot_core && [ "$DRY_RUN" == 1 ];then
@@ -3753,6 +3845,7 @@ const Controller = ObjC.registerSubclass({
             //work before the first numbered step, such as clearing the cache, still has its own percentage
             const parsed = parseInt(subLine.split('\t')[1], 10)
             if (!isNaN(parsed)) {
+              if (currentPercent < 0) currentPercent = parsed
               bar.indeterminate = false
               bar.minValue = 0
               bar.maxValue = 100
@@ -3766,11 +3859,17 @@ const Controller = ObjC.registerSubclass({
               taskPercentLabel.stringValue = 'Sub-progress: ' + parsed + '%'
             }
           }
+          let detailText = ''
           if (taskText.length > 0) {
-            detailLabel.stringValue = taskText
+            detailText = taskText
           } else if (statusLine.length > 0) {
-            detailLabel.stringValue = statusLine.split('\t').slice(1).join('\t')
+            detailText = statusLine.split('\t').slice(1).join('\t')
           }
+          //a long-running step (such as Pi 3 image recompression) must look alive at a glance, not
+          //just in the smaller side label; only append when a real TASK line is driving the text,
+          //so a quick status with no fine-grained progress never gets a misleading "(0%)"
+          if (taskText.length > 0 && currentPercent >= 0) detailText += ' (' + currentPercent + '%)'
+          if (detailText.length > 0) detailLabel.stringValue = detailText
           taskPercentLabel.stringValue = taskPercentText
         } catch (e) {}
       }
@@ -3827,7 +3926,7 @@ const Controller = ObjC.registerSubclass({
 const controller = $.WorProgressController.alloc.init
 app.setDelegate(controller)
 
-const width = 680
+const width = 820
 const height = 330
 window = worMakeWindow({ width: width, height: height, title: windowTitle, delegate: controller })
 
@@ -3866,6 +3965,8 @@ content.addSubview(stepPercentLabel)
 detailLabel = $.NSTextField.labelWithString('')
 detailLabel.frame = $.NSMakeRect(progressX, 163, progressWidth - 170, 16)
 detailLabel.font = $.NSFont.systemFontOfSizeWeight(11, $.NSFontWeightRegular)
+//status text varies widely in length; truncate with an ellipsis instead of clipping mid-word
+detailLabel.lineBreakMode = $.NSLineBreakByTruncatingTail
 content.addSubview(detailLabel)
 
 taskPercentLabel = $.NSTextField.labelWithString('')
@@ -4043,6 +4144,134 @@ Full log: $saved_log"
     exit "$installer_status"
   done
 }
+
+linux_boot_config_editor() { #Input: pending config file, model, profile. Never writes a target or saves on Cancel.
+  local file="$1" profile="${3:-desktop}" context state next output response text mode values key field value type choices
+  local index disabled selected_mode raw_file draft raw_response write_file metadata_file error_message
+  local fields=() keys=() types=()
+  wor_init_yad_flags
+  RPI_MODEL="$2"
+  [ -f "$file" ] || { warning "The pending boot configuration is missing."; return 1; }
+  context="$(boot_config_editor_context "$profile")" || return 1
+  text="$(cat "$file")" || return 1
+  if ! state="$(jq --arg config "$text" '. + {config: $config}' <<<"$context" | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+    error_message="$(jq -r '.error // "Cannot read boot settings."' <<<"$state")"
+    yad "${yadflags[@]}" --no-markup --text="$error_message" --button=Close:0 >/dev/null
+    return 1
+  fi
+  while true;do
+    mode="$(jq -r .hdmiMode <<<"$state")"
+    choices="$(jq -r --arg mode "$mode" '[.hdmiChoices[] | select(.value == $mode)] + [.hdmiChoices[] | select(.value != $mode)] | map(.label) | join("!")' <<<"$state")"
+    fields=("--field=HDMI display:CB" "$choices") keys=() types=()
+    while IFS= read -r key ;do
+      field="$(jq -c --arg key "$key" '.fields[] | select(.key == $key)' <<<"$state")"
+      type="$(jq -r .type <<<"$field")" value="$(jq -r .value <<<"$field")"
+      disabled="$(jq -r '.disabled // false' <<<"$field")"
+      if [ "$disabled" == true ];then
+        fields+=("--field=$(jq -r .label <<<"$field") (advanced-controlled):RO" "$value")
+      else
+        case "$type" in
+          boolean) fields+=("--field=$(jq -r .label <<<"$field"):CHK" "$(wor_yad_bool "$value")") ;;
+          choice)
+            choices="$(jq -r --arg value "$value" '[.choices[] | select(.value == $value)] + [.choices[] | select(.value != $value)] | map(.label) | join("!")' <<<"$field")"
+            fields+=("--field=$(jq -r .label <<<"$field"):CB" "$choices") ;;
+          number) fields+=("--field=$(jq -r .label <<<"$field"):NUM" "$value!$(jq -r .min <<<"$field")!$(jq -r .max <<<"$field")!1") ;;
+          *) warning "Unsupported boot editor control: $type"; return 1 ;;
+        esac
+      fi
+      keys+=("$key") types+=("$type")
+    done < <(jq -r '.fields[].key' <<<"$state")
+    text="Use these controls instead of editing config.txt. Required boot settings are protected; user additions are kept separately."
+    [ "$profile" != iot-core ] || text="HDMI settings only. Required IoT boot settings remain unchanged in the verified image."
+    if [ "$(jq '.warnings | length' <<<"$state")" -gt 0 ];then
+      text="$text"$'\n\n'"$(jq -r '.warnings[:3] | join("\n")' <<<"$state")"
+    fi
+    response=0
+    output="$(yad "${yadflags[@]}" --no-markup --title="$WOR_WINDOW_TITLE | Boot Config Editor" \
+      --width="$(wor_yad_width 720)" --height="$(wor_yad_height 520)" --text="$text" --form --scroll \
+      "${fields[@]}" --button=Cancel:1 --button='Advanced Text Edit (Not Recommended)':2 --button='Restore defaults':3 --button=Save:0)" || response=$?
+    if [ "$response" == 3 ];then
+      text="$(jq -r .config <<<"$state")"
+      if next="$(jq --arg config "$text" '. + {config: $config, reset: true}' <<<"$context" \
+        | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+        state="$next"
+      else
+        yad "${yadflags[@]}" --no-markup --text="$(jq -r .error <<<"$next")" --button=Close:0 >/dev/null
+      fi
+      continue
+    fi
+    case "$response" in 0 | 2) ;; *) return 1 ;; esac
+    selected_mode="$(printf '%s\n' "$output" | sed -n '1p')"
+    selected_mode="$(jq -r --arg label "$selected_mode" '.hdmiChoices[] | select(.label == $label) | .value' <<<"$state")"
+    [ -n "$selected_mode" ] || { warning "Choose an available HDMI setting."; continue; }
+    values='{}'
+    for ((index=0;index<${#keys[@]};index++));do
+      key="${keys[$index]}" type="${types[$index]}"
+      field="$(jq -c --arg key "$key" '.fields[] | select(.key == $key)' <<<"$state")"
+      [ "$(jq -r '.disabled // false' <<<"$field")" != true ] || continue
+      value="$(printf '%s\n' "$output" | sed -n "$((index+2))p")"
+      case "$type" in
+        boolean)
+          case "$value" in TRUE) value=1 ;; FALSE) value=0 ;; *) warning "Invalid boot checkbox value."; return 1 ;; esac ;;
+        choice)
+          value="$(jq -er --arg label "$value" '.choices[] | select(.label == $label) | .value' <<<"$field")" \
+            || { warning "Invalid boot dropdown selection."; return 1; } ;;
+        number) [[ "$value" =~ ^([0-9]+)([.]0+)?$ ]] && value="${BASH_REMATCH[1]}" ;;
+      esac
+      values="$(jq --arg key "$key" --arg value "$value" '. + {($key): $value}' <<<"$values")" || return 1
+    done
+    text="$(jq -r .config <<<"$state")"
+    if ! next="$(jq --arg config "$text" --argjson values "$values" --arg mode "$selected_mode" --arg previous "$mode" \
+      '. + {config: $config, values: $values} + (if $mode == $previous then {} else {hdmiMode: $mode} end)' <<<"$context" \
+      | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+      yad "${yadflags[@]}" --no-markup --text="$(jq -r .error <<<"$next")" --button=Close:0 >/dev/null
+      continue
+    fi
+    state="$next"
+    if [ "$response" == 2 ];then
+      raw_file="$(mktemp)" || { warning "Cannot create the pending advanced editor."; return 1; }
+      register_file_cleanup "$raw_file"
+      draft="$(jq -r .userText <<<"$state")"
+      while true;do
+        printf '%s' "$draft" > "$raw_file" || return 1
+        raw_response=0
+        draft="$(yad "${yadflags[@]}" --no-markup --title="$WOR_WINDOW_TITLE | Advanced Text Edit - Not Recommended" \
+          --width="$(wor_yad_width 700)" --height="$(wor_yad_height 520)" --text-info --editable --filename="$raw_file" \
+          --text='Edit user additions only. Protected boot settings cannot be overridden. Unknown options are preserved, not certified.' \
+          --button=Cancel:1 --button=Save:0)" || raw_response=$?
+        [ "$raw_response" == 0 ] || break
+        text="$(jq -r .config <<<"$state")"
+        if next="$(jq --arg config "$text" --arg userText "$draft" '. + {config: $config, userText: $userText}' <<<"$context" \
+          | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+          state="$next"
+          break
+        fi
+        yad "${yadflags[@]}" --no-markup --text="$(jq -r .error <<<"$next")" --button=Close:0 >/dev/null
+      done
+      rm -f "$raw_file"
+      continue
+    fi
+    write_file="$(mktemp "${file}.new.XXXXXX")" || { warning "Cannot save the pending boot settings."; return 1; }
+    metadata_file="$(mktemp "${file}.editor.new.XXXXXX")" || { rm -f "$write_file"; warning "Cannot save the boot editor result."; return 1; }
+    register_file_cleanup "$write_file"
+    register_file_cleanup "$metadata_file"
+    jq -r .config <<<"$state" > "$write_file" && printf '%s\n' "$state" > "$metadata_file" \
+      && mv "$metadata_file" "${file}.editor.json" \
+      || { warning "Cannot save the pending boot configuration."; return 1; }
+    if ! mv "$write_file" "$file";then
+      rm -f "${file}.editor.json"
+      warning "Cannot save the pending boot configuration."
+      return 1
+    fi
+    return 0
+  done
+}
+
+if [ "${1:-}" == --boot-config-editor ];then
+  [ "$#" == 4 ] || error "Expected a pending boot file, Pi model and image profile."
+  linux_boot_config_editor "$2" "$3" "$4"
+  exit $?
+fi
 
 if is_macos ;then
   command -v osascript >/dev/null 2>&1 || error "Cannot present graphical interface: osascript is unavailable on this macOS host. Cannot continue."
@@ -4559,7 +4788,8 @@ fi
 }
 
 #if no user-supplied CONFIG_TXT variable, set it to initial value for yad to change later
-set_default_config_txt
+set_default_config_txt || error "Could not prepare boot settings for the selected model."
+apply_boot_config_preferences || error "Correct the structured boot settings before continuing."
 
 { #confirmation dialog and edit config.txt
 
@@ -4615,9 +4845,10 @@ To continue, click Flash. To review or change these settings, click Advanced. To
       release_refresh_file="$(mktemp)" || error "Could not create a release-selector refresh marker."
       release_refresh_requested=0
       config_edit_file="$(mktemp)"
+      register_file_cleanup "$config_edit_file"
+      register_file_cleanup "${config_edit_file}.editor.json"
       printf '%s' "$CONFIG_TXT" > "$config_edit_file"
-      config_editor_title="$WOR_WINDOW_TITLE | config.txt"
-      config_editor_action="@yad --center --no-markup --width=$(wor_yad_width 700) --height=$(wor_yad_height 520) --title=$(printf '%q' "$config_editor_title") --window-icon=$(printf '%q' "$WOR_LOGO_PATH") --class=$(printf '%q' "$WOR_ICON_NAME") --text-info --editable --in-place --confirm-save='Save config.txt changes?' --filename=$(printf '%q' "$config_edit_file") --button=Close:0 >/dev/null"
+      config_editor_action="@env NO_UPDATE=1 bash $(printf '%q' "$DIRECTORY/install-wor-gui.sh") --boot-config-editor $(printf '%q' "$config_edit_file") $(printf '%q' "$RPI_MODEL") desktop"
       uefi_pinned="$(uefi_pinned_version)"
       prepare_release_choices uefi "$uefi_pinned"
       uefi_versions="$RELEASE_CHOICES" uefi_version_warning="$RELEASE_CHOICES_WARNING"
@@ -4647,7 +4878,7 @@ To continue, click Flash. To review or change these settings, click Advanced. To
       fields+=("--field=$(wor_yad_label "$(wor_advanced_label uefi "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution uefi "$RPI_MODEL")" "$(wor_advanced_recommended uefi "$RPI_MODEL")")":CHK "$(wor_yad_bool "$(uefi_use_latest)")")
       if [ "$(uefi_use_latest)" != 1 ];then
         uefi_version_field=$((${#fields[@]} / 2 + 1))
-        fields+=("--field=UEFI version:CB" "$(printf '%s\n' "$uefi_version_labels" | awk 'NF {v=v ? v "!" $0 : $0} END {print v}')")
+        fields+=("--field=$(wor_yad_label 'UEFI version' 0 "$(wor_advanced_caution uefi "$RPI_MODEL")"):CB" "$(printf '%s\n' "$uefi_version_labels" | awk 'NF {v=v ? v "!" $0 : $0} END {print v}')")
         [ -z "$uefi_version_warning" ] || fields+=("--field=$uefi_version_warning:LBL" '')
       fi
       if advanced_option_applies drivers;then
@@ -4655,7 +4886,7 @@ To continue, click Flash. To review or change these settings, click Advanced. To
         fields+=("--field=$(wor_yad_label "$(wor_advanced_label drivers "$uefi_pinned" "$DRIVER_VER" "$RPI_MODEL")" "$(wor_advanced_caution drivers)" "$(wor_advanced_recommended drivers "$RPI_MODEL")")":CHK "$(wor_yad_bool "$DRIVERS_USE_LATEST")")
         if [ "$DRIVERS_USE_LATEST" != 1 ];then
           driver_version_field=$((${#fields[@]} / 2 + 1))
-          fields+=("--field=Driver version:CB" "$(printf '%s\n' "$driver_version_labels" | awk 'NF {v=v ? v "!" $0 : $0} END {print v}')")
+          fields+=("--field=$(wor_yad_label 'Driver version' 0 "$(wor_advanced_caution drivers)"):CB" "$(printf '%s\n' "$driver_version_labels" | awk 'NF {v=v ? v "!" $0 : $0} END {print v}')")
           [ -z "$driver_version_warning" ] || fields+=("--field=$driver_version_warning:LBL" '')
         fi
       fi
@@ -4761,6 +4992,19 @@ To continue, click Flash. To review or change these settings, click Advanced. To
         fields+=("--field=Choose Windows language":CB "$lang_items")
       fi
       fields+=("--field=Raspberry Pi boot config:LBL" '')
+      hdmi_choices="$(hdmi_mode_choices "$RPI_MODEL")"
+      config_txt_official="$(config_txt_with_hdmi "$RPI_MODEL" official)"
+      config_txt_recommended="$(config_txt_with_hdmi "$RPI_MODEL" recommended)"
+      current_hdmi_label="$(printf '%s\n' "$hdmi_choices" | awk -F'\t' -v mode="$(hdmi_mode)" '$1 == mode {print $2; exit}')"
+      hdmi_items=''
+      while IFS=$'\t' read -r hdmi_value hdmi_label ;do
+        [ -n "$hdmi_value" ] || continue
+        [ "$hdmi_label" == "$current_hdmi_label" ] && continue
+        hdmi_items="${hdmi_items:+$hdmi_items!}$hdmi_label"
+      done < <(printf '%s\n' "$hdmi_choices")
+      [ -z "$current_hdmi_label" ] || hdmi_items="${current_hdmi_label}${hdmi_items:+!$hdmi_items}"
+      hdmi_field=$((${#fields[@]} / 2 + 1))
+      fields+=("--field=HDMI display:CB" "$hdmi_items")
       config_button_value="$config_editor_action"
       [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ] || config_button_value='@disabled@'
       account_username_update="${account_username_field}:$(printf '%q' "$WINDOWS_ACCOUNT_USERNAME")"
@@ -4769,7 +5013,7 @@ To continue, click Flash. To review or change these settings, click Advanced. To
       config_checkbox_field=$((${#fields[@]} / 2 + 1))
       fields+=("--field=$(wor_config_txt_label "$config_scope") (recommended):CHK" "$(wor_yad_bool "$APPLY_CUSTOM_CONFIG_TXT")")
       config_button_field=$((${#fields[@]} / 2 + 1))
-      fields+=("--field=<b>View / Edit config.txt</b>:BTN" "$config_button_value")
+      fields+=("--field=<b>Boot Config Editor</b>:BTN" "$config_button_value")
       release_toggle_fields="$uefi_field${drivers_field:+|$drivers_field}"
       changed_action="case \"\$1\" in
         ${release_toggle_fields}) printf 'refresh\n' > $(printf '%q' "$release_refresh_file"); kill -USR1 \"\$YAD_PID\";;
@@ -4789,8 +5033,10 @@ To continue, click Flash. To review or change these settings, click Advanced. To
       button=$?
       [ ! -s "$release_refresh_file" ] || release_refresh_requested=1
       rm -f "$release_refresh_file"
+      boot_editor_result=''
+      [ ! -f "${config_edit_file}.editor.json" ] || boot_editor_result="$(cat "${config_edit_file}.editor.json")"
       [ -f "$config_edit_file" ] && CONFIG_TXT="$(cat "$config_edit_file")"
-      rm -f "$config_edit_file"
+      rm -f "$config_edit_file" "${config_edit_file}.editor.json"
 
       if [ "$button" == 0 ];then #everything in this if statement is skipped if Cancel is clicked
         yad_field_value() { printf '%s\n' "$output" | sed -n "${1}p"; }
@@ -4845,6 +5091,20 @@ To continue, click Flash. To review or change these settings, click Advanced. To
           fi
           [ "$(yad_field_value "$verify_field")" == TRUE ] && SKIP_IMAGE_VERIFICATION=1 || SKIP_IMAGE_VERIFICATION=0
           [ "$(yad_field_value "$config_checkbox_field")" == TRUE ] && APPLY_CUSTOM_CONFIG_TXT=1 || APPLY_CUSTOM_CONFIG_TXT=0
+          selected_hdmi_mode="$(hdmi_mode_from_label "$(yad_field_value "$hdmi_field")" "$RPI_MODEL")"
+          if [ -n "$boot_editor_result" ] && [ "$selected_hdmi_mode" == "$(hdmi_mode)" ];then
+            HDMI_MODE="$(jq -r .hdmiMode <<<"$boot_editor_result")"
+          elif [ "$selected_hdmi_mode" != custom ] && { [ -n "$boot_editor_result" ] || [ "$selected_hdmi_mode" != "$(hdmi_mode)" ]; };then
+            if ! boot_editor_result="$(boot_config_state "$CONFIG_TXT" desktop "$selected_hdmi_mode")";then
+              warning "$(jq -r .error <<<"$boot_editor_result")"
+              refresh_prompt=("--text=Correct the boot settings before saving Advanced Options.")
+              continue
+            fi
+            CONFIG_TXT="$(jq -r .config <<<"$boot_editor_result")"
+            HDMI_MODE="$(jq -r .hdmiMode <<<"$boot_editor_result")"
+          else
+            HDMI_MODE="$selected_hdmi_mode"
+          fi
           case "$(yad_field_value "$cache_field")" in
             'Re-download everything'*) USE_CACHE=0 ;;
             'Trust the cache'*) USE_CACHE=2 ;;

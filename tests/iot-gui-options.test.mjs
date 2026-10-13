@@ -24,7 +24,7 @@ const support = ["kill_process_tree", "gui_update_last_log", "gui_save_installer
   assert.ok(match, `Missing ${name}`);
   return match[0];
 }).join("\n");
-const native = helpers.match(/options_jxa="\$\(wor_jxa_window_lib; cat <<'JXA'\n([\s\S]*?)\nJXA/)[1];
+const native = helpers.match(/options_jxa="\$\(wor_jxa_window_lib; wor_boot_config_jxa; cat <<'JXA'\n([\s\S]*?)\nJXA/)[1];
 const linuxTarget = gui.match(/^linux_choose_target\(\) \{[\s\S]*?^\}/m);
 assert.ok(linuxTarget, "Missing combined Linux target picker");
 const flowStart = gui.indexOf("  step=target", gui.indexOf("macos_start_cli() {"));
@@ -691,7 +691,7 @@ describe("IoT HDMI Advanced Options", () => {
     const state = JSON.parse(result.stdout);
     assert.equal(state.hdmiMode, "official");
     assert.equal(state.hdmi.choices.find((choice) => choice.value === "custom").label, "Custom video settings");
-    assert.equal(state.labels.editHdmi, "View / Edit config.txt (video only)");
+    assert.equal(state.labels.editHdmi, "Boot Config Editor (video only)");
     assert.match(state.labels.hdmiEditorHelp, /merged into the existing IoT boot config\.txt/);
     assert.match(state.labels.hdmiEditorHelp, /Required Windows boot, memory and framebuffer settings are preserved/);
     assert.deepEqual(result.args, []);
@@ -756,25 +756,26 @@ describe("IoT HDMI Advanced Options", () => {
         ${save ? 'printf "%s|%s\\n" "$IOT_CORE_HDMI_MODE" "$IOT_CORE_HDMI_CONFIG"' : '[ "$(gui_iot_options_state)" == "$original" ] || exit 92'}
       `, { host: "Linux" });
       assert.equal(result.status, 0, result.stderr);
-      assert.ok(result.fields.includes("--field=View / Edit config.txt (video only):BT"));
-      assert.ok(result.fields.includes("--field=Reset to 720p defaults:BT"));
-      assert.ok(!result.firstFields.includes("--field=View / Edit config.txt (video only):BT"));
+      assert.ok(result.fields.includes("--field=Boot Config Editor (video only):BT"));
+      assert.ok(!result.fields.includes("--field=Reset to 720p defaults:BT"));
+      assert.ok(!result.firstFields.includes("--field=Boot Config Editor (video only):BT"));
       assert.deepEqual(result.args, []);
       if (save) assert.equal(result.stdout, "custom|hdmi_group=2\nhdmi_mode=16\n");
     });
   }
 
-  it("resets pending Linux custom HDMI text to the supplied 720p defaults", () => {
+  it("uses the shared editor result when restoring Linux custom HDMI defaults", () => {
     const result = run(`
       IOT_CORE_HDMI_MODE=custom IOT_CORE_HDMI_CONFIG=$'hdmi_group=2\\nhdmi_mode=16'
       yad() {
-        local index label value action
+        local index label value reset
         capture_fields "$TEST_DIR/fields" "$@"
         for ((index=0;index<\${#fields[@]};index+=2));do
           label="\${fields[$index]}" value="\${fields[$((index+1))]}"
-          if [ "$label" == "--field=Reset to 720p defaults:BT" ];then
-            action="\${value#@}"
-            bash -c "$action" || return 91
+          if [ "$label" == "--field=Boot Config Editor (video only):BT" ];then
+            reset="$(boot_config_editor_context iot-core | jq --arg config "$IOT_CORE_HDMI_CONFIG" '. + {config: $config, reset: true}' | command python3 "$DIRECTORY/src/lib/boot-config.py")" || return 91
+            jq -r .config <<<"$reset" > "$hdmi_edit_file"
+            printf '%s\\n' "$reset" > "\${hdmi_edit_file}.editor.json"
           fi
           printf '%s\\n' "\${value%%!*}"
         done
@@ -1656,6 +1657,7 @@ describe("Native HDMI preset and editor state", () => {
     const context = vm.createContext({
       state: {
         hdmi: { choices: hdmiChoices, custom: compatibility },
+        bootConfigContext: { profile: "iot-core" },
         labels: { editHdmi: "View / Edit config.txt (video only)", hdmiEditorHelp: "Merged video settings; required boot entries stay protected." },
       },
       hdmiPopup: { indexOfSelectedItem: 0, fittingSize: { width: 254 } }, hdmiLabel: {},
@@ -1681,19 +1683,19 @@ describe("Native HDMI preset and editor state", () => {
       const context = vm.createContext({
         state: {
           hdmi: { choices: hdmiChoices, custom: compatibility },
+          bootConfigContext: { profile: "iot-core" },
           labels: { editHdmi: "View / Edit config.txt (video only)", hdmiEditorHelp: "Merged video settings; required boot entries stay protected." },
         },
-        hdmiPopup: { indexOfSelectedItem: 3, fittingSize: { width: 254 } }, hdmiLabel: {},
+        hdmiPopup: { indexOfSelectedItem: 3, fittingSize: { width: 254 }, selectItemAtIndex(index) { this.indexOfSelectedItem = index; } }, hdmiLabel: {},
         editHdmiButton: {}, hdmiRecommendedBadge: {}, innerWidth: 712,
         previousHdmi: "custom", hdmiConfig: original, hdmiEdited: true, iconPath: "", accountCheckbox: { state: 0 },
-        worEditText: (...args) => { editorArguments = args; return { saved: save, text: "hdmi_group=1\nhdmi_mode=16" }; },
+        worEditBootConfig: (...args) => { editorArguments = args; return { saved: save, text: "hdmi_group=1\nhdmi_mode=16", hdmiMode: "custom" }; },
         $: { NSMakeRect: () => ({}) },
       });
       vm.runInContext(hdmiFunctions, context);
       vm.runInContext("editHdmi()", context);
-      assert.equal(editorArguments[1], "View / Edit config.txt (video only)");
-      assert.match(editorArguments[2], /required boot entries stay protected/);
-      assert.equal(editorArguments[4], compatibility);
+      assert.equal(editorArguments[1].profile, "iot-core");
+      assert.equal(editorArguments[2], "");
       context.hdmiPopup.indexOfSelectedItem = 0;
       vm.runInContext("hdmiChanged()", context);
       context.hdmiPopup.indexOfSelectedItem = 3;

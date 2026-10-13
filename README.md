@@ -51,6 +51,8 @@ It does not turn IoT Core into desktop Windows or add an ARM64 IoT Core image.
     - [Existing Windows ISO](#existing-windows-iso)
     - [Pi 3 low-memory image preparation](#pi-3-low-memory-image-preparation)
     - [UEFI firmware defaults](#uefi-firmware-defaults)
+    - [Boot Config Editor](#boot-config-editor)
+    - [HDMI display defaults](#hdmi-display-defaults)
     - [Pi 4 RAM unlock](#pi-4-ram-unlock)
     - [Context-aware Advanced Options](#context-aware-advanced-options)
     - [Offline Windows setup](#offline-windows-setup)
@@ -522,7 +524,7 @@ Window chrome remains native to each desktop. On Ubuntu, GNOME/Mutter draws the 
 
 The front-end is never chosen automatically. `DISPLAY` is also set over SSH and in CI, and a tool that erases a drive should do exactly what it was asked to do.
 
-An **Advanced Options** window is reachable from the confirmation screen on both platforms. It shows [applicable options for the selected image and target](#context-aware-advanced-options), plus an editable `config.txt`: [offline Windows setup](#offline-windows-setup), the [Pi 4 RAM unlock](#pi-4-ram-unlock), [UEFI selection](#uefi-firmware-defaults), latest versus pinned drivers, whether to skip the final written-image verification, and dry run. Latest stable UEFI is selected by default for Pi 3; Pi 4/5 retain their pinned defaults. `APPLY_CUSTOM_CONFIG_TXT` controls whether the editable `config.txt` is applied at all; unchecking it dims the editor and leaves the UEFI firmware package's own default in place. A **Downloaded files** menu selects the [cache mode](#download-cache), since it has three settings rather than two.
+An **Advanced Options** window is reachable from the confirmation screen on both platforms. It shows [applicable options for the selected image and target](#context-aware-advanced-options), plus an editable `config.txt`: [offline Windows setup](#offline-windows-setup), the [Pi 4 RAM unlock](#pi-4-ram-unlock), [UEFI selection](#uefi-firmware-defaults), latest versus pinned drivers, an [HDMI display selector](#hdmi-display-defaults), whether to skip the final written-image verification, and dry run. Latest stable UEFI is selected by default for Pi 3; Pi 4/5 retain their pinned defaults. `APPLY_CUSTOM_CONFIG_TXT` controls whether the editable `config.txt` is applied at all; unchecking it dims the editor and leaves the UEFI firmware package's own default in place. A **Downloaded files** menu selects the [cache mode](#download-cache), since it has three settings rather than two.
 
 Administrator access is requested through a native password dialog on both platforms — there is no terminal to type into.
 
@@ -692,8 +694,10 @@ Every prompt has a matching environment variable.
 | `DEVICE`                    | _ask_                                      | Target drive, e.g. `/dev/sda` or `/dev/disk4`                                                                           |
 | `CAN_INSTALL_ON_SAME_DRIVE` | _ask_                                      | `1` to install Windows onto the target itself, `0` to make recovery media for another drive                             |
 | `SOURCE_FILE`               | unset                                      | Path to an existing Windows ARM64 ISO, instead of downloading                                                           |
-| `CONFIG_TXT`                | shipped template                           | Body of `config.txt` written to the boot partition                                                                      |
+| `CONFIG_TXT`                | shipped template                           | Body of `config.txt`; validated and normalized before writing, with required UEFI entries protected                       |
+| `BOOT_CONFIG_SETTINGS`     | unset                                      | JSON object of supported desktop boot settings; booleans map to firmware `0`/`1`, using the same validation as the GUI     |
 | `APPLY_CUSTOM_CONFIG_TXT`   | `1`                                        | `0` leaves the UEFI firmware package's own `config.txt` in place                                                        |
+| `HDMI_MODE`                 | Pi 4: `recommended`; Pi 3/5: `official`   | Desktop HDMI override written into `config.txt`: `official` (no override), `recommended` (this model's established override, Pi 4 only today), or `custom` (validated settings with user additions preserved) |
 | `OOBE_NETWORK_BYPASS`       | `1` (Windows 11 only)                     | `0` leaves the standard Windows 11 network/account setup flow; ignored for Windows 10                                  |
 | `WINDOWS_ACCOUNT_SETUP`     | `0`                                        | `1` creates the optional local Windows administrator configured in Advanced Options                                     |
 | `WINDOWS_ACCOUNT_USERNAME`  | unset                                      | Username for the optional local Windows account                                                                         |
@@ -798,7 +802,10 @@ Explicitly configured non-default versions and versions you have already selecte
 are retained. Choose another tag to pin that version; checking latest again hides
 the dropdown and remembers its selection. Merely opening Advanced Options while
 latest remains enabled does not change the retained fallback. Pi 4/5 UEFI continue
-to start with their configured pins, not the latest-firmware recommendation.
+to start with their configured pins, not the latest-firmware recommendation. Because
+staying pinned is itself the tested default there, the **UEFI version** dropdown
+carries its own green **Recommended** badge on Pi 4/5, alongside the checkbox's
+**Not recommended** marking of the unused latest-firmware option.
 
 The lists come from each upstream GitHub repository's release catalogue, filtered
 to tags with an uploaded ZIP package for the selected Pi. Releases marked draft or
@@ -838,6 +845,106 @@ Pi 4 remains pinned because of its documented Ethernet and microSD regressions.
 Pi 3 reaching Windows PE with latest UEFI does not resolve the separate memory
 limitations of installing Windows on a 1 GB board.
 
+### Boot Config Editor
+
+In **Advanced Options**, leave **Use customized config.txt** enabled and click
+**Boot Config Editor...**. The next screen reads the current configuration and
+provides checkboxes for supported on/off settings, dropdowns for enumerated values,
+and a numeric control for a custom HDMI mode. Only relevant controls are shown.
+Examples include overscan, the serial console, early boot serial messages, Pi 4 CPU
+boost, Pi 5 power/clock options, and the Pi 3 UART troubleshooting clock. Existing
+template defaults are retained; opening the editor does not change a setting.
+
+Required UEFI bootloader, architecture, interrupt-controller, device-tree memory
+and model-specific boot entries are protected, not presented as arbitrary booleans.
+For example, `disable_commandline_tags=2` is not a true/false switch, and the Pi 5
+template's `pciex4_reset` value is retained verbatim. The written file separates:
+
+- **Managed boot settings**, between `# >>> WoR-Flasher managed boot settings >>>`
+  and `# <<< WoR-Flasher managed boot settings <<<`. Use the supported controls
+  rather than hand-editing this section. Required entries follow the selected model.
+- **User additions**, below the managed block. **Advanced Text Edit (Not Recommended)**
+  edits this section only. Comments, additional parameters, overlays and conditional
+  filters are preserved. Adding a supported unconditional setting here reads it back
+  into the corresponding control; required boot entries cannot be overridden.
+
+**Save** validates the result; **Cancel** leaves the caller's configuration unchanged.
+**Restore defaults** resets supported choices while preserving user additions.
+Changing an HDMI preset preserves other boot choices and user additions. Advanced
+Options Back discards pending editor changes too. Switching models updates a managed
+configuration's required entries without dropping its user additions; a legacy,
+entirely hand-written configuration is not silently rewritten to suit another model.
+In recovery mode the boot configuration still applies to the recovery media, not
+the separate Windows destination drive.
+
+The shared GUI/CLI validator checks syntax, firmware's 98-character entry limit,
+known boolean and numeric values, HDMI groups/modes/timings and required boot entries.
+Duplicate known scalar settings within the same contiguous conditional block are removed,
+keeping the last value and reporting the cleanup. Repeated `dtoverlay`, `dtparam`
+and `gpio` commands, and settings in different conditional blocks, are **not**
+globally deduplicated. Conditional settings that can override a simple control make
+that control read-only until the advanced override is removed.
+
+Unknown parameters remain in user additions with an explicit **not validated**
+warning. This is not a firmware/monitor/Windows compatibility certification.
+`include` files are rejected because the editor cannot validate or deliver those
+external files. Validation runs before image preparation or target-disk writes.
+The rules follow Raspberry Pi's documented
+[file format](https://www.raspberrypi.com/documentation/computers/config_txt.html#file-format),
+[conditional filters](https://www.raspberrypi.com/documentation/computers/config_txt.html#conditional-filters)
+and [legacy HDMI options](https://www.raspberrypi.com/documentation/computers/legacy_config_txt.html#hdmi-mode).
+
+For desktop automation, `customization.bootSettings` in the existing JSON configuration
+accepts supported firmware keys with actual JSON booleans, for example on Pi 3/4:
+
+```json
+{
+  "customization": {
+    "bootSettings": {
+      "enable_uart": false,
+      "uart_2ndstage": false,
+      "disable_overscan": true
+    }
+  }
+}
+```
+
+The environment equivalent is `BOOT_CONFIG_SETTINGS='{"enable_uart":false}'`.
+These use the same parser and validation as the controls; unsupported/protected
+keys are rejected. `core_freq: null` selects firmware defaults. GUI edits after
+loading these preferences remain authoritative.
+
+IoT Core uses the same simple editor for **video only** when **Custom video settings**
+is selected. Its four allowed HDMI keys, legacy mode limits, verified FFU and
+mandatory written-image read-back remain unchanged. Advanced IoT editing is still
+HDMI-only; it cannot expose or replace boot, memory or other firmware settings.
+
+### HDMI display defaults
+
+| Target | Default HDMI selection | Override behavior |
+| ------ | ----------------------- | ------------------ |
+| Pi 3 / Pi 5 | Official image default | No override; `config.txt` carries no `hdmi_*` lines |
+| Pi 4 | Recommended (`1920 x 1200 / 60 Hz`) | An unexamined upstream default inherited before this fork, preserved as the tested baseline |
+
+An **HDMI display** selector in Advanced Options, next to **Boot Config Editor**,
+behaves like the UEFI/driver pickers: **Official image default** writes no `hdmi_*`
+override at all, letting firmware/EDID auto-negotiate the mode; the model's own
+**Recommended** choice (shown only where one exists; Pi 4 today) applies its
+established `hdmi_drive`/`hdmi_group`/`hdmi_mode`/`hdmi_cvt` lines; **Custom video
+settings** keeps the chosen values subject to shared validation. Boot Config Editor
+offers controls for existing custom HDMI values, with less common timings available
+through the clearly marked advanced user-additions editor.
+
+This selector has no Windows-version dependency: the display mode is negotiated
+between the Pi's firmware/UEFI and the monitor before Windows's own display driver
+loads, independent of whether Windows 10 or Windows 11 is being installed. There is
+no tested evidence yet for a different recommended resolution on Pi 3 or Pi 5, so
+neither offers a named preset beyond official and custom; the Pi 4 default itself is
+inherited, unexamined upstream configuration, not a value re-verified by this fork.
+
+For configuration/non-interactive use, set `customization.hdmiMode` to `official`,
+`recommended` or `custom`; omit it to follow the selected Pi model's default.
+
 ### Pi 4 RAM unlock
 
 On Raspberry Pi 4 only, the 3 GB RAM limit is disabled automatically after WoR-PE installs Windows and reboots. This setting is ignored for every other model. To keep the limit enabled:
@@ -866,6 +973,9 @@ describe the settings. Inapplicable controls are omitted rather than shown disab
 - **Windows image language** is omitted for an imported or previously extracted ISO;
   changing a language preference cannot change the language already inside that image.
   Keyboard and regional settings remain separately configurable.
+- **HDMI display** always appears, independent of Windows version or installation mode.
+  Its **Recommended** choice is shown only where this fork has an established override
+  (Pi 4 today); Pi 3/5 default to **Official image default**.
 
 The offline-setup bypass is not displayed, summarized or applied for Windows 10,
 even if its saved preference or configuration value is enabled. Switching back to

@@ -88,6 +88,7 @@ exit "$TEST_INSTALLER_STATUS"
       list_bids() { :; }
       get_bid() { printf '19045.3803\\n'; }
       set_default_config_txt() { :; }
+      apply_boot_config_preferences() { :; }
       darwin_list_device_choices() { printf '/dev/mock-only\\tFixture disk\\n'; }
       macos_choose_device() { printf '/dev/mock-only\\tFixture disk\\n'; }
       is_safe_target_device() { [ "$1" == /dev/mock-only ]; }

@@ -423,8 +423,8 @@ static_checks() {
     && grep -qF 'output="$(GTK_OVERLAY_SCROLLING=0 yad "${yadflags[@]}" --response=0 --use-markup --changed-action="$changed_action" --width="$(wor_yad_width 720)" --height="$(wor_yad_height "$WOR_YAD_SCREEN_HEIGHT")"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--vscroll-policy=auto' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- "advanced_text=\$'<big><b>Advanced Options</b></big>" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'config_editor_title="$WOR_WINDOW_TITLE | config.txt"' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- '--text-info --editable --in-place' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--title="$WOR_WINDOW_TITLE | Boot Config Editor"' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--text-info --editable --filename="$raw_file"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Choose Cached Windows Files' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'Current download folder:' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF '<b>Change Download Folder</b>' "$REPO_DIR/install-wor-gui.sh" \
@@ -595,7 +595,7 @@ disk5 Second drive"
     pi5="$CONFIG_TXT"
     RPI_MODEL=4
     set_default_config_txt
-    [ "$CONFIG_TXT" == "$(default_config_txt 4)" ] || exit 1
+    [ "$CONFIG_TXT" == "$(config_txt_with_hdmi 4 recommended)" ] || exit 1
     [ "$CONFIG_TXT" != "$pi5" ] || exit 1
     CONFIG_TXT="$CONFIG_TXT
 #edited by the user"
@@ -756,7 +756,7 @@ disk5 Second drive"
     && grep -qF "RPI_MODEL=''" "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF -- '--form --columns=2' "$REPO_DIR/install-wor-gui.sh" \
     && ! grep -qF -- "--button='<b>View / Edit config.txt...</b>':3" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF -- '--field=<b>View / Edit config.txt</b>:BTN' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF -- '--field=<b>Boot Config Editor</b>:BTN' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF -- '--changed-action="$changed_action"' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'account_username_value=' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF "account_username_value='@disabled@'" "$REPO_DIR/install-wor-gui.sh" \
@@ -895,17 +895,18 @@ disk5 Second drive"
     && grep -qF 'if [ ! -z "$CONFIG_TXT" ] && [ "$APPLY_CUSTOM_CONFIG_TXT" == 1 ];then' "$REPO_DIR/install-wor.sh" \
     && grep -qF "applyConfigCheckbox = \$.NSButton.checkboxWithTitleTargetAction(applyConfigLabel, controller, 'applyConfigToggled:')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'function updateConfigEditableState() {' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "editConfigButton = \$.NSButton.buttonWithTitleTargetAction('View / Edit…', controller, 'editConfigClicked:')" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF "editConfigButton = \$.NSButton.buttonWithTitleTargetAction('Boot Config Editor...', controller, 'editConfigClicked:')" "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'editConfigButton.enabled = enabled' "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF "const result = worEditText(configTxtValue, 'View / Edit config.txt'" "$REPO_DIR/install-wor-gui.sh" \
-    && grep -qF 'if (result.saved) configTxtValue = result.text' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'const result = worEditBootConfig(configTxtValue, bootConfigContext, iconPath)' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if (result.saved) {' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'configTxtValue = result.text' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'function worEditText(value, title, message, iconPath, defaults)' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'return { saved: true, text: ObjC.unwrap(editor.string) }' "$REPO_DIR/src/lib/gui.sh" \
     && grep -qF 'out.push(configTxtValue)' "$REPO_DIR/install-wor-gui.sh" \
     && pass "Applying the customized config.txt is a togglable checkbox that enables its separate editor on macOS" \
     || fail "Apply-customized-config.txt toggle is missing or incomplete"
   apply_config_line="$(grep -anF "applyConfigCheckbox = $.NSButton.checkboxWithTitleTargetAction(applyConfigLabel," "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
-  config_editor_line="$(grep -anF "editConfigButton = $.NSButton.buttonWithTitleTargetAction('View / Edit…'" "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
+  config_editor_line="$(grep -anF "editConfigButton = $.NSButton.buttonWithTitleTargetAction('Boot Config Editor...'" "$REPO_DIR/install-wor-gui.sh" | cut -d: -f1)"
   [ -n "$apply_config_line" ] && [ -n "$config_editor_line" ] && [ "$apply_config_line" -lt "$config_editor_line" ] \
     && [ "$((config_editor_line - apply_config_line))" -lt 10 ] \
     && pass "Use customized config.txt and its editor button share one settings row" \
@@ -1357,6 +1358,14 @@ SH
     && pass "progress is captured within each step and carried into both progress bars" \
     || fail "progress still jumps a whole step at a time"
 
+  #a long-running step (Pi 3 image recompression, pv transfers, …) used to look frozen because the
+  #main detail line either kept a stale sentence or lost its percentage to a smaller side label
+  grep -qF "if (taskText.length > 0 && currentPercent >= 0) detailText += ' (' + currentPercent + '%)'" "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if (currentPercent < 0) currentPercent = parsed' "$REPO_DIR/install-wor-gui.sh" \
+    && grep -qF 'if (currentPercent < 0) currentPercent = within' "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the progress window's detail line carries a live percentage so a long step still looks alive" \
+    || fail "the progress window's detail line can go quiet during a long-running step"
+
   copy_error_message="$(run_in_engine 'copy_local_file_with_progress test /tmp/does-not-exist /tmp/wor-flasher-copy-test; darwin_report_copy_failure /tmp "copy test" user' 2>&1)"
   printf '%s' "$copy_error_message" | grep -qF 'Last copy error: source file does not exist: /tmp/does-not-exist' \
     && pass "copy failure diagnostics keep the real copy error in the GUI message" \
@@ -1436,7 +1445,7 @@ SH
     && pass "the progress window can be aborted, shows step x of y, and has close and minimise" \
     || fail "the progress window cannot be aborted or lacks its window controls"
 
-  grep -qF 'const width = 680' "$REPO_DIR/install-wor-gui.sh" \
+  grep -qF 'const width = 820' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const height = 330' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const logoWidth = 56' "$REPO_DIR/install-wor-gui.sh" \
     && grep -qF 'const logoHeight = 173' "$REPO_DIR/install-wor-gui.sh" \
@@ -1447,6 +1456,11 @@ SH
     && grep -qF 'abortButton.frame = $.NSMakeRect(Math.round((width - abortWidth) / 2)' "$REPO_DIR/install-wor-gui.sh" \
     && pass "the macOS progress window is larger, branded, and has a centered footer" \
     || fail "the macOS progress window lost its larger branded layout"
+
+  #a long status() line used to clip mid-word with no ellipsis, looking like a rendering bug
+  grep -qF "detailLabel.lineBreakMode = \$.NSLineBreakByTruncatingTail" "$REPO_DIR/install-wor-gui.sh" \
+    && pass "the progress window's detail line truncates long status text with an ellipsis instead of clipping it" \
+    || fail "the progress window's detail line can silently clip status text mid-word"
 
   #clicking the Dock icon sends aevt/rapp; without a handler a minimised window can never be restored
   gui_windows="$(grep -cF 'window = worMakeWindow({' "$REPO_DIR/install-wor-gui.sh")"
@@ -1942,14 +1956,14 @@ shared_function_checks() {
 
   #the CLI banner and both GUI overviews must describe a run from one place, or they drift apart
   summary_labels="$(run_in_engine 'settings_summary | cut -f1 | tr "\n" ","')"
-  [ "$summary_labels" == 'WoR-Flasher version,Target drive,Target hardware,Operating system,Installation mode,Offline OOBE,Windows local account,Windows keyboard and regional settings,Pi 4 RAM unlock,UEFI firmware,Windows ARM64 drivers,Custom config.txt,Hide empty drives,Verify written image,Downloaded files,Dry run,Download folder,Log file,' ] \
+  [ "$summary_labels" == 'WoR-Flasher version,Target drive,Target hardware,Operating system,Installation mode,Offline OOBE,Windows local account,Windows keyboard and regional settings,Pi 4 RAM unlock,UEFI firmware,Windows ARM64 drivers,HDMI display,Custom config.txt,Hide empty drives,Verify written image,Downloaded files,Dry run,Download folder,Log file,' ] \
     && [ "$(run_in_engine 'settings_summary | awk -F"\t" "NF != 2" | wc -l | tr -d " "')" == 0 ] \
     && pass "settings_summary emits one tab-separated label/value pair per setting" \
     || fail "settings_summary is missing settings or emits malformed lines: $summary_labels"
 
   #every toggle the Advanced Options windows offer has to be visible on the confirmation screen
     [ "$(run_in_engine 'WOR_RUN_ID=summary-test DRY_RUN=1 SKIP_IMAGE_VERIFICATION=1 USE_CACHE=2 APPLY_CUSTOM_CONFIG_TXT=0 UEFI_USE_LATEST=1 DRIVERS_USE_LATEST=0 OOBE_NETWORK_BYPASS=0 PI4_AUTO_DISABLE_3GB=0 HIDE_EMPTY_DRIVES=0 WINDOWS_LOCALE_SETUP=0 settings_summary | tail -n +2 | cut -f2 | tr "\n" "|"')" \
-      == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-US) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Windows setup will ask|Windows setup defaults|Disabled|Latest|Pinned (v0.17)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|/tmp/wor-test-dl/logs/wor-flasher-summary-test.log|" ] \
+      == "/dev/does-not-exist|Raspberry Pi 4|Windows 11 (en-US) arm64 build 22631.2861|Install Windows onto this drive|Disabled|Windows setup will ask|Windows setup defaults|Disabled|Latest|Pinned (v0.17)|Recommended (1920 x 1200 / 60 Hz)|Using the firmware default|No|No (skipped)|Trust the cache without checking|Yes (no changes will be written)|/tmp/wor-test-dl|/tmp/wor-test-dl/logs/wor-flasher-summary-test.log|" ] \
     && pass "every Advanced Options toggle changes what the confirmation screens show" \
     || fail "a setting is not reflected in settings_summary"
 
@@ -2015,9 +2029,10 @@ JSON
     || fail "uefi_pinned_version does not match the pinned UEFI versions"
 
   #the CLI used to write the firmware's own config.txt while the GUI wrote the shipped template
+  #Pi 4 (run_in_engine's model) defaults HDMI_MODE to recommended, so its tested override belongs here too
   config_from_engine="$(run_in_engine 'set_default_config_txt; printf "%s" "$CONFIG_TXT"')"
   [ -n "$config_from_engine" ] \
-    && [ "$config_from_engine" == "$(printf '\n\n%s' "$(cat "$REPO_DIR/config-templates/pi4.config.txt")")" ] \
+    && [ "$config_from_engine" == "$(run_in_engine 'config_txt_with_hdmi 4 recommended')" ] \
     && [ "$(run_in_engine 'CONFIG_TXT=mine; set_default_config_txt; printf "%s" "$CONFIG_TXT"')" == mine ] \
     && grep -qF 'set_default_config_txt' "$REPO_DIR/install-wor.sh" \
     && pass "a CLI run and a GUI run start from the same shipped config.txt" \
@@ -2272,6 +2287,7 @@ rc=1" ] \
   mkdir -p "$hook_bootstrap_dir/source/config-templates" "$hook_bootstrap_dir/source/src/lib" "$hook_bootstrap_dir/source/src/config"
   cp "$REPO_DIR/install-wor.sh" "$hook_bootstrap_dir/source/"
   cp "$REPO_DIR/src/lib/metadata.sh" "$REPO_DIR/src/lib/dependencies.sh" "$REPO_DIR/src/lib/paths.sh" "$REPO_DIR/src/lib/cleanup.sh" "$REPO_DIR/src/lib/gui.sh" "$hook_bootstrap_dir/source/src/lib/"
+  cp "$REPO_DIR/src/lib/boot-config.py" "$REPO_DIR/src/lib/boot-config-gui.js" "$hook_bootstrap_dir/source/src/lib/"
   cp -R "$REPO_DIR/src/lib/pi3-boot-refresh" "$hook_bootstrap_dir/source/src/lib/"
   cp "$REPO_DIR/src/config/metadata.json" "$REPO_DIR/src/config/metadata.schema.json" "$hook_bootstrap_dir/source/src/config/"
   cp -R "$REPO_DIR/config-templates/." "$hook_bootstrap_dir/source/config-templates/"

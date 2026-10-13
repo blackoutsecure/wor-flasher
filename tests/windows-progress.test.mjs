@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import vm from "node:vm";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const engine = readFileSync(join(root, "install-wor.sh"), "utf8");
@@ -231,4 +232,70 @@ describe("Windows-specific written-image verification", () => {
       assert.doesNotMatch(result.progress, /^TASK\t100\tWindows .* written image verified/m);
     });
   }
+});
+
+describe("GUI progress window detail line", () => {
+  //a long-running step such as Pi 3 image recompression used to leave the detail line static (no
+  //visible sign of life) once a generic TASK label replaced the richer status sentence that preceded it
+  const gui = readFileSync(join(root, "install-wor-gui.sh"), "utf8");
+  const tickStart = gui.indexOf("const lines = content.split('\\n')");
+  const tickEnd = gui.indexOf("taskPercentLabel.stringValue = taskPercentText", tickStart);
+  assert.ok(tickStart >= 0 && tickEnd > tickStart, "Missing the progress window's tick: parsing logic");
+  const tickBody = gui.slice(tickStart, tickEnd) + "taskPercentLabel.stringValue = taskPercentText";
+
+  function renderTick(progressFileContent) {
+    const label = () => ({ stringValue: "" });
+    const bar = () => ({ indeterminate: true, minValue: 0, maxValue: 0, doubleValue: 0 });
+    const context = vm.createContext({
+      content: progressFileContent,
+      lastMatch(lines, prefix) {
+        for (let i = lines.length - 1; i >= 0; i--) if (lines[i].startsWith(prefix)) return lines[i];
+        return "";
+      },
+      bar: bar(), taskBar: bar(),
+      stepLabel: label(), stepPercentLabel: label(), phaseLabel: label(),
+      detailLabel: label(), taskPercentLabel: label(),
+    });
+    vm.runInContext(tickBody, context);
+    return context;
+  }
+
+  it("appends the live percentage to the detail line while a TASK is actively tracked", () => {
+    const ctx = renderTick([
+      "STEP\t4\t8\tPreparing the Windows 11 image",
+      "STATUS\tConverting Windows 11 installation image to non-solid LZX for Raspberry Pi 3",
+      "SUBSTEP\t22",
+      "TASK\t22\tExporting Windows 11 image",
+    ].join("\n"));
+    assert.equal(ctx.detailLabel.stringValue, "Exporting Windows 11 image (22%)");
+    assert.equal(ctx.taskPercentLabel.stringValue, "Sub-progress: 22%");
+    assert.equal(ctx.taskBar.doubleValue, 22);
+  });
+
+  it("keeps showing the full status sentence before the first TASK percentage arrives", () => {
+    const ctx = renderTick([
+      "STEP\t4\t8\tPreparing the Windows 11 image",
+      "STATUS\tConverting Windows 11 installation image to non-solid LZX for Raspberry Pi 3",
+      "SUBSTEP\t0",
+      "TASK\t0\t",
+    ].join("\n"));
+    assert.equal(ctx.detailLabel.stringValue, "Converting Windows 11 installation image to non-solid LZX for Raspberry Pi 3");
+  });
+
+  it("never appends a misleading percentage to a status line with no real sub-progress tracking", () => {
+    const ctx = renderTick([
+      "STEP\t2\t8\tChecking for internet connection",
+      "STATUS\tChecking for internet connection... Done",
+    ].join("\n"));
+    assert.equal(ctx.detailLabel.stringValue, "Checking for internet connection... Done");
+  });
+
+  it("does not duplicate the percentage that pre-step work already shows in the step label", () => {
+    const ctx = renderTick([
+      "STATUS\tDeleting peinstaller (1 of 3)",
+      "SUBSTEP\t33",
+    ].join("\n"));
+    assert.equal(ctx.detailLabel.stringValue, "Deleting peinstaller (1 of 3)");
+    assert.equal(ctx.stepLabel.stringValue, "33%");
+  });
 });

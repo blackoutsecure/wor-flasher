@@ -26,6 +26,7 @@ hook_checkout_complete() { #Input: checkout directory. Output: success when ever
   for required_path in \
     install-wor.sh \
     src/lib/metadata.sh src/lib/dependencies.sh src/lib/paths.sh src/lib/cleanup.sh src/lib/gui.sh \
+    src/lib/boot-config.py src/lib/boot-config-gui.js \
     src/lib/pi3-boot-refresh/Pi3BootRefresh.exe src/lib/pi3-boot-refresh/manifest.json \
     src/lib/pi3-boot-refresh/GO-LICENSE.txt \
     src/config/metadata.json src/config/metadata.schema.json \

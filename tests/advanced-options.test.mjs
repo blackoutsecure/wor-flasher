@@ -23,7 +23,7 @@ const linuxStart = gui.indexOf("    refresh_prompt=() #this variable is populate
 const linuxEnd = gui.indexOf("    done #end of repeating the advanced options window", linuxStart);
 assert.ok(linuxStart >= 0 && linuxEnd > linuxStart, "Missing Linux Advanced Options");
 const linux = gui.slice(linuxStart, gui.indexOf("\n", linuxEnd));
-const jxa = macos.match(/advanced_jxa="\$\(wor_jxa_window_lib; cat <<'JXA'\n([\s\S]*?)\nJXA/);
+const jxa = macos.match(/advanced_jxa="\$\(wor_jxa_window_lib; wor_boot_config_jxa; cat <<'JXA'\n([\s\S]*?)\nJXA/);
 assert.ok(jxa, "Missing native Advanced Options renderer");
 const firmwareStart = engine.indexOf('phase "Preparing Pi${RPI_MODEL} UEFI firmware"');
 const firmwareEnd = engine.indexOf("{ #Download Windows ESD", firmwareStart);
@@ -67,7 +67,7 @@ fi
 
 function run(body, {
   version = 11, model = 4, mode = 1, iso = "", edit = false, cancel = false,
-  uefiOverride = "0", uefiSelection = "", oobeOverride = "1", driverSelection = "",
+  uefiOverride = "0", uefiSelection = "", oobeOverride = "1", driverSelection = "", hdmiSelection = "",
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "wor-advanced-"));
   try {
@@ -84,6 +84,7 @@ function run(body, {
         TEST_UEFI_OVERRIDE: uefiOverride, TEST_UEFI_SELECTION: uefiSelection,
         TEST_OOBE_OVERRIDE: oobeOverride,
         TEST_DRIVER_SELECTION: driverSelection,
+        TEST_HDMI_SELECTION: hdmiSelection,
       },
     });
     const read = (name) => existsSync(join(directory, name)) ? readFileSync(join(directory, name), "utf8") : "";
@@ -296,7 +297,7 @@ describe("Shared native configuration editor", () => {
       assert.equal(result.saved, action !== "cancel");
       assert.equal(result.text, action === "reset" ? "720p defaults" : action === "save" ? "edited settings" : "original settings");
       assert.deepEqual(buttons, action === "reset" ? ["Save", "Cancel", "Reset to 720p defaults"] : ["Save", "Cancel"]);
-      assert.match(jxa[1], /const result = worEditText\(configTxtValue/);
+      assert.match(jxa[1], /const result = worEditBootConfig\(configTxtValue/);
     });
   }
 });
@@ -483,7 +484,7 @@ describe("Tagged release selectors", () => {
       assert.equal(mac.args[27].includes("v0.16"), model !== 5);
       const lin = run(linuxProbe, { model });
       assert.equal(lin.status, 0, lin.stderr);
-      assert.ok(lin.args.some((arg) => arg === "--field=UEFI version:CB"));
+      assert.ok(lin.args.some((arg) => arg === `--field=UEFI version${model === 3 ? "" : " (recommended)"}:CB`));
       assert.equal(lin.args.some((arg) => arg === "--field=Driver version:CB"), false);
     });
   }
@@ -567,6 +568,56 @@ describe("Tagged release selectors", () => {
     const result = run(`WINDOWS_LOCALE_SETUP=0\n${refreshProbe}\nprintf '%s|%s|%s' "$WINDOWS_ACCOUNT_USERNAME" "$WINDOWS_ACCOUNT_PASSWORD" "$WINDOWS_LOCALE" > "$TEST_DIR/release-state"`);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.releaseState, "fixture-user|fixture-password|en-US");
+  });
+});
+
+describe("macOS pinned-version Recommended badge", () => {
+  const selectorStart = jxa[1].indexOf("function addVersionSelector(index) {");
+  const selectorEnd = jxa[1].indexOf("\nfor (let i = 0; i < rows.length; i++) {", selectorStart);
+  assert.ok(selectorStart >= 0 && selectorEnd > selectorStart, "Missing addVersionSelector");
+  const selectorSource = jxa[1].slice(selectorStart, selectorEnd);
+
+  function renderVersionSelector(caution) {
+    function makeView() {
+      return { subviews: [], frame: null, autoresizingMask: null, addSubview(view) { this.subviews.push(view); } };
+    }
+    const content = { subviews: { count: 0 }, addSubview() { this.subviews.count += 1; } };
+    const versionRows = [];
+    const dollar = Object.assign((value) => value, {
+      NSView: { alloc: { initWithFrame: () => makeView() } },
+      NSTextField: { labelWithString: (text) => ({ text, frame: null, autoresizingMask: null, font: null, textColor: null }) },
+      NSPopUpButton: {
+        alloc: {
+          initWithFramePullsDown: (rect) => ({
+            rect, items: [], frame: null, autoresizingMask: null,
+            addItemWithTitle(title) { this.items.push(title); },
+            selectItemAtIndex(index) { this.selected = index; },
+          }),
+        },
+      },
+      NSFont: { systemFontOfSizeWeight: () => "font", systemFontOfSize: () => "font" },
+      NSColor: { systemGreenColor: "green", systemOrangeColor: "orange" },
+      NSMakeRect: (x, y, w, h) => ({ x, y, w, h }),
+      NSViewWidthSizable: 1, NSViewMinYMargin: 2, NSViewMaxXMargin: 4, NSFontWeightSemibold: 6,
+    });
+    const context = vm.createContext({
+      rows: [{}, {}, { caution }], width: 640, y: 1000, content, versionRows,
+      uefiVersions: ["v1.50"], uefiVersionLabels: ["v1.50"], currentUefiVersion: "v1.50", uefiVersionWarning: "",
+      driverVersions: [], driverVersionLabels: [], currentDriverVersion: "", driverVersionWarning: "",
+      $: dollar,
+    });
+    vm.runInContext(`${selectorSource}\naddVersionSelector(2)`, context);
+    return versionRows[0];
+  }
+
+  it("narrows the dropdown and shows a green Recommended badge when staying pinned is the tested default", () => {
+    const plain = renderVersionSelector(false);
+    const recommended = renderVersionSelector(true);
+    assert.equal(plain.view.subviews.some((view) => view.text === "Recommended"), false);
+    const badge = recommended.view.subviews.find((view) => view.text === "Recommended");
+    assert.ok(badge, "Expected a Recommended badge next to the pinned version");
+    assert.equal(badge.textColor, "green");
+    assert.equal(plain.popup.rect.w - recommended.popup.rect.w, 112 + 8);
   });
 });
 
@@ -1099,3 +1150,173 @@ describe("Setup personalization applies to both Windows versions and installatio
             assert.doesNotMatch(result.stdout, /SELECTED|LOOKUP/);
           });
         });
+
+describe("HDMI display override", () => {
+  it("defaults Pi 4 to its established override and Pi 3/5 to the official image default", () => {
+    for (const [model, expected] of [[3, "official"], [4, "recommended"], [5, "official"]]) {
+      const result = run('printf "%s" "$(hdmi_mode)"', { model });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, expected, `Pi ${model}`);
+    }
+  });
+
+  it("only Pi 4 offers a named preset beyond official and custom", () => {
+    for (const [model, expectRecommended] of [[3, false], [4, true], [5, false]]) {
+      const result = run('hdmi_mode_choices "$RPI_MODEL"', { model });
+      assert.equal(result.status, 0, result.stderr);
+      const values = result.stdout.trim().split("\n").map((line) => line.split("\t")[0]);
+      assert.deepEqual(values, expectRecommended ? ["official", "recommended", "custom"] : ["official", "custom"]);
+      assert.equal(result.stdout.includes("(recommended)"), true);
+    }
+  });
+
+  it("appends the Pi 4 override only when recommended is selected, leaving Pi 3/5 untouched by any mode", () => {
+    const official4 = run('config_txt_with_hdmi 4 official', { model: 4 });
+    const recommended4 = run('config_txt_with_hdmi 4 recommended', { model: 4 });
+    const custom4 = run('config_txt_with_hdmi 4 custom', { model: 4 });
+    assert.doesNotMatch(official4.stdout, /hdmi_cvt/);
+    assert.match(recommended4.stdout, /hdmi_cvt=1920 1200 60 6 0 0 0/);
+    assert.doesNotMatch(custom4.stdout, /hdmi_cvt/);
+    for (const model of [3, 5]) {
+      const official = run(`config_txt_with_hdmi ${model} official`, { model });
+      const recommended = run(`config_txt_with_hdmi ${model} recommended`, { model });
+      assert.doesNotMatch(official.stdout, /hdmi_/);
+      assert.equal(official.stdout, recommended.stdout, `Pi ${model} official should equal recommended`);
+    }
+  });
+
+  it("regenerates config.txt when HDMI_MODE changes on the same model, but never overwrites a manual edit", () => {
+    const result = run(`
+      #the fixture seeds a non-empty CONFIG_TXT with no tracked origin; start clean to exercise real regeneration
+      CONFIG_TXT='' CONFIG_TXT_MODEL=''
+      HDMI_MODE=official
+      set_default_config_txt
+      grep -q hdmi_cvt <<<"$CONFIG_TXT" && exit 91
+      HDMI_MODE=recommended
+      set_default_config_txt
+      grep -q hdmi_cvt <<<"$CONFIG_TXT" || exit 92
+      CONFIG_TXT="hand-edited-config"
+      HDMI_MODE=official
+      set_default_config_txt
+      [ "$CONFIG_TXT" == "hand-edited-config" ] || exit 93
+    `, { model: 4 });
+    assert.equal(result.status, 0, result.stderr);
+  });
+
+  it("rejects an unknown HDMI_MODE value", () => {
+    const result = run('HDMI_MODE=bogus\nsource "$TEST_ROOT/install-wor.sh" source', { model: 4 });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Unknown value for HDMI_MODE/);
+  });
+
+  it("is excluded from IoT Core's Advanced Options but applies to every desktop model", () => {
+    for (const model of [3, 4, 5]) {
+      const result = run('advanced_option_applies hdmi; printf "%s" "$?"', { model });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "0", `Pi ${model}`);
+    }
+    const iotResult = run(`
+      WOR_IMAGE_FAMILY=iot-core WOR_TARGET_BOARD=pi3-b
+      advanced_option_applies hdmi; printf "%s" "$?"
+    `, { model: 3 });
+    assert.equal(iotResult.status, 0, iotResult.stderr);
+    assert.equal(iotResult.stdout, "1");
+  });
+
+  it("shows the effective HDMI selection in the confirmation summary", () => {
+    const official = run('settings_summary', { model: 3 });
+    assert.match(official.stdout, /HDMI display\tOfficial image default/);
+    const recommended = run('settings_summary', { model: 4 });
+    assert.match(recommended.stdout, /HDMI display\tRecommended \(1920 x 1200 \/ 60 Hz\)/);
+    const custom = run('HDMI_MODE=custom\nsettings_summary', { model: 4 });
+    assert.match(custom.stdout, /HDMI display\tCustom \(set in config\.txt\)/);
+  });
+
+  it("passes the HDMI choices and precomputed config.txt variants into the native Advanced Options call", () => {
+    for (const model of [3, 4]) {
+      const result = run(macosProbe, { model });
+      assert.equal(result.status, 0, result.stderr);
+      const hdmiArgIndex = result.args.findIndex((value) => value.startsWith("official\tOfficial image default"));
+      assert.ok(hdmiArgIndex >= 0, "Could not find the HDMI choices argument");
+      const choices = result.args[hdmiArgIndex];
+      assert.equal(choices.includes("recommended\t1920 x 1200"), model === 4);
+      assert.ok(choices.includes("custom\tCustom video settings"));
+      assert.doesNotMatch(result.args[hdmiArgIndex + 1], /hdmi_cvt/);
+      assert.equal(result.args[hdmiArgIndex + 2].includes("hdmi_cvt=1920 1200 60 6 0 0 0"), model === 4);
+    }
+  });
+
+  it("reads the macOS dialog's selected HDMI mode and trusts its returned config.txt verbatim", () => {
+    //Format-string half: insert a new %s\n right before the non-edit branch's two %s\n slots that precede the marker
+    //(the edit branch has an identical %s\n%s\n---CONFIG_TXT--- tail, so this anchors on its distinct Glass\n1\n prefix).
+    const withNewPlaceholder = macosProbe.replace(
+      "Glass\\n1\\n%s\\n%s\\n---CONFIG_TXT---",
+      "Glass\\n1\\n%s\\n%s\\n%s\\n---CONFIG_TXT---",
+    );
+    assert.notEqual(withNewPlaceholder, macosProbe, "could not add the new printf placeholder; update this test with the current probe format");
+    //Argument half: append the new value after the last existing argument of that same non-edit branch
+    //(the edit branch's identical-looking tail is followed by "else" instead of "fi", so anchor on "fi").
+    const probe = withNewPlaceholder.replace(
+      '"$uefi_dropdown_default" "$driver_dropdown_default"\n  fi',
+      '"$uefi_dropdown_default" "$driver_dropdown_default" "${TEST_HDMI_SELECTION:-official}"\n  fi',
+    );
+    assert.notEqual(probe, withNewPlaceholder, "could not append the new printf argument; update this test with the current probe format");
+    //The real computation of config.txt per selection happens client-side in hdmiChanged(), covered separately by
+    //the real-JXA test below; this mocked dialog never runs that JS, so it only proves bash trusts what it returns.
+    for (const selection of ["recommended", "custom"]) {
+      const result = run(`${probe}\nprintf '%s|%s' "$HDMI_MODE" "$CONFIG_TXT" > "$TEST_DIR/release-state"`, { model: 4, hdmiSelection: selection });
+      assert.equal(result.status, 0, result.stderr);
+      const [hdmiMode, configTxt] = result.releaseState.split("|");
+      assert.equal(hdmiMode, selection);
+      assert.equal(configTxt, "fixture-config");
+    }
+  });
+
+  it("builds the Linux HDMI combo with the current choice first without discarding existing boot edits on OK", () => {
+    const result = run(`${linuxProbe}\nprintf '%s|%s' "$HDMI_MODE" "$CONFIG_TXT" > "$TEST_DIR/release-state"`, { model: 4 });
+    assert.equal(result.status, 0, result.stderr);
+    const fieldIndex = result.args.findIndex((value) => value === "--field=HDMI display:CB");
+    assert.ok(fieldIndex >= 0);
+    const items = result.args[fieldIndex + 1].split("!");
+    assert.equal(items[0], "1920 x 1200 / 60 Hz (recommended)");
+    assert.ok(items.includes("Official image default"));
+    assert.ok(items.includes("Custom video settings"));
+    const [hdmiMode, configTxt] = result.releaseState.split("|");
+    assert.equal(hdmiMode, "recommended");
+    assert.equal(configTxt, "fixture-config");
+  });
+
+  it("reacts to a dropdown change and reconciles the badge after a manual edit, in the real rendered JXA", () => {
+    const start = jxa[1].indexOf("function syncHdmiFromConfig()");
+    const end = jxa[1].indexOf("\nfunction editConfigTxt()", start);
+    assert.ok(start >= 0 && end > start, "Missing syncHdmiFromConfig/hdmiChanged in the native renderer");
+    const defaults = JSON.parse(run("boot_config_context").stdout);
+    const context = vm.createContext({
+      hdmiChoices: [
+        { value: "official", label: "Official image default", recommended: false },
+        { value: "recommended", label: "1920 x 1200 / 60 Hz (recommended)", recommended: true },
+        { value: "custom", label: "Custom video settings", recommended: false },
+      ],
+      bootConfigContext: defaults,
+      configTxtValue: defaults.official,
+      worBootConfigCall: (data, changes) => {
+        const result = spawnSync("python3", [join(root, "src/lib/boot-config.py")], {
+          input: JSON.stringify({ ...data, ...changes }), encoding: "utf8",
+        });
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        return JSON.parse(result.stdout);
+      },
+      hdmiPopup: { selected: 0, get indexOfSelectedItem() { return this.selected; }, selectItemAtIndex(i) { this.selected = i; } },
+      hdmiBadge: { hidden: true },
+    });
+    vm.runInContext(jxa[1].slice(start, end), context);
+    context.hdmiPopup.selectItemAtIndex(1);
+    vm.runInContext("hdmiChanged()", context);
+    assert.match(context.configTxtValue, /^hdmi_cvt=1920 1200 60 6 0 0 0$/m);
+    assert.equal(context.hdmiBadge.hidden, false);
+    context.configTxtValue = defaults.official + "\nhdmi_group=1\nhdmi_mode=4\n";
+    vm.runInContext("syncHdmiFromConfig()", context);
+    assert.equal(context.hdmiPopup.indexOfSelectedItem, 2);
+    assert.equal(context.hdmiBadge.hidden, true);
+  });
+});
