@@ -207,6 +207,61 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][0], "/fixture/ssh-keyscan")
         self.assertNotIn("input", run.call_args.kwargs)
 
+    def test_scoped_ipv6_endpoint_survives_probe_and_pinned_verification(self) -> None:
+        address = "fe80::23%7"
+        answers = [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("fe80::23", 22, 0, 7))]
+        responses = [
+            subprocess.CompletedProcess([], 0, f"{address} {KEY_TYPE} {KEY}\n".encode(), b""),
+            subprocess.CompletedProcess([], 0, result("applied", changed=True), b""),
+            subprocess.CompletedProcess([], 0, result("verified"), b""),
+        ]
+        with mock.patch.object(account.socket, "getaddrinfo", return_value=answers) as lookup:
+            with mock.patch.object(account.subprocess, "run", side_effect=responses) as run:
+                pairing = account.probe_device("fe80::23%fixture0")
+                self.assertEqual(pairing["address"], address)
+                observed = account.configure_account(dict(self.request, pairing=pairing))
+        self.assertEqual(observed["state"], "verified")
+        self.assertEqual(observed["address"], address)
+        self.assertEqual(run.call_args_list[0].args[0][-1], address)
+        for call, username in zip(run.call_args_list[1:], ("Administrator", "FixtureAdmin")):
+            self.assertIn(f"{username}@{address}", call.args[0])
+            self.assertIn("StrictHostKeyChecking=yes", call.args[0])
+            self.assertIn("HostKeyAlias=wor-iot-paired", call.args[0])
+        self.assertEqual(lookup.call_args_list, [
+            mock.call("fe80::23%fixture0", 22, type=socket.SOCK_STREAM),
+            mock.call(address, 22, type=socket.SOCK_STREAM),
+        ])
+
+    def test_automatic_scoped_ipv6_candidates_are_deduplicated_by_address_and_interface(self) -> None:
+        answer = (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("fe80::23", 22, 0, 7))
+        response = subprocess.CompletedProcess([], 0, f"fe80::23%7 {KEY_TYPE} {KEY}\n".encode(), b"")
+        with mock.patch.object(account.socket, "getaddrinfo", return_value=[answer, answer]):
+            with mock.patch.object(account.subprocess, "run", return_value=response) as run:
+                self.assertEqual(account.probe_device("", automatic_address=True)["address"], "fe80::23%7")
+                self.assertEqual(run.call_args.args[0][-1], "fe80::23%7")
+        other_interface = (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("fe80::23", 22, 0, 8))
+        with mock.patch.object(account.socket, "getaddrinfo", return_value=[answer, other_interface]):
+            with mock.patch.object(account.subprocess, "run") as run:
+                with self.assertRaisesRegex(account.AccountError, "multiple addresses"):
+                    account.probe_device("", automatic_address=True)
+                run.assert_not_called()
+
+    def test_scoped_ipv6_keeps_local_restrictions_and_rejects_changed_pairing_interface(self) -> None:
+        for address in ("2001:4860:4860::8888", "::1", "::", "ff02::1"):
+            answers = [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", (address, 22, 0, 7))]
+            with self.subTest(address=address), mock.patch.object(account.socket, "getaddrinfo", return_value=answers):
+                with mock.patch.object(account.subprocess, "run") as run:
+                    with self.assertRaisesRegex(account.AccountError, "private local network"):
+                        account.probe_device(address + "%7")
+                    run.assert_not_called()
+        with mock.patch.object(account.socket, "getaddrinfo", return_value=[
+            (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("fe80::23", 22, 0, 8))
+        ]), mock.patch.object(account.subprocess, "run") as run:
+            pairing = dict(self.pairing, address="fe80::23%7")
+            with self.assertRaisesRegex(account.AccountError, "paired device address changed"):
+                account.configure_account(dict(self.request, pairing=pairing))
+            run.assert_not_called()
+
     def test_automatic_address_resolves_only_the_documented_default_hostname(self) -> None:
         response = subprocess.CompletedProcess([], 0, f"{ADDRESS} {KEY_TYPE} {KEY}\n".encode(), b"")
         with mock.patch.object(account.socket, "getaddrinfo", return_value=[

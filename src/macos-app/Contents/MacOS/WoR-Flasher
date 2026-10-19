@@ -41,6 +41,7 @@ WOR_REPO_SLUG="$(/usr/bin/plutil -extract systemDefaults.repoSlug raw -o - "$EAR
 STARTUP_STATUS=''
 STARTUP_DONE=''
 STARTUP_PID=''
+STARTUP_TASK_PID=''
 
 set_runtime_paths() { #Input: runtime root and manifest.
   REPO_DIR="$1"
@@ -270,7 +271,8 @@ start_startup_window() {
   rm -f "$STARTUP_DONE"
   #this window opens before any runtime is validated, so it cannot load the shared window library from
   #src/lib/metadata.sh; keep its chrome in step with worMakeWindow by hand instead
-  /usr/bin/osascript -l JavaScript - "$STARTUP_STATUS" "$STARTUP_DONE" "$WOR_FLASHER_NAME" "$icon_path" "$WOR_WINDOW_TITLE" "$WOR_PRODUCT_LICENSE" "$WOR_REPO_SLUG" <<'JXA' >/dev/null 2>&1 &
+  {
+  /usr/bin/osascript -l JavaScript - "$STARTUP_STATUS" "$STARTUP_DONE" "$WOR_FLASHER_NAME" "$icon_path" "$WOR_WINDOW_TITLE" "$WOR_PRODUCT_LICENSE" "$WOR_REPO_SLUG" <<'JXA' >/dev/null 2>&1
 ObjC.import('AppKit')
 ObjC.import('Foundation')
 const args = $.NSProcessInfo.processInfo.arguments
@@ -476,7 +478,27 @@ app.activateIgnoringOtherApps(true)
 app.run
 timer.invalidate
 JXA
+    #Normal shutdown writes done first; an earlier close or Quit must stop the launcher as well.
+    [ -e "$STARTUP_DONE" ] || kill -TERM "$$"
+  } &
   STARTUP_PID=$!
+}
+
+run_startup_task() { #Input: preflight function and arguments. Waiting on a child keeps cancellation responsive.
+  local result=0
+  "$@" &
+  STARTUP_TASK_PID=$!
+  wait "$STARTUP_TASK_PID" || result=$?
+  STARTUP_TASK_PID=''
+  return "$result"
+}
+
+stop_startup_process_tree() { #Input: a previously verified owned task or one of its descendants.
+  local pid="$1" child
+  for child in $(pgrep -P "$pid" 2>/dev/null) ;do
+    stop_startup_process_tree "$child"
+  done
+  kill -TERM "$pid" 2>/dev/null || true
 }
 
 startup_phase() { #Input: status shown in the startup window.
@@ -492,8 +514,19 @@ stop_startup_window() {
 }
 
 cleanup_startup() {
+  local result=$? parent_pid
+  touch "$STARTUP_DONE"
+  if [[ "${STARTUP_TASK_PID:-}" =~ ^[1-9][0-9]*$ ]];then
+    parent_pid="$(ps -p "$STARTUP_TASK_PID" -o ppid= 2>/dev/null)"
+    if [ "${parent_pid//[[:space:]]/}" == "$$" ];then
+      stop_startup_process_tree "$STARTUP_TASK_PID"
+      wait "$STARTUP_TASK_PID" 2>/dev/null || true
+    fi
+  fi
+  STARTUP_TASK_PID=''
   stop_startup_window
   rm -f "$STARTUP_STATUS" "$STARTUP_DONE"
+  return "$result"
 }
 
 load_metadata() {
@@ -642,7 +675,9 @@ prepare_dependencies() {
 launcher_main() {
   STARTUP_STATUS="$(mktemp "${TMPDIR:-/tmp}/wor-flasher-startup.XXXXXX")" || exit 1
   STARTUP_DONE="${STARTUP_STATUS}.done"
-  trap cleanup_startup EXIT INT TERM
+  trap cleanup_startup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' HUP TERM
   startup_phase 'Checking for updates and repairs...'
   start_startup_window
 
@@ -653,22 +688,23 @@ launcher_main() {
     set_runtime_paths "$CHECKOUT_DIR" ''
   fi
   if [ "$SOURCE_CHECKOUT" == 1 ];then
-    repair_missing_files || exit 1
+    run_startup_task repair_missing_files || exit 1
     load_metadata || { show_error 'WoR-Flasher metadata could not be loaded after repair.'; exit 1; }
     startup_phase 'Synchronizing application resources...'
-    sync_bundle_metadata || { show_error 'The updated macOS app metadata could not be synchronized.'; exit 1; }
+    run_startup_task sync_bundle_metadata || { show_error 'The updated macOS app metadata could not be synchronized.'; exit 1; }
   else
     startup_phase 'Preparing the verified runtime...'
-    bootstrap_embedded_runtime || { show_error 'The embedded WoR-Flasher runtime could not be installed safely.'; exit 1; }
+    run_startup_task bootstrap_embedded_runtime || { show_error 'The embedded WoR-Flasher runtime could not be installed safely.'; exit 1; }
     select_runtime || { show_error 'The installed WoR-Flasher runtime could not be selected.'; exit 1; }
     load_metadata || { show_error 'Verified WoR-Flasher metadata could not be loaded.'; exit 1; }
     startup_phase 'Checking for updates and repairs...'
-    check_for_runtime_update
+    run_startup_task check_for_runtime_update
     select_runtime || { show_error 'No verified WoR-Flasher runtime remains available.'; exit 1; }
     load_metadata || { show_error 'Verified WoR-Flasher metadata could not be loaded.'; exit 1; }
   fi
   startup_phase 'Checking required tools...'
-  prepare_dependencies || exit 1
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  run_startup_task prepare_dependencies || exit 1
 
   [ -x "$GUI_SCRIPT" ] || { show_error $'The GUI is not executable:\n\n'"$GUI_SCRIPT"; exit 1; }
   startup_phase 'Opening the setup assistant...'
@@ -679,7 +715,7 @@ launcher_main() {
   export WOR_APP_BUNDLE_PATH="$APP_ROOT"
   export WOR_CACHE_DIR="$APP_SUPPORT_DIR/cache"
   export WOR_ICON_PATH="$RESOURCES_DIR/$WOR_ICON_FILENAME"
-  trap - EXIT INT TERM
+  trap - EXIT INT HUP TERM
   rm -f "$STARTUP_STATUS" "$STARTUP_DONE"
   exec "$GUI_SCRIPT"
 }

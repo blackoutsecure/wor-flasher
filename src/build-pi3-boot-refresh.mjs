@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { isMainModule } from "./lib/node-runtime.mjs";
 
 const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sources = ["bootstrap.go", "main_windows.go"];
@@ -91,7 +92,7 @@ function build() {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
   if (args.length === 1 && args[0] === "--check") {
     verifyPi3BootRefresh();

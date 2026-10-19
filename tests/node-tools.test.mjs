@@ -188,6 +188,56 @@ describe("Node.js Tooling - Release Update Check", () => {
     assert.equal(failed.updateAvailable, false);
     assert.equal(failed.error, "network down");
   });
+
+  it("compares against the selected repository metadata rather than the tooling checkout", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wor-update-version-"));
+    try {
+      mkdirSync(join(directory, "src/config"), { recursive: true });
+      writeFileSync(join(directory, "src/config/metadata.json"), JSON.stringify({
+        product: { version: "8.0.0" }, systemDefaults: { repoSlug: "example/repo" },
+      }));
+      const result = await checkReleaseUpdate({
+        repoPath: directory,
+        fetchImpl: () => ({ ok: true, json: async () => ({ tag_name: "v5.0.0", html_url: "" }) }),
+      });
+      assert.equal(result.currentVersion, "8.0.0");
+      assert.equal(result.updateAvailable, false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  for (const payload of [
+    {}, [], null, { tag_name: "v9.0.0-preview" }, { tag_name: "v9.0.0garbage" },
+    { tag_name: 9 }, { tag_name: "v9.0.0", html_url: 42 },
+  ]) {
+    it(`reports malformed release metadata as unknown: ${JSON.stringify(payload)}`, async () => {
+      const result = await checkReleaseUpdate({
+        currentVersion: "1.0.0", repoSlug: "example/repo",
+        fetchImpl: () => ({ ok: true, json: async () => payload }),
+      });
+      assert.equal(result.updateAvailable, false);
+      assert.ok(result.error);
+    });
+  }
+
+  it("reports invalid local configuration without attempting a release lookup", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "wor-update-config-"));
+    try {
+      mkdirSync(join(directory, "config-templates"));
+      writeFileSync(join(directory, "config-templates/config.json"), "{invalid");
+      let contacted = false;
+      const result = await checkReleaseUpdate({
+        currentVersion: "1.0.0", repoSlug: "example/repo", repoPath: directory,
+        fetchImpl: () => { contacted = true; throw new Error("unexpected network request"); },
+      });
+      assert.equal(contacted, false);
+      assert.equal(result.updateAvailable, false);
+      assert.match(result.error, /configuration|JSON/i);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("Node.js Tooling - Package Metadata Sync", () => {

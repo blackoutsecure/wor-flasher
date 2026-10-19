@@ -195,7 +195,7 @@ describe("Pi 3 low-memory installation-image preparation", () => {
       const directory = mkdtempSync(join(tmpdir(), "wor-pi3-prewrite-"));
       try {
         const start = engine.indexOf("fi #end of the preparation half a password retry skips");
-        const end = engine.indexOf("#now that downloads are complete", start);
+        const end = engine.indexOf("\nvalidate_target_before_write\n", start);
         assert.ok(start >= 0 && end > start);
         const handoff = engine.slice(engine.indexOf("\n", start) + 1, end);
         for (const status of [0, 37]) {
@@ -203,6 +203,8 @@ describe("Pi 3 low-memory installation-image preparation", () => {
             RESUME_AT_FLASH=${resume} WOR_RESUME_AT_FLASH=${resume} DRY_RUN=1
             winfiles=winfiles_cached
             prepare_pi3_install_wim() { printf 'normalize:%s\\n' "$1"; return ${status}; }
+            validate_pi3_boot_refresh() { printf 'native-finalizer-validated\\n'; }
+            error() { printf '%s\\n' "$1" >&2; exit 1; }
             status() { printf 'dry-run complete\\n'; }
             cli_pause() { :; }
             ${handoff}
@@ -210,10 +212,11 @@ describe("Pi 3 low-memory installation-image preparation", () => {
           assert.match(result.stdout, /normalize:.*\/winfiles_cached\/install\.wim/);
           if (status === 0) {
             assert.equal(result.status, 0, result.stderr);
+            assert.match(result.stdout, /native-finalizer-validated/);
             assert.match(result.stdout, /dry-run complete/);
           } else {
             assert.equal(result.status, 1);
-            assert.doesNotMatch(result.stdout, /dry-run complete/);
+            assert.doesNotMatch(result.stdout, /native-finalizer-validated|dry-run complete/);
           }
         }
       } finally {

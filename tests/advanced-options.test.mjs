@@ -31,9 +31,7 @@ assert.ok(firmwareStart >= 0 && firmwareEnd > firmwareStart);
 const firmware = engine.slice(firmwareStart, firmwareEnd);
 const sharedNative = readFileSync(join(root, "src/lib/gui.sh"), "utf8");
 
-const fixtureSetup = `
-source "$TEST_ROOT/install-wor.sh" source >/dev/null || exit 90
-source "$TEST_DIR/shared-gui.sh"
+const fixtureValues = `
 RPI_MODEL="$TEST_MODEL" BID="$TEST_BUILD" CAN_INSTALL_ON_SAME_DRIVE="$TEST_MODE"
 DL_DIR="$TEST_DIR/downloads" SOURCE_FILE='' WIN_LANG=en-us WINDOWS_LOCALE=en-US
 DEVICE=/dev/mock-only CONFIG_TXT=fixture-config APPLY_CUSTOM_CONFIG_TXT=1
@@ -42,6 +40,13 @@ WINDOWS_LOCALE_SETUP=1 OOBE_NETWORK_BYPASS="$TEST_OOBE_OVERRIDE" PI4_AUTO_DISABL
 UEFI_USE_LATEST="$TEST_UEFI_OVERRIDE" SKIP_IMAGE_VERIFICATION=0 DRY_RUN=0 USE_CACHE=1 PLAY_SOUND=1 SHOW_NOTIFICATION=1
 WOR_ICON_PATH=fixture-icon
 WOR_YAD_SCREEN_WIDTH=1920 WOR_YAD_SCREEN_HEIGHT=1080
+`;
+//Avoid unrelated default lookups under parallel tests, then restore intentional empty overrides.
+const fixtureSetup = `
+${fixtureValues}
+source "$TEST_ROOT/install-wor.sh" source >/dev/null || exit 90
+source "$TEST_DIR/shared-gui.sh"
+${fixtureValues}
 list_langs_preferred() { printf 'en-us:English\\nfr-fr:French\\n'; }
 list_windows_locale_options() { printf 'en-US\\tEnglish\\nfr-FR\\tFrench\\n'; }
 wor_sound_options() { printf 'Glass\\tGlass\\n'; }
@@ -72,12 +77,23 @@ function run(body, {
   const directory = mkdtempSync(join(tmpdir(), "wor-advanced-"));
   try {
     mkdirSync(join(directory, "downloads"));
+    mkdirSync(join(directory, "bin"));
+    for (const tool of ["curl", "wget", "aria2c", "sudo", "osascript", "yad"]) {
+      writeFileSync(join(directory, "bin", tool), `#!/bin/bash
+printf '%s\\n' "\${0##*/}" >> "$TEST_DIR/unexpected-tools"
+printf 'Unexpected external tool in offline Advanced Options fixture: %s\\n' "\${0##*/}" >&2
+exit 86
+`, { mode: 0o755 });
+    }
     writeFileSync(join(directory, "macos.sh"), macos);
     writeFileSync(join(directory, "shared-gui.sh"), sharedGui);
-    const result = spawnSync("bash", ["-c", `${fixtureSetup}\n${body}`], {
+    writeFileSync(join(directory, "probe.sh"), `${fixtureSetup}\n${body}`);
+    const started = performance.now();
+    const result = spawnSync(process.execPath, [join(root, "tests/run-bash-fixture.mjs"), join(directory, "probe.sh")], {
       cwd: directory, encoding: "utf8", timeout: 20000,
       env: {
         ...process.env, NO_UPDATE: "1", DIRECTORY: root, WOR_CACHE_DIR: join(directory, "cache"),
+        PATH: `${directory}/bin:${process.env.PATH}`, RUN_MODE: "cli",
         TEST_ROOT: root, TEST_DIR: directory, TEST_MODEL: String(model), TEST_MODE: String(mode),
         TEST_BUILD: version === 10 ? "19045.3803" : "22631.2861", TEST_ISO: iso, WOR_RUN_ID: "advanced-fixture",
         TEST_EDIT: edit ? "1" : "0", TEST_CANCEL: cancel ? "1" : "0",
@@ -88,8 +104,11 @@ function run(body, {
       },
     });
     const read = (name) => existsSync(join(directory, name)) ? readFileSync(join(directory, name), "utf8") : "";
+    assert.equal(read("unexpected-tools"), "", "An offline Advanced Options fixture invoked a real external tool.");
+    if (result.error) throw result.error;
     return {
-      ...result, args: read("args").split("\0").slice(0, -1), state: read("state"),
+      ...result, elapsed: performance.now() - started,
+      args: read("args").split("\0").slice(0, -1), state: read("state"),
       summary: read("summary").replaceAll(directory, "[fixture]"),
       oobePreference: read("oobe-preference").trim(), answer: read("answer.xml"),
       overlayScrolling: read("overlay-scrolling").trim(),
@@ -910,6 +929,68 @@ describe("Adaptive fields preserve preferences and field positions", () => {
     const summary = gui.indexOf('window_text="$(settings_summary_markup)', loop);
     const display = gui.indexOf('--field="$window_text":LBL', loop);
     assert.ok(loop >= 0 && loop < summary && summary < display);
+  });
+});
+
+describe("Offline Advanced Options fixture lifecycle", () => {
+  function deadlineProbe({ mutant = false, background = false } = {}) {
+    const directory = mkdtempSync(join(root, ".review-advanced-deadline-"));
+    try {
+      const script = join(directory, "probe.sh");
+      writeFileSync(script, `#!/bin/bash
+trap '' TERM
+printf '%s\\n' "$$" > "$TEST_DIR/worker-pids"
+/bin/bash -c 'trap "" TERM; printf "%s\\n" "$$" >> "$TEST_DIR/worker-pids"; sleep 4' &
+${background ? "exit 7" : 'wait "$!"'}
+`);
+      let runner = join(root, "tests/run-bash-fixture.mjs");
+      if (mutant) {
+        const original = readFileSync(runner, "utf8");
+        const modified = original.replace('    signalGroup("SIGKILL");', "    //Escalation deliberately removed in this disposable mutant.");
+        assert.notEqual(modified, original);
+        runner = join(directory, "mutant.mjs");
+        writeFileSync(runner, modified);
+      }
+      const started = performance.now();
+      const result = spawnSync(process.execPath, [runner, script], {
+        cwd: directory, encoding: "utf8", timeout: background ? 2000 : 800,
+        env: { ...process.env, TEST_DIR: directory },
+      });
+      const elapsed = performance.now() - started;
+      const pids = readFileSync(join(directory, "worker-pids"), "utf8").trim().split(/\s+/).map(Number);
+      for (const pid of pids) {
+        const state = spawnSync("ps", ["-p", String(pid), "-o", "stat="], { encoding: "utf8" });
+        assert.ok(state.status !== 0 || state.stdout.trim().startsWith("Z"), `Fixture worker ${pid} survived cleanup.`);
+      }
+      return { ...result, elapsed, pids };
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  it("rejects unmocked external commands without contacting a service", () => {
+    assert.throws(() => run("command curl --version"), /offline Advanced Options fixture/);
+  });
+
+  it("bounds a timed-out shell and TERM-ignoring descendants without leaving workers", () => {
+    const result = deadlineProbe();
+    assert.equal(result.error?.code, "ETIMEDOUT");
+    assert.equal(result.status, 143);
+    assert.equal(result.pids.length, 2);
+    assert.ok(result.elapsed < 3000, `Fixture timeout took ${result.elapsed}ms.`);
+  });
+
+  it("cleans pipe-holding background workers after an otherwise normal shell exit", () => {
+    const result = deadlineProbe({ background: true });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 7, result.stderr);
+    assert.ok(result.elapsed < 2000, `Fixture exit took ${result.elapsed}ms.`);
+  });
+
+  it("detects removing forced descendant cleanup in a disposable runner copy", () => {
+    const result = deadlineProbe({ mutant: true });
+    assert.equal(result.error?.code, "ETIMEDOUT");
+    assert.throws(() => assert.ok(result.elapsed < 3000));
   });
 });
 

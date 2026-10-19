@@ -26,7 +26,7 @@ const helpers = [
   return match[0];
 }).join("\n");
 const start = gui.indexOf("macos_start_cli() {");
-const end = gui.indexOf("\nif is_macos ;then", start);
+const end = gui.indexOf("\nlinux_boot_config_editor() {", start);
 assert.ok(start >= 0 && end > start);
 const flow = gui.slice(start, end);
 const completion = gui.match(/^  completion_jxa="\$\(wor_jxa_window_lib; cat <<'JXA'\n([\s\S]*?)\nJXA$/m);

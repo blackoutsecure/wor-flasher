@@ -179,7 +179,7 @@ if ! gui_runtime_complete "$DIRECTORY";then
 fi
 
 #shellcheck disable=SC1090
-source "$cli_script" source #shared engine definitions and a read-only release check
+source "$cli_script" source "$@" #shared engine definitions and a read-only release check
 
 #outside the packaged .app (which sets this from its own bundled .icns), fall back to the same
 #logo PNG the rest of the app already uses, so the Dock and minimized-window tile are branded
@@ -214,6 +214,7 @@ JXA
 
 release_gui_instance() {
   local owner_pid
+  [ -n "${WOR_GUI_INSTANCE_DIR:-}" ] || return 0
   owner_pid="$(cat "$WOR_GUI_INSTANCE_DIR/pid" 2>/dev/null)"
   [ "$owner_pid" == "$$" ] || return 0
   rm -f "$WOR_GUI_INSTANCE_DIR/pid"
@@ -236,15 +237,10 @@ acquire_gui_instance() {
   fi
   printf '%s\n' "$$" > "$WOR_GUI_INSTANCE_DIR/pid"
   export WOR_GUI_INSTANCE_DIR
-  trap release_gui_instance EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' HUP TERM
+  trap gui_cleanup EXIT
+  trap 'gui_handle_signal 130' INT
+  trap 'gui_handle_signal 143' HUP TERM
 }
-
-acquire_gui_instance || exit 0
-
-echo "DIRECTORY: $DIRECTORY"
-echo "DL_DIR: $DL_DIR"
 
 open_url() { #Input: url
   if command -v x-www-browser >/dev/null ;then
@@ -264,6 +260,41 @@ kill_process_tree() { #Input: pid. Stops it and everything it started; most of t
     kill_process_tree "$child" "$allow_sudo"
   done
   kill -TERM "$pid" 2>/dev/null || { [ "$allow_sudo" != 1 ] || command sudo -n kill -TERM "$pid" 2>/dev/null; }
+}
+
+gui_owned_child() { #Input: pid. A completed job's saved PID must never select another process.
+  local parent_pid
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]] || return 1
+  parent_pid="$(ps -p "$1" -o ppid= 2>/dev/null)" || return 1
+  [ "${parent_pid//[[:space:]]/}" == "$$" ]
+}
+
+gui_stop_child() { #Input: owned child pid, optional permission to reuse the installer's sudo credential.
+  gui_owned_child "${1:-}" || return 0
+  kill_process_tree "$1" "${2:-0}"
+  wait "$1" 2>/dev/null || true
+}
+
+gui_cleanup() { #Stop owned workers before releasing registered engine resources and the wizard lock.
+  local result=$? pid
+  trap - EXIT
+  trap '' INT HUP TERM
+  if gui_owned_child "${installer_pid:-}" && [ -n "${abort_marker:-}" ];then
+    touch "$abort_marker"
+  fi
+  gui_stop_child "${installer_pid:-}" 1
+  for pid in "${disk_alert_pid:-}" "${progress_pid:-}" "${tail_pid:-}" "${yad_pid:-}" "${loader_pid:-}" ;do
+    gui_stop_child "$pid"
+  done
+  cleanup_mounts
+  release_gui_instance
+  return "$result"
+}
+
+gui_handle_signal() { #Cleanup registrations may replace EXIT, so restore the full GUI finalizer on interruption.
+  trap '' INT HUP TERM
+  trap gui_cleanup EXIT
+  exit "$1"
 }
 
 gui_start_disk_alert_handler() { #Runs only the optional macOS alert automation, separate from the flash and progress window.
@@ -3346,7 +3377,7 @@ $(wor_iot_option_label automaticAddressHelp)" "${form_fields[@]}" \
 }
 
 macos_start_cli() {
-  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice privacy_guidance privacy_settings_url progress_file progress_jxa progress_status progress_diagnostics progress_failed resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning validation_status
+  local completion_jxa confirm_summary confirmation current_rpi_model current_windows_ver default_language device_choices device_capability device_choice done_marker abort_marker auth_marker error_marker install_mode installer_pid installer_status language_choices mode_choices output_log password_retry_choice privacy_guidance privacy_settings_url progress_file progress_jxa progress_status progress_pid progress_failed resume_at_flash saved_log step target_choice disk_alert_pid disk_alert_status disk_alert_done disk_alert_log disk_alert_warning validation_status
   local completion_connect
 
   current_windows_ver='Windows 11'
@@ -4026,8 +4057,11 @@ JXA
 
     progress_status=0
     progress_failed=0
-    progress_diagnostics="$(wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$abort_marker" "$WOR_WINDOW_TITLE" "$disk_alert_status" "$disk_alert_done" <<<"$progress_jxa" 2>&1)" \
-      || progress_status=$?
+    wor_osascript -l JavaScript - "$progress_file" "$done_marker" "$WOR_ICON_PATH" "$WOR_APP_TITLE" "$abort_marker" "$WOR_WINDOW_TITLE" "$disk_alert_status" "$disk_alert_done" \
+      <<<"$progress_jxa" >>"$output_log" 2>&1 &
+    progress_pid=$!
+    wait "$progress_pid" || progress_status=$?
+    progress_pid=''
 
     #Command-Q or a crashed/killed osascript can bypass the JXA abort handler. Never leave the flash unattended.
     if [ ! -f "$done_marker" ] && [ ! -e "$abort_marker" ];then
@@ -4047,7 +4081,6 @@ JXA
     wait "$installer_pid" 2>/dev/null
     gui_stop_disk_alert_handler
     printf '\nProgress window exit status: %s\n' "$progress_status" >> "$output_log"
-    [ -z "$progress_diagnostics" ] || printf '%s\n' "$progress_diagnostics" >> "$output_log"
 
     if [ -e "$abort_marker" ];then
       completion_text="Flashing was stopped before it finished."
@@ -4272,6 +4305,12 @@ if [ "${1:-}" == --boot-config-editor ];then
   linux_boot_config_editor "$2" "$3" "$4"
   exit $?
 fi
+
+#The editor is an internal child of the running wizard, not a second wizard instance.
+acquire_gui_instance || exit 0
+
+echo "DIRECTORY: $DIRECTORY"
+echo "DL_DIR: $DL_DIR"
 
 if is_macos ;then
   command -v osascript >/dev/null 2>&1 || error "Cannot present graphical interface: osascript is unavailable on this macOS host. Cannot continue."
@@ -5284,3 +5323,4 @@ echo "install-wor.sh has finished."
 if [ "$DL_DIR" == /zram ] && [ -d /zram/peinstaller ];then
   sudo zram.sh &>/dev/null
 fi
+exit "$exitcode"

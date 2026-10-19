@@ -92,6 +92,11 @@
 #             Add a simple Boot Config Editor with shared checkbox/dropdown controls and a separate
 #               Advanced Text Edit for user additions. Protect required UEFI entries, validate and
 #               normalize GUI/CLI settings before flashing, and keep IoT editing display-only.
+#             Honor explicit false JSON preferences and forwarded GUI configuration arguments.
+#             Recheck target safety and capacity immediately before writing; exclude read-only,
+#               partition and boot-disk aliases, including Linux root layers and macOS APFS stores.
+#             Preserve conditional boot-setting order, scoped IoT IPv6 endpoints and GUI cancellation
+#               and failure status; validate every release version surface before updating files.
 #---------------
 #2.0.1 - Distribute the macOS app in a verified compressed DMG while retaining the local app bundle.
 #        Package a self-contained install-wor.sh release asset for macOS and supported Linux hosts.
@@ -678,10 +683,23 @@ darwin_is_safe_device() { #Input: whole disk /dev path. Only external, physical,
 }
 
 is_safe_target_device() { #Input: target device. Protects the host boot disk and Darwin internal/virtual disks.
+  local device root_device root_entry device_type read_only
+  [ -n "$ROOT_DEV" ] || return 1
+  device="$(resolve_path "$1" 2>/dev/null)" || return 1
+  while IFS= read -r root_entry;do
+    [ -n "$root_entry" ] || return 1
+    root_device="$(resolve_path "$root_entry" 2>/dev/null)" || return 1
+    [ "$device" != "$root_device" ] || return 1
+  done <<<"$ROOT_DEV"
   if is_macos ;then
-    [ "$1" != "$ROOT_DEV" ] && darwin_is_safe_device "$1"
+    darwin_is_safe_device "$device"
   else
-    [ "$1" != "$ROOT_DEV" ]
+    device_type="$(lsblk -dnro TYPE "$device")" || return 1
+    read_only="$(lsblk -dnro RO "$device")" || return 1
+    case "$device_type:$read_only" in
+      disk:0|loop:0) return 0 ;;
+      *) return 1 ;;
+    esac
   fi
 }
 
@@ -697,11 +715,12 @@ darwin_partition_by_volume_name() { #Input: whole disk, volume name. Output: mat
 }
 
 darwin_list_devices() { #Output: external physical whole disks from diskutil's plist interface.
+  [ -n "$ROOT_DEV" ] || detect_root_dev
   local device
   while read -r device; do
     [ -z "$device" ] && continue
     device="/dev/$device"
-    if darwin_is_safe_device "$device"; then
+    if is_safe_target_device "$device"; then
       printf '\e[1m\e[97m%s\e[0m - \e[92m%sB\e[0m - \e[36m%s\e[0m\n' \
         "$device" \
         "$(darwin_device_value "$device" '.DiskSize // .TotalSize // .Size')" \
@@ -711,10 +730,11 @@ darwin_list_devices() { #Output: external physical whole disks from diskutil's p
 }
 
 darwin_list_device_paths() { #Output: external physical whole-disk paths suitable for a GUI choice list.
+  [ -n "$ROOT_DEV" ] || detect_root_dev
   local device
   while read -r device; do
     device="/dev/$device"
-    darwin_is_safe_device "$device" && printf '%s\n' "$device"
+    is_safe_target_device "$device" && printf '%s\n' "$device"
   done < <(darwin_plist_json diskutil list -plist external physical | jq -r '.AllDisks[]')
 }
 
@@ -762,10 +782,11 @@ darwin_device_details() { #Input: safe whole disk. Output: human-readable size, 
 }
 
 darwin_list_device_choices() { #Output: tab-delimited safe disk path, size, media name, labels, and detected volumes.
+  [ -n "$ROOT_DEV" ] || detect_root_dev
   local device
   while read -r device; do
     device="/dev/$device"
-    darwin_is_safe_device "$device" || continue
+    is_safe_target_device "$device" || continue
     #only the field before the first tab is parsed as the device path, so the remaining
     #fields use readable spacing instead of raw tabs, which render squished together
     printf '%s\t%s\n' "$device" "$(darwin_device_details "$device")"
@@ -2193,6 +2214,7 @@ drive_capability() { #Input: block device. Output: 'too-small', 'recovery' or 'i
     [ "$size" -ge "$minimum" ] && echo install || echo too-small
     return
   fi
+  [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -gt 0 ] || error "Cannot determine the target-drive capacity."
   if [ "$size" -lt $((8*1024*1024*1024)) ];then
     echo too-small
   elif [ "$size" -lt $((25*1024*1024*1024)) ];then
@@ -2226,6 +2248,15 @@ validate_install_mode() { #Input: drive capability. Validates CAN_INSTALL_ON_SAM
       error "Drive $DEVICE is smaller than 25GB and cannot be used for self-installation.\nPlease set CAN_INSTALL_ON_SAME_DRIVE=0"
     fi
   fi
+}
+
+validate_target_before_write() { #Recheck the selected disk after downloads and before either desktop writer.
+  [ -b "$DEVICE" ] || error "Device $DEVICE is not a valid block device! Available devices:\n$(list_devs)"
+  is_safe_target_device "$DEVICE" \
+    || error "Refusing to overwrite $DEVICE. Choose a writable whole disk that is not a current boot drive."
+  local capability
+  capability="$(drive_capability "$DEVICE")" || error "Cannot validate the target-drive capacity."
+  validate_install_mode "$capability"
 }
 
 get_space_free() { #Input: folder to check. Output: how many bytes can fit before the disk is full.
@@ -2332,19 +2363,43 @@ list_devs() { #Output: human-readable, colorized list of valid block devices to 
   return $exitcode
 }
 
-detect_root_dev() { #Set ROOT_DEV to the Linux block device backing /
+detect_root_dev() { #Set ROOT_DEV to every whole disk backing the host root filesystem.
   if is_macos ;then
-    ROOT_DEV="/dev/$(darwin_device_value / '.ParentWholeDisk // .DeviceIdentifier')"
+    local root_details stores store root_disk root_paths=''
+    root_details="$(darwin_plist_json diskutil info -plist /)" || error "Failed to inspect the current macOS boot volume."
+    if jq -e 'has("APFSPhysicalStores") or has("APFSContainerReference")' >/dev/null 2>&1 <<<"$root_details";then
+      stores="$(jq -er '
+        if (.APFSPhysicalStores | type) == "array" and (.APFSPhysicalStores | length) > 0
+          and all(.APFSPhysicalStores[]; (.APFSPhysicalStore | type) == "string"
+            and (.APFSPhysicalStore | test("^disk[0-9]+(s[0-9]+)?$")))
+        then .APFSPhysicalStores[].APFSPhysicalStore
+        else error("Invalid APFS physical stores") end
+      ' <<<"$root_details")" || error "Failed to determine the physical APFS boot stores."
+      while IFS= read -r store;do
+        root_disk="$(darwin_device_value "/dev/$store" '.ParentWholeDisk // .DeviceIdentifier | select(type == "string" and test("^disk[0-9]+$"))')" \
+          || error "Failed to determine the whole boot disk for APFS store $store."
+        root_paths="${root_paths:+$root_paths$'\n'}/dev/$root_disk"
+      done <<<"$stores"
+      ROOT_DEV="$(LC_ALL=C sort -u <<<"$root_paths")"
+    else
+      root_disk="$(jq -er '.ParentWholeDisk // .DeviceIdentifier | select(type == "string" and test("^disk[0-9]+$"))' <<<"$root_details")" \
+        || error "Failed to determine the current macOS boot disk."
+      ROOT_DEV="/dev/$root_disk"
+    fi
     return
   fi
   command -v findmnt >/dev/null || error "findmnt is required to detect the current boot drive."
   command -v lsblk >/dev/null || error "lsblk is required to detect the current boot drive. WoR-Flasher's flashing path currently supports Linux hosts only."
-  local root_source
-  local root_parent
-  root_source="$(findmnt -n -o SOURCE /)"
-  root_parent="$(lsblk -no pkname "$root_source")"
-  [ -z "$root_parent" ] && error "Failed to determine the current boot drive from $root_source."
-  ROOT_DEV="/dev/$root_parent"
+  local root_source root_disks
+  root_source="$(findmnt -n -o SOURCE /)" || error "Failed to determine the current root filesystem."
+  root_source="${root_source%%\[*}"
+  #LVM, encryption and RAID can add several layers and more than one physical boot disk.
+  root_disks="$(
+    set -o pipefail
+    lsblk -snrpo NAME,TYPE "$root_source" | awk '$2 == "disk" || $2 == "loop" {print $1}' | LC_ALL=C sort -u
+  )" || error "Failed to determine the current boot drives from $root_source."
+  [ -n "$root_disks" ] || error "Failed to determine the current boot drives from $root_source."
+  ROOT_DEV="$root_disks"
 }
 
 list_langs() { #Output: colon-delimited list of languages. Format is <lang-code>:<lang-name>
@@ -3203,8 +3258,11 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
       config_file="$PWD/config-templates/config.json"
     fi
   fi
-  [ -n "$config_file" ] && [ -f "$config_file" ] || return 0
+  [ -n "$config_file" ] || return 0
+  [ -f "$config_file" ] && [ -r "$config_file" ] || error "Configuration file is missing or unreadable: $config_file"
   command -v jq >/dev/null 2>&1 || return 0
+  jq -e 'type == "object"' "$config_file" >/dev/null 2>&1 \
+    || error "Configuration must be a valid JSON object: $config_file"
 
   val_from_json() {
     jq -r "$1" "$config_file" 2>/dev/null
@@ -3226,7 +3284,7 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
     fi
     if [ -z "$current" ];then
       local json_val
-      json_val="$(val_from_json "$jq_expr")"
+      json_val="$(val_from_json "$jq_expr")" || error "Cannot read $var_name from configuration."
       if [ -n "$json_val" ] && [ "$json_val" != "null" ];then
         printf -v "$var_name" '%s' "$json_val"
       fi
@@ -3239,12 +3297,13 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
     local current="${!var_name:-}"
     if [ -z "$current" ];then
       local json_val
-      json_val="$(val_from_json "$jq_expr")"
-      if [ "$json_val" == "true" ] || [ "$json_val" == "1" ];then
-        printf -v "$var_name" '%s' "1"
-      elif [ "$json_val" == "false" ] || [ "$json_val" == "0" ];then
-        printf -v "$var_name" '%s' "0"
-      fi
+      json_val="$(val_from_json "$jq_expr")" || error "Cannot read $var_name from configuration."
+      case "$json_val" in
+        true|1) printf -v "$var_name" '%s' "1" ;;
+        false|0) printf -v "$var_name" '%s' "0" ;;
+        ''|null) ;;
+        *) error "$var_name must be a boolean in configuration." ;;
+      esac
     fi
   }
 
@@ -3259,12 +3318,14 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
         printf -v NO_UPDATE '%s' "1"
         return
       fi
-      json_val="$(val_from_json '.execution.checkForUpdates // .checkForUpdates // .CHECK_FOR_UPDATES // empty')"
-      if [ "$json_val" == "true" ] || [ "$json_val" == "1" ];then
-        printf -v NO_UPDATE '%s' "0"
-      elif [ "$json_val" == "false" ] || [ "$json_val" == "0" ];then
-        printf -v NO_UPDATE '%s' "1"
-      fi
+      json_val="$(val_from_json '[.execution.checkForUpdates, .checkForUpdates, .CHECK_FOR_UPDATES] | map(select(. != null)) | first')" \
+        || error "Cannot read CHECK_FOR_UPDATES from configuration."
+      case "$json_val" in
+        true|1) printf -v NO_UPDATE '%s' "0" ;;
+        false|0) printf -v NO_UPDATE '%s' "1" ;;
+        ''|null) ;;
+        *) error "CHECK_FOR_UPDATES must be a boolean in configuration." ;;
+      esac
     fi
   }
 
@@ -3277,27 +3338,27 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   set_bool_if_unset "WOR_IOT_CONFIRM_WIPE" '[.execution.confirmIotWipe, .WOR_IOT_CONFIRM_WIPE] | map(select(. != null)) | first'
   set_bool_if_unset "WOR_IOT_DOWNLOAD" '[.media.downloadIotImage, .WOR_IOT_DOWNLOAD] | map(select(. != null)) | first'
   set_if_unset "DEVICE" '.target.device // .device // .DEVICE // empty'
-  set_bool_if_unset "CAN_INSTALL_ON_SAME_DRIVE" '.target.canInstallOnSameDrive // .canInstallOnSameDrive // .CAN_INSTALL_ON_SAME_DRIVE // empty'
+  set_bool_if_unset "CAN_INSTALL_ON_SAME_DRIVE" '[.target.canInstallOnSameDrive, .canInstallOnSameDrive, .CAN_INSTALL_ON_SAME_DRIVE] | map(select(. != null)) | first'
   set_if_unset "WIN_LANG" '.media.winLang // .winLang // .WIN_LANG // empty'
   set_if_unset "BID" '.media.bid // .bid // .BID // empty'
   set_if_unset "SOURCE_FILE" '.media.sourceFile // .sourceFile // .SOURCE_FILE // empty'
   set_if_unset "DL_DIR" '.media.downloadDir // .downloadDir // .DL_DIR // empty'
   set_if_unset "USE_CACHE" '.media.useCache // .useCache // .USE_CACHE // empty'
 
-  set_bool_if_unset "APPLY_CUSTOM_CONFIG_TXT" '.customization.applyCustomConfigTxt // .applyCustomConfigTxt // .APPLY_CUSTOM_CONFIG_TXT // empty'
+  set_bool_if_unset "APPLY_CUSTOM_CONFIG_TXT" '[.customization.applyCustomConfigTxt, .applyCustomConfigTxt, .APPLY_CUSTOM_CONFIG_TXT] | map(select(. != null)) | first'
   set_if_unset "CONFIG_TXT" '.customization.configTxt // .configTxt // .CONFIG_TXT // empty'
   set_if_unset "HDMI_MODE" '.customization.hdmiMode // .hdmiMode // .HDMI_MODE // empty'
   set_if_unset "BOOT_CONFIG_SETTINGS" '.customization.bootSettings // .BOOT_CONFIG_SETTINGS // empty'
   set_if_unset "IOT_CORE_HDMI_MODE" '.customization.iotHdmiMode // .IOT_CORE_HDMI_MODE // empty'
   set_if_unset "IOT_CORE_HDMI_CONFIG" '.customization.iotHdmiConfig // .IOT_CORE_HDMI_CONFIG // empty'
-  set_bool_if_unset "OOBE_NETWORK_BYPASS" '.customization.oobeNetworkBypass // .oobeNetworkBypass // .OOBE_NETWORK_BYPASS // empty'
-  set_bool_if_unset "PI4_AUTO_DISABLE_3GB" '.customization.pi4AutoDisable3Gb // .pi4AutoDisable3Gb // .PI4_AUTO_DISABLE_3GB // empty'
-  set_bool_if_unset "PI4_UEFI_SHELL_UNLOCK" '.customization.pi4UefiShellUnlock // .pi4UefiShellUnlock // .PI4_UEFI_SHELL_UNLOCK // empty'
+  set_bool_if_unset "OOBE_NETWORK_BYPASS" '[.customization.oobeNetworkBypass, .oobeNetworkBypass, .OOBE_NETWORK_BYPASS] | map(select(. != null)) | first'
+  set_bool_if_unset "PI4_AUTO_DISABLE_3GB" '[.customization.pi4AutoDisable3Gb, .pi4AutoDisable3Gb, .PI4_AUTO_DISABLE_3GB] | map(select(. != null)) | first'
+  set_bool_if_unset "PI4_UEFI_SHELL_UNLOCK" '[.customization.pi4UefiShellUnlock, .pi4UefiShellUnlock, .PI4_UEFI_SHELL_UNLOCK] | map(select(. != null)) | first'
   set_bool_if_unset "UEFI_USE_LATEST" '[.customization.uefiUseLatest, .uefiUseLatest, .UEFI_USE_LATEST] | map(select(. != null)) | first'
   set_bool_if_unset "DRIVERS_USE_LATEST" '[.customization.driversUseLatest, .driversUseLatest, .DRIVERS_USE_LATEST] | map(select(. != null)) | first'
-  set_bool_if_unset "HIDE_EMPTY_DRIVES" '.customization.hideEmptyDrives // .hideEmptyDrives // .HIDE_EMPTY_DRIVES // empty'
+  set_bool_if_unset "HIDE_EMPTY_DRIVES" '[.customization.hideEmptyDrives, .hideEmptyDrives, .HIDE_EMPTY_DRIVES] | map(select(. != null)) | first'
 
-  set_bool_if_unset "WINDOWS_ACCOUNT_SETUP" '.userAccount.setupAccount // .windowsAccountSetup // .WINDOWS_ACCOUNT_SETUP // empty'
+  set_bool_if_unset "WINDOWS_ACCOUNT_SETUP" '[.userAccount.setupAccount, .windowsAccountSetup, .WINDOWS_ACCOUNT_SETUP] | map(select(. != null)) | first'
   set_if_unset "WINDOWS_ACCOUNT_USERNAME" '.userAccount.username // .windowsAccountUsername // .WINDOWS_ACCOUNT_USERNAME // empty'
   set_if_unset "WINDOWS_ACCOUNT_PASSWORD" '.userAccount.password // .windowsAccountPassword // .WINDOWS_ACCOUNT_PASSWORD // empty'
   set_bool_if_unset "IOT_CORE_ACCOUNT_SETUP" '[.userAccount.iotCore.enabled, .IOT_CORE_ACCOUNT_SETUP] | map(select(. != null)) | first'
@@ -3309,17 +3370,17 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   set_if_unset "IOT_CORE_CURRENT_PASSWORD" '.userAccount.iotCore.currentPassword // .IOT_CORE_CURRENT_PASSWORD // empty' preserve-empty
   set_bool_if_unset "IOT_CORE_LANGUAGE_SETUP" '[.userAccount.iotCore.languageSetup, .IOT_CORE_LANGUAGE_SETUP] | map(select(. != null)) | first'
   set_if_unset "IOT_CORE_LANGUAGE" '.userAccount.iotCore.language // .IOT_CORE_LANGUAGE // empty'
-  set_bool_if_unset "WINDOWS_LOCALE_SETUP" '.userAccount.localeSetup // .windowsLocaleSetup // .WINDOWS_LOCALE_SETUP // empty'
+  set_bool_if_unset "WINDOWS_LOCALE_SETUP" '[.userAccount.localeSetup, .windowsLocaleSetup, .WINDOWS_LOCALE_SETUP] | map(select(. != null)) | first'
   set_if_unset "WINDOWS_LOCALE" '.userAccount.locale // .windowsLocale // .WINDOWS_LOCALE // empty'
 
-  set_bool_if_unset "DRY_RUN" '.execution.dryRun // .dryRun // .DRY_RUN // empty'
-  set_bool_if_unset "SKIP_IMAGE_VERIFICATION" '.execution.skipImageVerification // .skipImageVerification // .SKIP_IMAGE_VERIFICATION // empty'
-  set_bool_if_unset "VERIFY_TLS" '.execution.verifyTls // .verifyTls // .VERIFY_TLS // empty'
+  set_bool_if_unset "DRY_RUN" '[.execution.dryRun, .dryRun, .DRY_RUN] | map(select(. != null)) | first'
+  set_bool_if_unset "SKIP_IMAGE_VERIFICATION" '[.execution.skipImageVerification, .skipImageVerification, .SKIP_IMAGE_VERIFICATION] | map(select(. != null)) | first'
+  set_bool_if_unset "VERIFY_TLS" '[.execution.verifyTls, .verifyTls, .VERIFY_TLS] | map(select(. != null)) | first'
   set_check_updates_if_unset
-  set_bool_if_unset "NO_UPDATE" '.execution.noUpdate // .noUpdate // .NO_UPDATE // empty'
+  set_bool_if_unset "NO_UPDATE" '[.execution.noUpdate, .noUpdate, .NO_UPDATE] | map(select(. != null)) | first'
   set_if_unset "WOR_LOG_FILE" '.execution.logFile // .logFile // .WOR_LOG_FILE // empty'
 
-  set_bool_if_unset "PLAY_SOUND" '.notifications.playSound // .playSound // .PLAY_SOUND // empty'
+  set_bool_if_unset "PLAY_SOUND" '[.notifications.playSound, .playSound, .PLAY_SOUND] | map(select(. != null)) | first'
   set_bool_if_unset "SHOW_NOTIFICATION" '[.notifications.showNotification, .showNotification, .SHOW_NOTIFICATION] | map(select(. != null)) | first'
   #the sound is named per platform, so a config shared between a Mac and a Linux box suits both
   if is_macos ;then
@@ -3345,26 +3406,35 @@ load_config_json() { #Input: optional config file path. Output: populates unset 
   [[ "$WOR_LOG_FILE" == \~* ]] && WOR_LOG_FILE="$HOME${WOR_LOG_FILE#\~}"
 }
 
+parse_config_arguments() { #Input: entry-point arguments. Keep configuration selection shared by CLI and sourced GUI.
+  local args=("$@") index
+  for ((index=0; index<${#args[@]}; index++));do
+    case "${args[$index]}" in
+      --iot-core) WOR_IMAGE_FAMILY=iot-core ;;
+      --iot-core-download) WOR_IMAGE_FAMILY=iot-core; WOR_IOT_DOWNLOAD=1 ;;
+      --config=*)
+        WOR_CONFIG_FILE="${args[$index]#*=}"
+        [ -n "$WOR_CONFIG_FILE" ] || error "--config requires a file path argument."
+        ;;
+      --config)
+        index=$((index+1))
+        [ "$index" -lt "${#args[@]}" ] && [ -n "${args[$index]}" ] \
+          || error "--config requires a file path argument."
+        WOR_CONFIG_FILE="${args[$index]}"
+        ;;
+    esac
+  done
+}
+
 #
 ######## END OF FUNCTIONS, BEGINNING OF SCRIPT
 #
 
 #Load configuration values from config.json if present and variables are unset
-if [ "${1:-}" != source ];then
-  wor_config_args=("$@")
-  for ((wor_config_index=0; wor_config_index<${#wor_config_args[@]}; wor_config_index++));do
-    case "${wor_config_args[$wor_config_index]}" in
-      --iot-core) WOR_IMAGE_FAMILY=iot-core ;;
-      --iot-core-download) WOR_IMAGE_FAMILY=iot-core; WOR_IOT_DOWNLOAD=1 ;;
-      --config=*) WOR_CONFIG_FILE="${wor_config_args[$wor_config_index]#*=}" ;;
-      --config)
-        wor_config_index=$((wor_config_index+1))
-        [ "$wor_config_index" -lt "${#wor_config_args[@]}" ] || error "--config requires a file path argument."
-        WOR_CONFIG_FILE="${wor_config_args[$wor_config_index]}"
-        ;;
-    esac
-  done
-  unset wor_config_args wor_config_index
+if [ "${1:-}" == source ];then
+  parse_config_arguments "${@:2}"
+else
+  parse_config_arguments "$@"
 fi
 if [ -n "${WOR_CONFIG_FILE:-}" ];then
   [ -f "$WOR_CONFIG_FILE" ] && [ -r "$WOR_CONFIG_FILE" ] || error "Configuration file is missing or unreadable: $WOR_CONFIG_FILE"
@@ -4299,10 +4369,7 @@ if [ "$DRY_RUN" == 1 ];then
   exit 0
 fi
 
-#now that downloads are complete, check again if destination storage is accessible
-if [ ! -b "$DEVICE" ];then
-  error "Device $DEVICE is not a valid block device! Available devices:\n$(list_devs)"
-fi
+validate_target_before_write
 
 if is_macos ;then
   darwin_flash_device

@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
 } from "node:fs";
@@ -15,6 +16,12 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoDir = join(scriptDir, "..", "..");
 const defaultMetadataFile = join(repoDir, "src", "config", "metadata.json");
+
+export function isMainModule(moduleUrl) {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && existsSync(entrypoint) &&
+    realpathSync(entrypoint) === realpathSync(fileURLToPath(moduleUrl)));
+}
 
 export function parseVersion(versionStr) {
   if (!versionStr || typeof versionStr !== "string") return [0, 0, 0];
@@ -38,7 +45,11 @@ export function readProjectMetadata(metadataFile = defaultMetadataFile) {
   if (!existsSync(metadataFile)) {
     throw new Error(`Missing project metadata: ${metadataFile}`);
   }
-  return JSON.parse(readFileSync(metadataFile, "utf8"));
+  const metadata = JSON.parse(readFileSync(metadataFile, "utf8"));
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    throw new Error(`Project metadata must be a JSON object: ${metadataFile}`);
+  }
+  return metadata;
 }
 
 function isSafeRuntimePath(path) {
@@ -199,36 +210,35 @@ export function loadSystemConfig(repoPath = repoDir) {
   const configPath = join(repoPath, "config-templates", "config.json");
   let system = {};
   if (existsSync(metadataPath)) {
-    try {
-      const defaults = readProjectMetadata(metadataPath).systemDefaults || {};
-      system = {
-        peInstallerUrl: defaults.peInstallerUrl,
-        peInstallerSha256: defaults.peInstallerSha256,
-        uefiVerPi3: defaults.uefiVerPi3,
-        uefiVerPi4: defaults.uefiVerPi4,
-        uefiVerPi5: defaults.uefiVerPi5,
-        driverVer: defaults.driverVer,
-        armv80MaxBuild: defaults.armv80MaxBuild,
-        win11MinBuild: defaults.win11MinBuild,
-        win10OldestBuild: defaults.win10OldestBuild,
-        exampleBid: defaults.exampleBid,
-        armv80SafeBid: defaults.armv80SafeBid,
-        repoSlug: defaults.repoSlug,
-      };
-      system = Object.fromEntries(
-        Object.entries(system).filter(([, value]) => value !== undefined),
-      );
-    } catch {
-      system = {};
+    const defaults = readProjectMetadata(metadataPath).systemDefaults ?? {};
+    if (typeof defaults !== "object" || Array.isArray(defaults)) {
+      throw new Error(`systemDefaults must be an object: ${metadataPath}`);
     }
+    system = {
+      peInstallerUrl: defaults.peInstallerUrl,
+      peInstallerSha256: defaults.peInstallerSha256,
+      uefiVerPi3: defaults.uefiVerPi3,
+      uefiVerPi4: defaults.uefiVerPi4,
+      uefiVerPi5: defaults.uefiVerPi5,
+      driverVer: defaults.driverVer,
+      armv80MaxBuild: defaults.armv80MaxBuild,
+      win11MinBuild: defaults.win11MinBuild,
+      win10OldestBuild: defaults.win10OldestBuild,
+      exampleBid: defaults.exampleBid,
+      armv80SafeBid: defaults.armv80SafeBid,
+      repoSlug: defaults.repoSlug,
+    };
+    system = Object.fromEntries(
+      Object.entries(system).filter(([, value]) => value !== undefined),
+    );
   }
   if (!existsSync(configPath)) return { system };
-  try {
-    const config = JSON.parse(readFileSync(configPath, "utf8"));
-    return { ...config, system: { ...system, ...(config.system || {}) } };
-  } catch {
-    return { system };
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  if (!config || typeof config !== "object" || Array.isArray(config) ||
+    (config.system !== undefined && (!config.system || typeof config.system !== "object" || Array.isArray(config.system)))) {
+    throw new Error(`System configuration must contain JSON objects: ${configPath}`);
   }
+  return { ...config, system: { ...system, ...config.system } };
 }
 
 //The slug is interpolated into the update URL, so it must match the exact owner/name shape
@@ -250,16 +260,19 @@ export async function checkReleaseUpdate({
   timeoutMs = 5000,
   fetchImpl = fetch,
 } = {}) {
-  const systemConfig = loadSystemConfig(repoPath)?.system || {};
-  const finalRepoSlug = repoSlug || systemConfig.repoSlug;
-  const version =
-    currentVersion || readProjectMetadata().product?.version || "0.0.0";
-
-  if (!isSafeRepoSlug(finalRepoSlug)) {
-    return { updateAvailable: false, error: "unsafe-repo-slug" };
-  }
-
   try {
+    const systemConfig = loadSystemConfig(repoPath).system;
+    const finalRepoSlug = repoSlug ?? systemConfig.repoSlug;
+    const version = currentVersion ??
+      readProjectMetadata(join(repoPath, "src/config/metadata.json")).product?.version;
+    if (!isSafeRepoSlug(finalRepoSlug)) {
+      return { updateAvailable: false, error: "unsafe-repo-slug" };
+    }
+    const stableVersion = (value) => typeof value === "string" &&
+      /^v?\d+\.\d+\.\d+$/i.test(value) && parseVersion(value).every(Number.isSafeInteger);
+    if (!stableVersion(version)) {
+      return { updateAvailable: false, error: "invalid-current-version" };
+    }
     const response = await fetchImpl(
       `https://api.github.com/repos/${finalRepoSlug}/releases/latest`,
       {
@@ -274,12 +287,19 @@ export async function checkReleaseUpdate({
     if (!response.ok) return { updateAvailable: false, error: response.status };
 
     const data = await response.json();
+    if (!data || typeof data !== "object" || Array.isArray(data) ||
+      ["draft", "prerelease"].some((key) => data[key] !== undefined && typeof data[key] !== "boolean")) {
+      return { updateAvailable: false, error: "invalid-release-metadata" };
+    }
     if (data.draft || data.prerelease) {
       return { updateAvailable: false, currentVersion: version };
     }
 
-    const latestVersion = data.tag_name || data.name || "";
-    const htmlUrl = data.html_url || "";
+    const latestVersion = data.tag_name;
+    const htmlUrl = data.html_url ?? "";
+    if (!stableVersion(latestVersion) || typeof htmlUrl !== "string") {
+      return { updateAvailable: false, error: "invalid-release-metadata" };
+    }
 
     return {
       updateAvailable: compareVersions(latestVersion, version) > 0,
@@ -288,6 +308,6 @@ export async function checkReleaseUpdate({
       htmlUrl: htmlUrl.startsWith("https://") ? htmlUrl : "",
     };
   } catch (err) {
-    return { updateAvailable: false, error: err.message };
+    return { updateAvailable: false, error: err instanceof Error ? err.message : String(err) };
   }
 }

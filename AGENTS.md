@@ -28,7 +28,7 @@ Run the narrowest applicable check first. The repository has no compilation step
 ```bash
 # Syntax and ShellCheck for all maintained Bash entry points, libraries, and tests.
 # These match the targets validated by CI (.github/workflows/shellcheck.yml).
-bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
+bash tests/check-shell-syntax.sh
 shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
 
 # Release tooling validation and artifact staging cleanup

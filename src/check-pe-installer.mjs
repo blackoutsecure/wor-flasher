@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readProjectMetadata } from "./lib/node-runtime.mjs";
+import { parseArgs } from "node:util";
+import { isMainModule, readProjectMetadata } from "./lib/node-runtime.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoDir = join(scriptDir, "..");
@@ -15,14 +16,6 @@ const peAssetPattern = /^WoR-PE_Package_.*\.zip$/i;
 function fail(message, code = 1) {
   console.error(message);
   process.exit(code);
-}
-
-function valueFor(args, name) {
-  const index = args.indexOf(name);
-  if (index !== -1) return args[index + 1];
-  const prefix = `${name}=`;
-  const match = args.find((arg) => arg.startsWith(prefix));
-  return match ? match.slice(prefix.length) : undefined;
 }
 
 export function sha256Buffer(buffer) {
@@ -111,20 +104,33 @@ export async function updatePeInstallerMetadata({
 }
 
 async function main() {
-  const args = process.argv.slice(2);
-  if (args.includes("--help") || args.includes("-h")) {
+  const { values } = parseArgs({
+    options: {
+      check: { type: "boolean" },
+      "write-latest": { type: "boolean" },
+      metadata: { type: "string" },
+      "release-api-url": { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+  if (values.help) {
     console.log(
       `WoR-Flasher PE installer metadata tool\n\nUsage:\n  node src/check-pe-installer.mjs --check [--metadata FILE]\n  node src/check-pe-installer.mjs --write-latest [--metadata FILE] [--release-api-url URL]\n\nOptions:\n  --check             Download the pinned PE installer and verify peInstallerSha256\n  --write-latest      Resolve the latest WoR-PE asset, hash it, and update metadata\n  --metadata FILE     Project metadata file (default: src/config/metadata.json)\n  --release-api-url   GitHub release API URL for latest lookup\n`,
     );
     return;
   }
 
-  const metadataFile = valueFor(args, "--metadata") || defaultMetadataFile;
-  if (args.includes("--write-latest")) {
+  if (values.check && values["write-latest"]) fail("--check and --write-latest are mutually exclusive.", 2);
+  if (values["release-api-url"] !== undefined && !values["write-latest"]) {
+    fail("--release-api-url requires --write-latest.", 2);
+  }
+  const metadataFile = values.metadata ?? defaultMetadataFile;
+  if (!metadataFile) fail("--metadata requires a file path.", 2);
+  if (values["write-latest"]) {
     const result = await updatePeInstallerMetadata({
       metadataFile,
       releaseApiUrl:
-        valueFor(args, "--release-api-url") || defaultReleaseApiUrl,
+        values["release-api-url"] ?? defaultReleaseApiUrl,
     });
     console.log(`Updated PE installer metadata: ${result.name}`);
     console.log(`URL: ${result.url}`);
@@ -132,7 +138,7 @@ async function main() {
     return;
   }
 
-  if (args.includes("--check") || args.length === 0) {
+  if (!values["write-latest"]) {
     const result = await verifyPinnedPeInstaller(metadataFile);
     if (!result.ok) {
       console.error(`PE installer SHA-256 mismatch for ${result.url}`);
@@ -147,8 +153,8 @@ async function main() {
   fail("Unsupported option. Run with --help for usage.", 2);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) =>
-    fail(error instanceof Error ? error.message : String(error)),
+    fail(error instanceof Error ? error.message : String(error), error.code?.startsWith("ERR_PARSE_ARGS") ? 2 : 1),
   );
 }

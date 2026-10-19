@@ -292,9 +292,9 @@ def desktop(request: dict[str, Any]) -> dict[str, Any]:
         user_lines = parse(user_text, warnings)
         if any(line.key.split(":")[0] in required for line in user_lines if line.key):
             raise ConfigError("Required boot settings belong to the protected section, not user additions.")
-        lines = [line for line in lines if line.key in required or line.key in supported or (
-            line.key == "dtoverlay" and line.value in required_overlays
-        )]
+        lines = [line for line in lines if line.key in required or (
+            line.key in supported and line.unconditional and line.key not in conditional_keys
+        ) or (line.key == "dtoverlay" and line.value in required_overlays)]
         #User additions are last in the actual file, so an explicitly added supported scalar wins.
         for key in HDMI_KEYS - supported:
             original.pop(key, None)
@@ -311,6 +311,8 @@ def desktop(request: dict[str, Any]) -> dict[str, Any]:
     managed_hdmi = mode in ("official", "recommended") or (
         bool(recommended_hdmi) and current_hdmi == recommended_hdmi and not conditional_keys & HDMI_KEYS
     )
+    #Even unconditional assignments must stay in order when filters can override the same key.
+    managed_keys = (supported | (HDMI_KEYS if managed_hdmi else set())) - conditional_keys
     managed: list[str] = ["[all]"]
     for line in baseline:
         if line.key in required:
@@ -320,7 +322,7 @@ def desktop(request: dict[str, Any]) -> dict[str, Any]:
     for key, value in original.items():
         if key in required:
             continue
-        if key in supported or (key in HDMI_KEYS and managed_hdmi):
+        if key in managed_keys:
             if value:
                 managed.append(f"{key}={value}")
 
@@ -333,10 +335,7 @@ def desktop(request: dict[str, Any]) -> dict[str, Any]:
                 if "#" in line.raw:
                     additions.append("#" + line.raw.split("#", 1)[1])
                 continue
-        if line.unconditional and (
-            line.key in required or line.key in supported
-            or (line.key in HDMI_KEYS and managed_hdmi)
-        ):
+        if line.unconditional and (line.key in required or line.key in managed_keys):
             if "#" in line.raw:
                 additions.append("#" + line.raw.split("#", 1)[1])
             continue

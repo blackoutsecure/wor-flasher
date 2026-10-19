@@ -15,14 +15,16 @@ preserving Botspot's original authorship and the project's community connections
 
 ## Where to send your change
 
-Open bug fixes, features and documentation changes at [Botspot/wor-flasher][issues].
-Keep changes focused, preserve original attribution and explain user-visible behavior
-in the pull request.
+Open bug fixes, features and documentation changes at
+[blackoutsecure/wor-flasher][issues]. Keep changes focused, preserve Botspot's
+original attribution and explain user-visible behavior in the pull request.
+Changes appropriate for the original project can also be offered to
+[Botspot/wor-flasher](https://github.com/Botspot/wor-flasher).
 
 ## Getting set up
 
 ```bash
-git clone https://github.com/Botspot/wor-flasher
+git clone https://github.com/blackoutsecure/wor-flasher
 cd wor-flasher
 ```
 
@@ -37,6 +39,7 @@ scripts install for themselves.
 ./tests/run-tests.sh --gui    # walk through the GUI in DRY_RUN mode
 ./tests/run-linux-integration.sh   # force the Dockerised Linux suite
 npm run check                 # shell syntax and an isolated release-package build
+bash tests/check-shell-syntax.sh  # parse every maintained Bash file without Node
 ```
 
 The Pi 3 post-install bootstrap helper is a small, self-contained Windows ARM64
@@ -65,6 +68,10 @@ test on a Pi.
 The suite must be green and ShellCheck must be error-clean before a pull request can
 be merged. CI runs the same commands on Ubuntu and macOS.
 
+The syntax gate checks each file separately: `bash -n first.sh second.sh` parses
+only `first.sh` and passes the remaining filenames as arguments. Keep local and
+CI checks on the shared gate rather than reintroducing that multi-file form.
+
 Two things to know about the harness:
 
 - On macOS only the **Static checks** and **Shared engine functions** sections run.
@@ -80,6 +87,11 @@ Two things to know about the harness:
 
 **Mutation-test anything you add.** Break the behaviour on purpose, confirm your new
 test fails, then put it back. A test that never fails is not a test.
+
+Mocked Advanced Options tests use `tests/run-bash-fixture.mjs` to enforce their
+existing deadline and stop owned descendant processes, including workers that
+ignore termination. Keep these fixtures offline and fail on unexpected network,
+GUI or privilege-tool calls; do not hide a stalled fixture by raising its timeout.
 
 ## House style
 
@@ -148,6 +160,6 @@ For real-time help, the [Botspot Software Discord][botspot-discord] is the best 
 for WoR-Flasher itself, and the [WoR project Discord][wor-discord] is the place for
 questions about Windows on Raspberry as an operating system.
 
-[issues]: https://github.com/Botspot/wor-flasher/issues/new/choose
+[issues]: https://github.com/blackoutsecure/wor-flasher/issues/new/choose
 [botspot-discord]: https://discord.gg/RXSTvaUvuu
 [wor-discord]: https://discord.gg/jQCpfVK

@@ -335,6 +335,8 @@ they are current or commercially licensed LTSC images.
    The manual address field is enabled only when the checkbox is cleared;
    switching back to automatic preserves any typed manual value for later use.
    An existing explicit address stays manual unless automatic mode is chosen.
+   IPv6 link-local endpoints retain their interface scope through lookup and
+   pairing; addresses on different interfaces remain distinct candidates.
    The current-login fields default to Microsoft's factory
    **Administrator / `p@ssw0rd`** (with a zero), with the password masked and
    both fields always enabled and editable; they have no opt-out checkbox.
@@ -582,6 +584,17 @@ RPI_MODEL=4 WIN_LANG=en-us BID=22631.2861 DEVICE=/dev/sda CAN_INSTALL_ON_SAME_DR
 ./install-wor.sh --config config-templates/config.json
 ```
 
+The GUI accepts the same `--config FILE` and `--config=FILE` options, including
+paths containing spaces. Explicit JSON `false` values are preserved, not treated
+as missing; nested settings take precedence over legacy aliases. Malformed JSON
+and invalid boolean preferences stop with an error instead of silently using
+defaults.
+
+Interrupting the GUI stops its owned installer processes rather than leaving a
+flash running in the background. Linux GUI failures retain the installer's
+nonzero exit status; closing macOS startup cancels preparation before the GUI
+launches.
+
 Refer to [`config-templates/config.json`](config-templates/config.json) for the default run configuration and [`config-templates/config.schema.json`](config-templates/config.schema.json) for the full JSON configuration schema. Project pins such as the WoR-PE package URL, SHA-256 digest, firmware versions, driver version, Windows build guardrails and update target live in [`src/config/metadata.json`](src/config/metadata.json), are loaded by [`src/lib/metadata.sh`](src/lib/metadata.sh), and remain overrideable through environment variables or a custom config file.
 
 Sourcing with the `source` argument makes the engine's functions available without running a flash. Useful ones include `list_devs`, `list_dev_paths`, `drive_capability`, `describe_device`, `get_bid`, `get_os_name`, `list_langs`, `validate_iso_file`, `list_cached_winfiles`, `settings_summary` and `install_packages`.
@@ -618,7 +631,7 @@ Standalone bootstrap requires `git`. These variables control where the hook obta
 | `WOR_HOOK_REF`         | `main`                                             | Branch or tag cloned by the hook             |
 | `WOR_HOOK_INSTALL_DIR` | `${XDG_CACHE_HOME:-$HOME/.cache}/wor-flasher-hook` | Persistent checkout used by standalone hooks |
 
-Discovery is a snapshot, not authorization to erase a path later. `list-devices` rejects unsupported hosts and excludes the current boot drive, but device state can change. `describe-device` formats any supplied path and `summary` previews settings; neither validates that a device is currently safe. Call `list-devices` again before `run`, and let `run` perform the engine's final host, device, capacity and installation-mode checks. For unattended operation, provide all required values from [Parameters](#parameters) through environment variables or repeated `--set NAME=VALUE` options; otherwise the engine can prompt for missing choices.
+Discovery is a snapshot, not authorization to erase a path later. `list-devices` rejects unsupported hosts and excludes the current boot drive, but device state can change. `describe-device` formats any supplied path and `summary` previews settings; neither validates that a device is currently safe. Call `list-devices` again before `run`, and let `run` perform the engine's final host, device, capacity and installation-mode checks. Desktop targets are checked again after image preparation, immediately before either platform's writer. Linux rejects partitions, read-only targets and aliases of any whole disk backing the root filesystem, including layered LVM/encryption/RAID devices. macOS resolves APFS physical stores to their whole disks and excludes those boot disks from discovery, including an external startup drive. For unattended operation, provide all required values from [Parameters](#parameters) through environment variables or repeated `--set NAME=VALUE` options; otherwise the engine can prompt for missing choices.
 
 The adapter is transport-neutral. A GUI, desktop launcher, test harness or another local imaging application can present its own choices and invoke the same engine without copying its flashing logic. Pass `--progress-file FILE` or set `WOR_GUI_PROGRESS_FILE` to a writable path to receive line-oriented, tab-separated events while `run` is active:
 
@@ -637,10 +650,20 @@ Raspberry Pi Imager supports a custom image repository through `--repo`, which i
 
 ## Release tooling
 
-The flashing engine remains `install-wor.sh`. Node.js is used only for release packaging and validation, where it is a better fit for deterministic file copying, checksum generation and future platform manifests. The tooling has no runtime dependencies.
+The flashing engine remains `install-wor.sh`, shared by the original CLI, GUI and
+hook entry points. Node.js 20 or newer runs maintainer packaging/tests and the
+optional read-only release notice; packaged clients can flash without Node.
+The tooling uses only Node's built-in modules and needs no npm dependencies.
+
+A Rust rewrite is not warranted for these small tooling scripts: it would add a
+compiler, cross-platform builds and migration risk without accelerating disk I/O,
+image conversion or decompression, which the existing engine delegates to native
+tools. Keep the established Bash interfaces and the existing native helpers rather
+than creating a second flashing implementation.
 
 ```bash
 npm run check          # shell syntax, macOS runtime freshness and release-plan validation
+npm run check:shell    # parse every maintained Bash script individually
 npm run build          # stage fresh macOS, Linux and Windows-placeholder release folders
 npm run build:macos    # stage the .app and, on macOS, its versioned .dmg with SHA256SUMS
 npm run build:linux    # stage separate minimal Linux GUI/CLI tar.gz clients and SHA256SUMS
@@ -656,7 +679,13 @@ Generated release output is written under `release/` and is intentionally ignore
 
 `pe:check` and `pe:update` are maintainer commands because they download release assets. Keep `pe:check` out of routine CI unless network access is expected; use `pe:update` only when deliberately refreshing the pinned WoR-PE package URL and digest in [`src/config/metadata.json`](src/config/metadata.json).
 
-[`src/config/metadata.json`](src/config/metadata.json) is the source of truth for `package.json`'s `version`, `description`, `license`, `homepage`, `repository`, `bugs`, `funding`, and `keywords`; edit `product.*` there, then run `npm run metadata:write` (or `npm run version:set`, which calls it automatically). `npm run build` and `npm run package:all` refuse to stage a release while `package.json` is out of sync, and `npm run check` runs `metadata:check` too.
+[`src/config/metadata.json`](src/config/metadata.json) is the source of truth for `package.json`'s `version`, `description`, `license`, `homepage`, `repository`, `bugs`, `funding`, and `keywords`; edit `product.*` there, then run `npm run metadata:write` (or `npm run version:set -- X.Y.Z`, which derives these fields automatically). `npm run build` and `npm run package:all` refuse to stage a release while `package.json` is out of sync, and `npm run check` runs `metadata:check` too.
+
+Version updates preflight every metadata, app and documentation surface before
+writing any file, including both version histories. Maintainer commands reject
+unknown, incomplete or conflicting options before doing work. Release checks use
+the selected repository's version and report malformed metadata as `UNKNOWN`,
+never as a successful current-version check.
 
 Windows packaging is intentionally only a placeholder today. A Windows UI should drive the same `install-wor-hook.sh` / engine contract only after a separate device-safety design exists for Windows disks, elevation and removable media. Until then, Windows users should use the official Windows on Raspberry Imager.
 
@@ -885,6 +914,8 @@ keeping the last value and reporting the cleanup. Repeated `dtoverlay`, `dtparam
 and `gpio` commands, and settings in different conditional blocks, are **not**
 globally deduplicated. Conditional settings that can override a simple control make
 that control read-only until the advanced override is removed.
+Saving preserves the order of conditional/per-port assignments and later
+`[all]` overrides; read-only controls are not hoisted across filter boundaries.
 
 Unknown parameters remain in user additions with an explicit **not validated**
 warning. This is not a firmware/monitor/Windows compatibility certification.
@@ -1253,6 +1284,7 @@ This is disabled automatically by default; see [Pi 4 RAM unlock](#pi-4-ram-unloc
 ./tests/run-linux-integration.sh    # force the Dockerised Linux suite
 LINUX_TEST_IMAGE=node:22-bookworm-slim ./tests/run-linux-integration.sh  # include Node-based Linux checks
 npm run check                       # shell syntax, package-plan checks, and release-tool syntax
+bash tests/check-shell-syntax.sh     # Bash-only syntax gate, shared with npm and CI
 npm run build:macos                 # generate the .app and, on macOS, the release .dmg
 npm run build:standalone            # generate release/standalone/install-wor.sh
 node src/package-macos-app.mjs --check  # verify generated macOS runtime matches canonical sources
@@ -1380,6 +1412,11 @@ These additions are maintained directly by Blackout Secure in cooperation with B
   - Default IoT video to the recommended 720p/60 Hz compatibility preset, with optional video-only boot configuration editing.
   - Add optional post-boot administrator setup and host-selected IoT language preferences over fingerprint-pinned SSH, with explicit pending and verification states.
   - Accept valid signed macOS drive identities and offer a separately confirmed full-drive wipe before IoT imaging, with complete blank-drive read-back.
+  - Honor explicit false JSON preferences and direct GUI configuration options; fail explicitly on invalid configuration.
+  - Revalidate desktop targets before writing and exclude read-only disks, partitions, layered Linux boot disks and macOS APFS boot stores.
+  - Keep conditional boot-setting order and scoped IPv6 IoT endpoints intact.
+  - Stop owned installer processes on interrupted GUI exits, open the Linux boot editor within an active wizard, preserve installer failure status and honor macOS startup cancellation.
+  - Validate every version surface before updates, reject invalid maintainer options and syntax-check every shell script in local and CI gates.
 
 - **2.0.1**
   - Package the macOS release as a verified compressed DMG containing the complete app, while retaining the unpacked local app.

@@ -108,6 +108,30 @@ describe("Shared boot configuration parsing and ownership", () => {
     assert.equal(invalid.status, 1);
     assert.match(invalid.data.error, /advanced conditional/);
   });
+  for (const [label, key, additions] of [
+    ["board filters", "enable_uart", "[pi4]\nenable_uart=0\n[all]\nenable_uart=1\n"],
+    ["HDMI filters", "hdmi_drive", "hdmi_drive=2\n[HDMI:0]\nhdmi_drive=1\n[all]\nhdmi_drive=2\n"],
+    ["per-port settings", "hdmi_drive", "hdmi_drive:0=1\nhdmi_drive=2\n"],
+  ]) {
+    it(`preserves conditional precedence across ${label} on ordinary and advanced saves`, () => {
+      const state = success({ config: contexts.get("4").official + "\n" + additions });
+      assert.ok(state.userText.endsWith(additions.trimEnd()), state.config);
+      assert.equal(state.fields.find((field) => field.key === key).disabled, true);
+      const saved = success({ config: state.config });
+      assert.equal(saved.config, state.config);
+      const advanced = success({ config: saved.config, userText: saved.userText });
+      assert.equal(advanced.config, state.config);
+      assert.equal(advanced.userText, state.userText);
+    });
+  }
+  it("does not turn removed conditional settings into unconditional advanced additions", () => {
+    const state = success({ config: contexts.get("4").official + "\n[pi4]\nenable_uart=0\n[all]\n" });
+    const edited = success({ config: state.config, userText: "# Replaced advanced additions\ncustom_option=keep\n" });
+    assert.doesNotMatch(edited.config, /\[pi4\]|^enable_uart=0$/m);
+    assert.match(edited.config, /^enable_uart=1$/m);
+    assert.equal(edited.fields.find((field) => field.key === "enable_uart").disabled, false);
+    assert.match(edited.userText, /# Replaced advanced additions\ncustom_option=keep/);
+  });
   it("preserves user additions while changing HDMI presets instead of replacing the whole file", () => {
     const first = success({ config: contexts.get("4").recommended + "\n# User hardware\ndtparam=i2c_arm=on\n",
       values: { enable_uart: "0" } });

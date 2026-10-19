@@ -121,6 +121,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
 
       - name: Verify tag matches the release metadata
         env:
@@ -140,8 +141,8 @@ jobs:
 
       - name: Check shell syntax
         run: |
-          bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
-          bash -n src/standalone-launcher.sh
+          set -euo pipefail
+          bash tests/check-shell-syntax.sh
 
       - name: Check ShellCheck errors
         run: shellcheck --severity=error src/standalone-launcher.sh src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
@@ -166,11 +167,12 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
 
       - name: Check shell syntax
         run: |
-          /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
-          /bin/bash -n src/standalone-launcher.sh
+          set -euo pipefail
+          /bin/bash tests/check-shell-syntax.sh
 
       - name: Verify packaged macOS runtime
         run: npm run build:macos && node src/package-macos-app.mjs --check

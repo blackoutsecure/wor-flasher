@@ -151,6 +151,9 @@ def local_address(host: str, *, automatic: bool = False) -> str:
         allowed = address.is_private or address.is_link_local
         if not allowed or address.is_loopback or address.is_unspecified or address.is_multicast:
             raise AccountError("IoT account setup is limited to a device on your private local network.")
+        if entry[0] == socket.AF_INET6 and entry[4][3]:
+            #getaddrinfo separates the interface from the numeric IPv6 address.
+            numeric = f"{numeric.split('%', 1)[0]}%{entry[4][3]}"
         if numeric not in candidates:
             candidates.append(numeric)
     if not candidates:

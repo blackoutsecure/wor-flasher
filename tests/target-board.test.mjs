@@ -156,7 +156,7 @@ describe("Separate Raspberry Pi 2 v1.2 board entry", () => {
 
   it("keeps the Pi 2 choice through the real macOS Back-navigation flow", () => {
     const start = gui.indexOf("macos_start_cli() {");
-    const end = gui.indexOf("\nif is_macos ;then", start);
+    const end = gui.indexOf("\nlinux_boot_config_editor() {", start);
     assert.ok(start >= 0 && end > start);
     const result = run(`
       ${gui.slice(start, end)}

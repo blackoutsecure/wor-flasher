@@ -56,6 +56,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Install ShellCheck
         run: |
@@ -64,8 +66,8 @@ jobs:
 
       - name: Check shell syntax
         run: |
-          bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
-          bash -n src/standalone-launcher.sh
+          set -euo pipefail
+          bash tests/check-shell-syntax.sh
 
       - name: Check for errors
         run: shellcheck --severity=error src/standalone-launcher.sh src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
@@ -91,11 +93,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Check syntax with the macOS system Bash
         run: |
-          /bin/bash -n src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
-          /bin/bash -n src/standalone-launcher.sh
+          set -euo pipefail
+          /bin/bash tests/check-shell-syntax.sh
 
       - name: Verify packaged macOS runtime
         run: npm run build:macos && node src/package-macos-app.mjs --check
@@ -115,6 +119,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       #The progress-helper test runs before the engine installs its own dependencies.
       - name: Install integration test prerequisites

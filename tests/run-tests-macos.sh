@@ -54,7 +54,8 @@ macos_app_and_launcher_checks() { #Requires: real Darwin host. Stages release/ma
     && grep -qF 'const controller = $.WorStartupController.alloc.init' "$launcher" \
     && grep -qF 'installed_formulae="$(brew list --formula 2>/dev/null)"' "$launcher" \
     && grep -qF '[ "$logo_source" -nt "$icon_resource" ]' "$launcher" \
-    && grep -qF 'trap cleanup_startup EXIT INT TERM' "$launcher" \
+    && grep -qF 'trap cleanup_startup EXIT' "$launcher" \
+    && grep -qF "trap 'exit 143' HUP TERM" "$launcher" \
     && grep -qF "startup_phase 'Checking for updates and repairs...'" "$launcher" \
     && grep -qF 'if [ -d "$CHECKOUT_DIR/.git" ];then' "$launcher" \
     && grep -qF 'set_runtime_paths "$CHECKOUT_DIR"' "$launcher" \

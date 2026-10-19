@@ -2,7 +2,8 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readProjectMetadata } from "./lib/node-runtime.mjs";
+import { parseArgs } from "node:util";
+import { isMainModule, isSafeRepoSlug, readProjectMetadata } from "./lib/node-runtime.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoDir = join(scriptDir, "..");
@@ -13,22 +14,24 @@ const defaultPackageFile = join(repoDir, "package.json");
 export function desiredPackageFields(metadata) {
   const product = metadata.product || {};
   const repoSlug = metadata.systemDefaults?.repoSlug;
-  if (!repoSlug) {
+  if (!isSafeRepoSlug(repoSlug)) {
     throw new Error(
-      "metadata.systemDefaults.repoSlug is required to derive package.json URLs",
+      "metadata.systemDefaults.repoSlug must be an owner/name repository",
     );
   }
-  for (const key of [
-    "version",
-    "description",
-    "license",
-    "keywords",
-    "fundingUrls",
-  ]) {
-    if (product[key] === undefined) {
+  for (const key of ["version", "description", "license"]) {
+    if (typeof product[key] !== "string" || product[key].length === 0) {
       throw new Error(
-        `metadata.product.${key} is required to sync package.json`,
+        `metadata.product.${key} must be a nonempty string to sync package.json`,
       );
+    }
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(product.version)) throw new Error("metadata.product.version must be X.Y.Z");
+  for (const key of ["keywords", "fundingUrls"]) {
+    if (!Array.isArray(product[key]) || product[key].length === 0 ||
+      product[key].some((value) => typeof value !== "string" || value.length === 0 ||
+        (key === "fundingUrls" && !value.startsWith("https://")))) {
+      throw new Error(`metadata.product.${key} must be a nonempty array of ${key === "fundingUrls" ? "HTTPS URLs" : "strings"}`);
     }
   }
   return {
@@ -88,18 +91,24 @@ function fail(message, code = 1) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  if (args.includes("--help") || args.includes("-h")) {
+  const { values } = parseArgs({
+    options: {
+      check: { type: "boolean" }, write: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+  if (values.help) {
     console.log(
       `Sync package.json metadata from src/config/metadata.json (the source of truth)\n\nUsage:\n  node src/sync-package-metadata.mjs --check   Fail if package.json is out of sync\n  node src/sync-package-metadata.mjs --write   Update package.json to match metadata.json\n`,
     );
     return;
   }
+  if (values.check && values.write) fail("--check and --write are mutually exclusive.", 2);
   if (!existsSync(defaultPackageFile)) {
     fail(`Missing package.json: ${defaultPackageFile}`);
   }
 
-  if (args.includes("--write")) {
+  if (values.write) {
     const desired = writePackageMetadata();
     console.log(
       `Synced package.json from src/config/metadata.json (version ${desired.version}).`,
@@ -107,7 +116,7 @@ function main() {
     return;
   }
 
-  if (args.includes("--check") || args.length === 0) {
+  if (!values.write) {
     const drift = checkPackageMetadata();
     if (drift.length > 0) {
       console.error(
@@ -128,6 +137,10 @@ function main() {
   fail("Unsupported option. Run with --help for usage.", 2);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  main();
+if (isMainModule(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    fail(error.message, error.code?.startsWith("ERR_PARSE_ARGS") ? 2 : 1);
+  }
 }

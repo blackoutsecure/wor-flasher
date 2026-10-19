@@ -2,6 +2,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import {
   formatRuntimeManifest,
   generateRuntimeManifest,
@@ -15,16 +16,21 @@ const repoDir = join(scriptDir, "..");
 const appRoot =
   process.env.WOR_MACOS_APP_ROOT ||
   join(repoDir, "release", "macos", "WoR-Flasher.app");
-const mode = process.argv[2] || "--check";
+let mode;
+try {
+  const { values } = parseArgs({
+    options: { check: { type: "boolean" }, write: { type: "boolean" } },
+  });
+  if (values.check && values.write) throw new Error("--check and --write are mutually exclusive.");
+  mode = values.write ? "--write" : "--check";
+} catch (error) {
+  console.error(`${error.message}\nUsage: node src/package-macos-app.mjs [--check|--write]`);
+  process.exit(2);
+}
 
 function fail(msg) {
   console.error(msg);
   process.exit(1);
-}
-
-if (mode !== "--check" && mode !== "--write") {
-  console.error("Usage: node src/package-macos-app.mjs [--check|--write]");
-  process.exit(2);
 }
 
 const infoPlist = join(appRoot, "Contents", "Info.plist");
