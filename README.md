@@ -534,6 +534,7 @@ Administrator access is requested through a native password dialog on both platf
    Before the setup wizard, the GUI checks Accessibility using the same script host as Automatic Ignore. If permission is missing, choose **Open Settings**, enable the entry macOS shows for WoR-Flasher or its launcher, then return and choose **Recheck**. **Continue Manually** proceeds without requiring this optional permission; closing the dialog quits without starting setup or flashing.
 2. Review the partnership announcement. The **Botspot** and **Blackout Secure** names open their respective websites, and the Proceed button continues automatically after the countdown.
 3. Choose the Windows version, language, Raspberry Pi model and target drive in native AppKit windows. The target drive is clearly identified before any erase operation.
+   If no eligible drive is connected, the no-drive screen offers **Quit** at the far left alongside **Back** and **Refresh**.
 4. Review the shared Installation Overview, then use **Advanced Options** for cache mode, firmware and driver choices, Pi 4 RAM handling, offline OOBE and `config.txt` customization.
 5. Confirm the flash. A native progress window reports each shared installer phase, supports aborting, and retains a failure log when something stops unexpectedly.
 6. After successful verification, the completion dialog provides the log controls and the next-steps guidance for moving the drive to the Raspberry Pi.

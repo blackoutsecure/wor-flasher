@@ -77,6 +77,23 @@ cleanup() {
 
 static_checks() {
   info "== Static checks =="
+  local chooser_function
+  chooser_function="$(sed -n '/^macos_choose_device() {/,/^}$/p' "$REPO_DIR/install-wor-gui.sh")"
+  if [ -n "$chooser_function" ] \
+    && grep -qF 'actionButton.frame = $.NSMakeRect(20, 22, actionWidth, 32)' "$REPO_DIR/install-wor-gui.sh" \
+    && bash -c '
+    eval "$1"
+    macos_choose() {
+      [ "$5" == Quit ] && [ "$6" == __WOR_QUIT__ ] || exit 1
+      printf "%s\n" "$6"
+    }
+    ! macos_choose_device ""
+  ' _ "$chooser_function" >/dev/null 2>&1;then
+    pass "the macOS no-drive chooser exposes Quit and exits on selection"
+  else
+    fail "the macOS no-drive chooser does not expose a working Quit action"
+  fi
+
   #a git that cannot read the repo (e.g. an unusable checkout in a container) is not a whitespace error
   if ! command -v git >/dev/null || ! git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 ;then
     skip "git cannot read this checkout; cannot check for whitespace errors"
@@ -518,6 +535,9 @@ static_checks() {
     #in list mode returns the selected row, simulated here as the last row in the list
     macos_choose() {
       printf "%s\n" "$*" > "$CHOOSER_CALLED"
+      if [ -z "$1" ];then
+        [ "$5" == Quit ] && [ "$6" == __WOR_QUIT__ ] || return 1
+      fi
       if [ -z "$1" ];then printf "%s\n" "$3"; else printf "%s\n" "$1" | tail -n1; fi
     }
     [ "$(macos_choose_device "")" == __REFRESH__ ] || exit 1
@@ -529,6 +549,18 @@ disk5 Second drive"
     pass "the macOS device chooser refreshes an empty list and returns a selected drive"
   else
     fail "the macOS device chooser mishandles an empty list or selected drive"
+  fi
+
+  if [ -z "$chooser_function" ];then
+    fail "the macOS device chooser Quit action could not be loaded for behavioral testing"
+  elif bash -c '
+    eval "$1"
+    macos_choose() { printf "%s\n" "$6"; }
+    ! macos_choose_device ""
+  ' _ "$chooser_function" 2>/dev/null;then
+    pass "Quit on the no-drive screen exits instead of being treated as a device choice"
+  else
+    fail "Quit on the no-drive screen is not handled as an exit action"
   fi
 
   #a genuine Quit/close-box still must propagate as a failure from macos_choose_device, not be

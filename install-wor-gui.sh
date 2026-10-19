@@ -987,11 +987,11 @@ macos_show_announcement() { #Output: proceed or project partner.
   esac
 }
 
-macos_choose_device() { #Input: newline-separated detected volume rows. Output: selected row, __REFRESH__, or Back. Fails only on a genuine Quit/close, never on Back.
+macos_choose_device() { #Input: newline-separated detected volume rows. Output: selected row, __REFRESH__, or Back. Fails on Quit/close.
   if [ -z "$1" ];then
-    #cancelValue Back makes clicking Back succeed with a literal value instead of failing like Quit does,
-    #so the wizard can tell "go back a step" apart from "the user is quitting the whole thing"
-    result="$(macos_choose '' 'No external, physical, writable drive was found. Connect a removable drive, then click Refresh.' __REFRESH__ Back '' '' '' Refresh "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" Back 0 "$WOR_APP_TITLE")" || return 1
+    #cancelValue Back distinguishes returning to the previous step from quitting the wizard
+    result="$(macos_choose '' 'No external, physical, writable drive was found. Connect a removable drive, then click Refresh.' __REFRESH__ Back Quit __WOR_QUIT__ '' Refresh "$WOR_ICON_PATH" "$WOR_WINDOW_TITLE" Back 0 "$WOR_APP_TITLE")" || return 1
+    [ "$result" != __WOR_QUIT__ ] || return 1
     echo "$result"
   else
     device_choice="$(macos_choose "$1" 'Choose the external drive and volumes to erase' "$(printf '%s\n' "$1" | head -n1)" Back Refresh __REFRESH__ '' '' '' '' Back)" || return 1

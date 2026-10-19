@@ -41,6 +41,7 @@
 #
 #Version history
 #2.1.0 - Add a separate validated ARM32 IoT Core FFU workflow for Pi 2 and Pi 3 Model B.
+#             Add a leftmost Quit action to the macOS no-drive screen beside Back and Refresh.
 #             Reuse saved Advanced Options for optional Connect to Pi on the normal completion screen;
 #               do not reopen a duplicate connection form or start personalization when Complete is clicked.
 #             Keep the Windows/Pi selection screen compact without the IoT explanatory paragraph;
