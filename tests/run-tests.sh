@@ -105,7 +105,7 @@ static_checks() {
     bash -n "$REPO_DIR/$f" 2>/dev/null && pass "$f parses" || fail "$f has a syntax error"
   done
   if command -v python3 >/dev/null ;then
-    python3 "$REPO_DIR/tests/test-pi3-gpt-bootstrap.py" >/dev/null 2>&1 \
+    python3 "$REPO_DIR/tests/test-pi3-gpt-bootstrap.py" \
       && pass "Pi 3 GPT bootstrap helper tests passed" \
       || fail "Pi 3 GPT bootstrap helper tests failed"
   else

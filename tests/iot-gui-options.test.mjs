@@ -854,7 +854,7 @@ describe("Optional IoT administrator preferences", () => {
       wor_osascript() {
         cat >/dev/null
         capture_fields "$TEST_DIR/fields" "$@"
-        [ "$(stat -f %Lp "$4")" == 600 ] || return 91
+        node --input-type=module -e 'import { statSync } from "node:fs"; process.exit((statSync(process.argv[1]).mode & 0o777) === 0o600 ? 0 : 91)' "$4" || return 91
         cat "$4"
       }
       macos_iot_options || exit 92

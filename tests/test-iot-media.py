@@ -528,8 +528,12 @@ class MediaTests(unittest.TestCase):
                             self.helper._cache_path(Path(f"/{alias}/private cache/iot-core")),
                             Path(f"/private/{alias}/private cache/iot-core"),
                         )
+            unrelated = Path.home() / "private cache" / "iot-core"
             with mock.patch.object(self.helper.os, "readlink") as readlink:
-                self.assertEqual(self.helper._cache_path(self.cache), self.cache)
+                self.assertEqual(
+                    self.helper._cache_path(unrelated),
+                    self.helper._absolute(unrelated),
+                )
                 readlink.assert_not_called()
             with mock.patch.object(self.helper.sys, "platform", "linux"), \
                     mock.patch.object(self.helper.os, "readlink") as readlink:
