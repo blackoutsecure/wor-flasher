@@ -70,12 +70,11 @@ pub enum Operation {
     Catalog(String),
     IotAccount(Vec<OsString>),
     Run(Vec<OsString>),
-    ClassicWizard,
 }
 
 impl Operation {
     pub fn may_write(&self) -> bool {
-        matches!(self, Self::Run(_) | Self::ClassicWizard)
+        matches!(self, Self::Run(_))
     }
 }
 

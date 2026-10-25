@@ -1,266 +1,119 @@
-# AGENTS.md
+# WoR-Flasher repository guidance
 
-## What this is
+WoR-Flasher prepares Windows ARM64 media for Raspberry Pi. The product is
+implemented in Rust: CLI, Dioxus desktop, domain rules, host operations and
+native media workflows. Do not reintroduce a shell or Python product runtime,
+fallback, installer, or GUI.
 
-WoR-Flasher creates bootable Windows 10 or Windows 11
-ARM64 media for Raspberry Pi from Debian-based Linux or macOS. It automates the
-Windows on Raspberry installation process: obtain or import Windows media, add
-UEFI firmware and drivers, partition and write a selected drive, verify the
-result, and eject it.
-
-Botspot created WoR-Flasher and also created Pi-Apps. Preserve the project's
-original priorities: a straightforward interactive workflow, readable Bash,
-community compatibility, and one implementation of the flashing logic. The
-Blackout Secure maintained source extends that direction with macOS support,
-native GUI paths, stronger validation and verification, caching, automation
-interfaces, and broader tests. Do not erase the original authorship.
-
-The user-approved Rust migration now provides native configuration, preparation,
-desktop/FFU writers, acquisition, SSH services and a guided Dioxus UI over plain
-domain/application crates and Clap. See [Rust migration](README.md#rust-migration)
-for the implemented boundaries and explicit experimental-write gate. The native
-package must not delegate to the classic Bash/Python engine. Retain classic
-interfaces and source oracles until deliberate stable release promotion; software
-tests do not qualify physical hardware or the unpromoted Windows helper.
-
-Read `README.md` for supported hosts, Raspberry Pi models, user-facing behavior,
-and parameters. Read `CONTRIBUTING.md` before changing code, `SECURITY.md` before
-changing trust or validation behavior, and `NOTICE` before changing licensing or
-attribution text.
+Botspot created WoR-Flasher and Pi-Apps. Preserve original authorship, project
+links, community support and attribution. Read [README.md](README.md) for
+supported hosts, platforms and the current qualification status. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before changing code, [SECURITY.md](SECURITY.md)
+before changing trust or validation, and [NOTICE](NOTICE) before changing
+licensing or attribution.
 
 ## Commands
 
-Run the narrowest applicable check first. Classic scripts need no compilation;
-the separate Rust workspace uses the committed toolchain and lockfile.
+Run focused checks first. Tests must never write physical media.
 
 ```bash
-# Syntax and ShellCheck for all maintained Bash entry points, libraries, and tests.
-# These match the targets validated by CI (.github/workflows/shellcheck.yml).
-bash tests/check-shell-syntax.sh
-shellcheck --severity=error src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
-
-# Release tooling validation and artifact staging cleanup
-npm run check
-npm run clean
-
-# Full automated suite; does not write physical media
-./tests/run-tests.sh
-
-# GUI flow in DRY_RUN mode, or Linux loop-device coverage from macOS via Docker
-./tests/run-tests.sh --gui
-./tests/run-tests-gui.sh
-./tests/run-linux-integration.sh
-
-# Remove loop devices and test state left by an interrupted run
-./tests/run-tests.sh --clean
-
-# Native replacements and the separate Rust frontend package
 cargo fmt --all -- --check
 cargo test --locked --workspace --exclude wor-desktop
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked -p wor-desktop --features visual-fixtures --bin wor-desktop
+cargo clippy --locked -p wor-desktop --features visual-fixtures --all-targets -- -D warnings
+
+npm ci --ignore-scripts --no-audit --no-fund
+npm run check
 node src/package-rust.mjs --desktop --check
 ```
 
-On a non-Linux host the suite prints three summaries: the Docker container's nested run,
-the integration wrapper, then this host's own run. All three must report `failed 0`, and
-the process exit status must be `0`. Read the summaries rather than the exit status alone
-when you change the harness itself.
+`npm run check` runs Node syntax checks, offline metadata/payload/package
+contracts and the Go Pi 3 payload integrity check. `npm test` also runs browser
+visual tests and needs the configured Playwright browsers. Linux desktop builds
+need WebKitGTK, XDo and Ayatana AppIndicator development libraries. The Rust
+Pi 3 helper candidate is optional; cross-linking it does not qualify hardware.
+Release CI builds Linux x64/ARM64 and universal macOS packages. Universal
+packaging uses `--desktop --universal` and requires both Apple Rust targets.
+ARMv7 Raspberry Pi OS currently has a CLI cross-build check only; Windows host
+support is not implemented. Windows domain tests and the Pi boot-helper build
+must never be presented as a Windows host application qualification.
 
-Never test a code change by flashing a physical device without the user's explicit
-approval and selected target. For partitioning, firmware, driver, boot, or model
-compatibility changes, record real hardware coverage separately when available.
+Never test a code change by flashing physical media. Use fixture files, mocks,
+test providers and synthetic devices. Real-device testing requires the user's
+explicit approval and a specifically selected target.
 
 ## Architecture
 
-- For retained classic entry points, `install-wor.sh` is the shared engine. Drive discovery,
-  host and target validation, downloads, caching, ISO handling, partitioning,
-  writing, settings summaries, and post-flash verification belong here.
-- `install-wor-gui.sh` is presentation only. It sources the engine and presents
-  native AppKit/JXA dialogs on macOS or `yad` dialogs on Linux. Do not duplicate
-  engine functions or decisions in this file.
-- Keep both GUI implementations behaviorally aligned. A setting added to one
-  platform's Advanced Options UI must be added to the other platform and to the
-  shared `settings_summary` in the same change.
-- `install-wor-hook.sh` is the stable, machine-readable process adapter for
-  external front-ends and automation. Keep commands small, preserve exit-status
-  behavior, and cover interface changes with tests. It may bootstrap a complete
-  checkout because the engine depends on repository assets.
-- `src/lib/` holds the shared libraries every entry point loads explicitly:
-  `metadata.sh` owns the canonical name, version, and asset filenames; `dependencies.sh`,
-  `paths.sh`, and `cleanup.sh` own the dependency, path, and cleanup helpers. These files
-  must stay safe to source and must not source one another.
-- `assets/` holds the shared UI artwork used by the README, both GUIs, and the macOS app
-  icon. Reference it through `WOR_ASSETS_DIR` rather than rebuilding the path.
-- Classic front-ends source shared helpers and start owned engine workers.
-  Rust frontends use a native Rust worker, not the Bash/Python engine. Native
-  runtime data comes from `nativeRuntimePaths`; legacy `runtimePaths` remains
-  unchanged for stable consumers. Preserve worker ownership, cancellation and cleanup; never
-  detach a writer or require a visible terminal on either platform.
-- `crates/domain`, `crates/application` and `crates/infrastructure` separate native
-  rules, use cases and concrete OS/process adapters. `apps/cli` and `apps/desktop`
-  are presentation boundaries. The Rust Pi 3 helper in `apps/pi3-boot-refresh`
-  is not promoted over the shipped Go helper before ARMv8.0/WoR-PE qualification.
-  Do not add HTTP servers, databases or UI/OS services to the domain layer.
-- `crates/ffu`, `crates/iot-media`, `crates/iot-account` and `crates/desktop-media`
-  own native host functionality. All callers use those same implementations.
-  Propagate `PreparedMedia::cleanup()` failures before verified success. A new
-  physical writer still needs explicit experimental consent and hardware QA;
-  do not promote the Rust on-device helper or stable release implicitly.
-- `src/macos-app/` holds the canonical macOS application bundle template (`Info.plist`,
-  launcher executable, icons, and logo). The checked-in root `WoR-Flasher.app` is deleted;
-  staged bundles are written to `release/macos/WoR-Flasher.app` by Node release tooling
-  (`npm run build`).
-- Node release tooling (`package.json`, `src/build-release.mjs`, `src/lib/node-runtime.mjs`)
-  stages deterministic release artifacts into `release/` (ignored by Git and cleaned with
-  `npm run clean`). `src/config/metadata.json` owns the explicit `runtimePaths` list of files
-  shipped in release artifacts, plus the runtime/system defaults loaded by `src/lib/metadata.sh`.
-- `config-templates/` contains required boot, setup inputs, and JSON configuration schema/template files (`config.schema.json`, `config.json`). Keep these files
-  tracked and validate changes carefully; a missing or empty template can produce
-  unbootable media.
-- `tests/` contains static, shared-engine, dry-run, loop-device, GUI, and Docker
-  integration coverage. Tests should call real engine functions through the test
-  helpers rather than reimplement product logic.
+- `crates/domain` owns typed configuration, compatibility, boot and storage
+  invariants; it must not depend on UI or OS providers.
+- `crates/application` owns shared requests, settings, preview-bound consent
+  and operation results.
+- `crates/infrastructure` owns native process supervision, runtime validation,
+  OS/device discovery and worker protocol.
+- `crates/desktop-media`, `crates/ffu`, `crates/iot-media` and
+  `crates/iot-account` own native image preparation, bounded media writing,
+  acquisition and post-boot SSH services.
+- `apps/cli` and `apps/desktop` are the Rust presentation boundaries. Both use
+  the same application and infrastructure implementations.
+- `apps/pi3-boot-refresh` is an unpromoted Rust replacement candidate for the
+  Pi 3 Windows PE helper. Keep the shipped Go executable, manifest, source and
+  license until the replacement passes ARMv8.0/WoR-PE hardware qualification.
+- `src/lib/iot-account.ps1`, `iot-locale.ps1` and `iot-locale-user.ps1` are
+  compile-time Windows payloads included by the Rust IoT companion; they are
+  not host application code. `config-templates/` contains required inputs
+  consumed by Rust media preparation.
+- `src/config/metadata.json` owns product metadata, platform defaults and the
+  native runtime inventory. `src/package-rust.mjs` creates packages and
+  corresponding-source snapshots. Other Node scripts are maintainer tools;
+  they are not application runtime dependencies.
+- `assets/` contains shared product artwork. `tests/visual/` and
+  `apps/desktop/src/visual_fixtures.rs` exercise the actual Rust UI.
 
 ## Safety invariants
 
-This project erases storage devices. Treat target selection and verification as
-safety-critical code.
+The application erases storage devices. Treat target selection and verification
+as safety-critical.
 
-- Preserve the final host, whole-disk, boot-drive, capacity, and installation-mode
-  checks in the engine. Discovery output is a snapshot, not authorization to write.
-- Never weaken target-drive exclusions or make an unsafe device selectable merely
-  to simplify a UI or integration.
-- Keep destructive operations behind explicit user confirmation unless the caller
-  has deliberately supplied the documented non-interactive inputs.
-- Preserve TLS and payload integrity checks, cache manifests, source-image checks,
-  and post-flash partition, file, and image verification. Any bypass must remain
-  explicit, documented, and disabled by default.
-- Do not log passwords, tokens, unattended-setup credentials, or other secrets.
-  Keep credential-bearing files limited to the explicitly enabled setup flow.
-- Preserve registered cleanup for mounts, loop devices, temporary files, and
-  interrupted runs. Do not replace an existing `EXIT` trap in a way that drops
-  earlier cleanup handlers.
-- The tool must never rewrite its own installation. The engine and the launcher perform a
-  read-only release check and nothing more: no `git fetch`, `merge`, `pull`, or self-replacing
-  update, on any platform. A half-updated disk flasher is more dangerous than an out-of-date
-  one. The single exception is the macOS app's verified runtime updater, which installs only
-  a digest-verified release archive into a staged runtime store with rollback.
-- WSL is deliberately rejected because its visible disks are not safe flashing
-  targets. Do not broaden host support without a tested device-safety design.
-- Never run a real flash against physical media during automated validation. Use
-  `DRY_RUN=1`, sparse files, loop devices, mocks, or the Docker integration suite.
-  A real-device test requires the user's explicit approval and device selection.
+- Preserve host, whole-disk, boot-disk, capacity, image-family and installation
+  mode checks. Device discovery is not write authorization.
+- Keep destructive operations behind explicit confirmation. Native physical
+  writes require the existing experimental opt-in, fresh target-bound preview
+  and erase consent; never enable them in automated tests.
+- Preserve source/download hashes, pinned image manifests, cache integrity,
+  target identity binding and mandatory post-write read-back.
+- Never log passwords, tokens, unattended-setup credentials or private SSH
+  state. Preserve private temporary files, strict host-key checks and credential
+  redaction.
+- Preserve cleanup ownership for mounts, worker processes and temporary files.
+  Cleanup failure or interrupted writes must never report verified success.
+- Keep Windows and WSL unsupported. Do not broaden host support without a
+  tested device-safety design.
+- The shipped Go Pi 3 PE helper remains the installed payload until its Rust
+  candidate is hardware-qualified. A successful build or synthetic test is not
+  qualification.
+- Do not add a host shell/Python bridge or silently retry through another
+  writer. Surface native failures explicitly.
 
-## Platform rules
+## Change boundaries
 
-- Keep Linux and macOS behavior separate only where host tooling requires it; put
-  shared decisions in the engine.
-- Use the existing host helpers instead of inferring the platform from `DISPLAY`
-  or duplicating `uname` checks. The front-end is selected explicitly.
-- Linux support targets Debian-family hosts and uses Linux block-device and mount
-  tooling. Loop-device tests are expected to be unavailable on macOS.
-- macOS support targets macOS 13 or newer with Homebrew. Preserve `diskutil`/
-  `hdiutil` discovery and mounting behavior and `sgdisk` GPT partitioning. The
-  `WOR_BOOT` EFI partition must remain partition 1.
-- The macOS GUI uses JXA inside quoted heredocs and shell command substitutions.
-  Do not put apostrophes in those JXA heredoc bodies; an unmatched quote can hide
-  later shell definitions while `bash -n` still succeeds. Use wording such as
-  "does not" instead of "doesn't".
-- The macOS application bundle is a launcher for the same maintained scripts, not
-  a separate implementation. Preserve the complete-checkout execution model and
-  its bounded preflight: repair only missing tracked files from the local revision,
-  and install only missing Homebrew formulae. It must not update a source checkout
-  from any remote. Never add `git fetch`, `git merge`, `git reset`, `git clean`,
-  `brew upgrade`, or a remote script piped into a shell.
-- Model and firmware compatibility changes require authoritative upstream evidence
-  plus tests. Keep known pins and model restrictions unless the relevant upstream
-  issue is resolved and the replacement is tested on applicable hardware.
-
-## Bash conventions
-
-Follow the established Botspot style in nearby code rather than applying a generic
-formatter:
-
-- Use `#comment` with no space after `#`.
-- Use the existing conditional form, for example `if [ "$value" == expected ];then`.
-- Put the concise `#Input: ... Output: ...` description on a function's opening
-  line where that pattern is used.
-- Comment why a non-obvious choice exists; do not narrate obvious commands.
-- Quote paths and expansions unless intentional word splitting is required.
-- Reuse existing helpers for errors, progress, cleanup, downloads, platform
-  behavior, and device handling before adding another abstraction.
-- Keep changes focused. Do not perform broad style rewrites alongside behavioral
-  work.
-
-Use the established local pattern rather than introducing a generic shell style:
-
-```bash
-get_partition() { #Input: device & partition number. Output: partition /dev entry
-  [ -z "$1" ] && error "get_partition(): no /dev device specified as"' $1'
-  [ -z "$2" ] && error "get_partition(): no partition number specified as"' $2'
-  [ ! -b "$1" ] && error "get_partition(): $1 is not a valid block device!"
-  if is_macos ;then
-    [ "$2" == all ] && error "get_partition(): macOS does not support listing all partitions through this helper."
-    darwin_plist_json diskutil list -plist "$1" | jq -er ".AllDisksAndPartitions[0].Partitions[$(($2 - 1))].DeviceIdentifier" | sed 's+^+/dev/+'
-    return
-  fi
-  command -v lsblk >/dev/null || error "get_partition(): lsblk is required."
-}
-```
-
-Two Bash-specific hazards are documented in `CONTRIBUTING.md`: do not edit a script
-while it is running, because Bash reads incrementally by byte offset, and do not
-try to `wait` for a sibling process from a subshell.
+- Changes to target safety, image trust, write consent, supported platforms,
+  model/firmware compatibility or credential handling need explicit review and
+  focused tests.
+- Keep compatibility rules and destructive decisions in shared Rust crates,
+  not separately in the CLI or desktop.
+- Update user-facing documentation and Rust/Node contracts when behavior or
+  runtime inventory changes.
+- Preserve exact first-party source snapshots and third-party notices in
+  release packages. Do not include build caches, credentials, generated test
+  media or ignored evidence.
+- Preserve original authorship and follow the upstream licensing caveat in
+  [NOTICE](NOTICE). Do not change license or attribution text without review.
+- Keep every automated validation offline and independent of physical devices.
 
 ## Git workflow
 
-This checkout is the Blackout Secure maintained fork. `origin` is
-`blackoutsecure/wor-flasher`, whose default branch is `main`; `upstream` is
-Botspot's original `Botspot/wor-flasher`, tracked so original work can be merged
-in and changes can be offered back. The working branch is `patch-1`.
-
-- Land changes through a pull request against `blackoutsecure/wor-flasher`, as
-  `CONTRIBUTING.md` directs. Do not push straight to `main`.
-- One logical change per pull request, with original attribution preserved.
-- Say what you tested it on, and be honest about what you could not test.
-- Keep the README, the `install-wor.sh` version history, and any release metadata
-  in the same commit as the behavior change they describe.
-
-## Boundaries
-
-### Always
-
-- Keep decisions in the shared Rust domain/application/backend for native
-  callers and in `install-wor.sh` for classic callers. Test their real functions;
-  never duplicate decisions in frontends or add an automatic writer fallback.
-- Run the relevant commands above, mutation-test new coverage, and report what
-  was tested and what could not be tested.
-- Update `README.md` and the version history at the top of `install-wor.sh` with
-  user-visible behavior changes. For a release, update `WOR_FLASHER_VERSION` in
-  `src/lib/metadata.sh` and both version fields in
-  `src/macos-app/Contents/Info.plist`; the suite checks all release metadata.
-- Preserve Botspot's original authorship, contributor credit, project links, and
-  community support paths.
-
-### Ask first
-
-- Changing target-device safety checks, integrity verification, default bypasses,
-  supported hosts, or Raspberry Pi and firmware compatibility.
-- Adding or changing a public hook command, its output, or its exit-status contract.
-- Adding dependencies, modifying the macOS app bundle's update/repair behavior,
-  or changing where canonical metadata is sourced.
-- Editing licensing, attribution, third-party component notices, or generated
-  configuration templates.
-
-### Never
-
-- Remove, bypass, or weaken boot-drive protection, final validation, integrity
-  checks, credential redaction, cleanup registration, or the deliberate WSL block.
-- Duplicate engine logic in a GUI or make the Linux and macOS Advanced Options
-  flows diverge.
-- Add apostrophes inside the quoted JXA heredocs, edit a running Bash script, or
-  use destructive repair/update commands such as `git reset`, `git clean`, or
-  `brew upgrade` in the macOS launcher.
-- Commit generated Windows media, downloaded firmware or drivers, caches, logs,
-  credentials, mounted-image contents, or test workspaces.
-- State that the upstream licensing position is settled; follow `NOTICE` instead.
+This maintained fork is `blackoutsecure/wor-flasher`; the original project is
+`Botspot/wor-flasher`. Submit changes through a pull request against the
+maintained repository. Do not push directly to `main`. Do not create or move a
+release tag by hand.

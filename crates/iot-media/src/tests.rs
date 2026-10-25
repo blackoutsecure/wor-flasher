@@ -159,12 +159,7 @@ fn no_cancel() -> AtomicBool {
 }
 
 #[test]
-fn source_oracle_manifest_commands_and_digest_are_fixed() {
-    let source = include_str!("../../../src/lib/iot-media.py");
-    let ffu = include_str!("../../../src/lib/iot-ffu.py");
-    assert!(ffu.contains(PROVENANCE_SHA256));
-    assert!(source.contains("MAX_PACKAGE_BYTES = 1024**3"));
-    assert!(source.contains("MAX_FFU_BYTES = 2 * 1024**3"));
+fn manifest_commands_and_digest_are_fixed() {
     let image = OfficialImage::reviewed().unwrap();
     assert_eq!(image.ffu.size, 1008861184);
     assert_eq!(image.msi_offset, 634880);

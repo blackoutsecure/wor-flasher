@@ -206,10 +206,7 @@ impl NativeTools for Tools {
 }
 
 #[test]
-fn source_oracle_payloads_preserve_admin_defaultaccount_and_cleanup_guards() {
-    let source = include_str!("../../../src/lib/iot-account.py");
-    assert!(source.contains("MAX_INPUT = 32768"));
-    assert!(source.contains("AUTOMATIC_HOSTNAME = \"minwinpc\""));
+fn native_payloads_preserve_admin_defaultaccount_and_cleanup_guards() {
     assert!(ACCOUNT_PAYLOAD.contains("NetUserGetInfo"));
     assert!(ACCOUNT_PAYLOAD.contains("$localSid.Value -ne $sid"));
     assert!(ACCOUNT_PAYLOAD.contains("-500$"));

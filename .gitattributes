@@ -1,4 +1,4 @@
-# Shell scripts must keep LF endings; CRLF makes them fail with "bad interpreter"
+# Keep source and project metadata line endings consistent.
 * text=auto eol=lf
 
 *.sh text eol=lf
@@ -9,8 +9,7 @@ Cargo.lock text eol=lf
 *.json text eol=lf
 *.md text eol=lf
 
-# Stored with LF even though cmd.exe needs CRLF: install-wor.sh appends the CR when it
-# writes the file into boot.wim, and a CRLF copy here would produce CRCRLF
+# Templates stay LF in Git; Rust stages the Windows command payloads with CRLF.
 *.cmd text eol=lf
 
 # Binary assets

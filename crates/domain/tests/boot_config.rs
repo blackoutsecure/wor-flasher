@@ -114,7 +114,7 @@ fn iot_is_display_only_even_when_using_advanced_text() {
 }
 
 #[test]
-fn malformed_json_retains_python_diagnostics_and_character_positions() {
+fn malformed_json_reports_precise_character_positions() {
     for (input, expected) in [
         ("[1", "Expecting ',' delimiter: line 1 column 3 (char 2)"),
         (
@@ -139,41 +139,5 @@ fn malformed_json_retains_python_diagnostics_and_character_positions() {
         ("{\"é\": nope}", "Expecting value: line 1 column 7 (char 6)"),
     ] {
         assert_eq!(process_json(input).unwrap_err().to_string(), expected);
-    }
-}
-
-#[test]
-fn malformed_json_matches_the_python_process_oracle() {
-    use std::io::Write;
-    use std::path::Path;
-    use std::process::{Command, Stdio};
-
-    let inputs: Vec<String> = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/boot-config-invalid-json.json"
-    ))
-    .unwrap();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for input in inputs {
-        let mut child = Command::new("python3")
-            .arg("-B")
-            .arg(root.join("src/lib/boot-config.py"))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input.as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert_eq!(output.status.code(), Some(1), "{input:?}");
-        let expected: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(
-            process_json(&input).unwrap_err().to_string(),
-            expected["error"].as_str().unwrap(),
-            "{input:?}"
-        );
     }
 }

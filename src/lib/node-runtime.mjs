@@ -23,24 +23,6 @@ export function isMainModule(moduleUrl) {
     realpathSync(entrypoint) === realpathSync(fileURLToPath(moduleUrl)));
 }
 
-export function parseVersion(versionStr) {
-  if (!versionStr || typeof versionStr !== "string") return [0, 0, 0];
-  const cleaned = versionStr.replace(/^v/i, "").trim();
-  const parts = cleaned.split(".").map((p) => parseInt(p, 10) || 0);
-  while (parts.length < 3) parts.push(0);
-  return parts.slice(0, 3);
-}
-
-export function compareVersions(v1, v2) {
-  const p1 = parseVersion(v1);
-  const p2 = parseVersion(v2);
-  for (let i = 0; i < 3; i++) {
-    if (p1[i] > p2[i]) return 1;
-    if (p1[i] < p2[i]) return -1;
-  }
-  return 0;
-}
-
 export function readProjectMetadata(metadataFile = defaultMetadataFile) {
   if (!existsSync(metadataFile)) {
     throw new Error(`Missing project metadata: ${metadataFile}`);
@@ -52,29 +34,21 @@ export function readProjectMetadata(metadataFile = defaultMetadataFile) {
   return metadata;
 }
 
+export function isSafeRepoSlug(slug) {
+  return typeof slug === "string" &&
+    /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(slug) &&
+    !slug.split("/").includes("..");
+}
+
 function isSafeRuntimePath(path) {
   return typeof path === "string" && !isAbsolute(path) &&
     path.split(/[\\/]/).every((part) => part !== "" && part !== "." && part !== "..");
 }
 
-export function readRuntimePaths(metadataFile = defaultMetadataFile) {
-  const metadata = readProjectMetadata(metadataFile);
-  const runtimePaths = metadata.runtimePaths;
-  if (!Array.isArray(runtimePaths) || runtimePaths.length === 0) {
-    throw new Error("src/config/metadata.json must define runtimePaths");
-  }
-  for (const relPath of runtimePaths) {
-    if (!isSafeRuntimePath(relPath)) {
-      throw new Error(`Invalid runtime path in package.json: ${relPath}`);
-    }
-  }
-  return runtimePaths;
-}
-
 export function copyTree(source, target) {
   const info = lstatSync(source);
   if (info.isSymbolicLink() || lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
-    throw new Error(`Symbolic links are not allowed in runtime copies: ${source}`);
+    throw new Error(`Symbolic links are not allowed in package copies: ${source}`);
   }
   if (info.isDirectory()) {
     mkdirSync(target, { recursive: true });
@@ -91,12 +65,15 @@ export function copyTree(source, target) {
 export function generateRuntimeManifest(
   stageRoot,
   version,
-  runtimePaths = readRuntimePaths(),
+  paths,
   rootSource = repoDir,
 ) {
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new Error("A nonempty Rust runtime inventory is required.");
+  }
   const files = [];
 
-  for (const relPath of runtimePaths) {
+  for (const relPath of paths) {
     if (!isSafeRuntimePath(relPath)) {
       throw new Error(`Invalid runtime path: ${relPath}`);
     }
@@ -113,43 +90,33 @@ export function generateRuntimeManifest(
           throw new Error(`Symbolic link in staging path: ${ancestor}`);
         }
       }
-      //Only replace the declared staging path; obsolete staged files must not enter a new manifest.
       rmSync(destPath, { recursive: true, force: true });
       copyTree(srcPath, destPath);
     }
   }
 
-  function processEntry(currentPath) {
+  function addEntry(currentPath) {
     const info = lstatSync(currentPath);
     if (info.isSymbolicLink()) throw new Error(`Symbolic link in runtime: ${currentPath}`);
     if (info.isDirectory()) {
-      for (const name of readdirSync(currentPath)) {
-        processEntry(join(currentPath, name));
-      }
+      for (const name of readdirSync(currentPath)) addEntry(join(currentPath, name));
     } else if (info.isFile()) {
-      const rel = relative(stageRoot, currentPath).replace(/\\/g, "/");
-      const sha256 = createHash("sha256")
-        .update(readFileSync(currentPath))
-        .digest("hex");
+      const path = relative(stageRoot, currentPath).replace(/\\/g, "/");
+      const sha256 = createHash("sha256").update(readFileSync(currentPath)).digest("hex");
       const mode = (info.mode & 0o777).toString(8);
-      files.push({ path: rel, sha256, mode });
+      files.push({ path, sha256, mode });
     }
   }
 
-  for (const relPath of runtimePaths) {
-    processEntry(join(stageRoot, relPath));
-  }
-
+  for (const relPath of paths) addEntry(join(stageRoot, relPath));
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { schemaVersion: 1, version, files };
 }
 
 export function formatRuntimeManifest(manifest) {
   const files = manifest.files
-    .map(
-      (entry) =>
-        `    {"path": ${JSON.stringify(entry.path)}, "sha256": "${entry.sha256}", "mode": "${entry.mode}"}`,
-    )
+    .map((entry) =>
+      `    {"path": ${JSON.stringify(entry.path)}, "sha256": "${entry.sha256}", "mode": "${entry.mode}"}`)
     .join(",\n");
   return `{
   "schemaVersion": ${manifest.schemaVersion},
@@ -159,155 +126,4 @@ ${files}
   ]
 }
 `;
-}
-
-export function verifyRuntimeManifest(appRoot, expectedVersion) {
-  const runtimeDir = join(appRoot, "Contents", "Resources", "runtime");
-  const manifestFile = join(
-    appRoot,
-    "Contents",
-    "Resources",
-    "runtime-manifest.json",
-  );
-
-  if (!existsSync(runtimeDir) || !existsSync(manifestFile)) return false;
-
-  try {
-    const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
-    if (!manifest || manifest.schemaVersion !== 1 || !Array.isArray(manifest.files) || manifest.files.length === 0) return false;
-    if (expectedVersion !== undefined && manifest.version !== expectedVersion) return false;
-    if (lstatSync(runtimeDir).isSymbolicLink() || lstatSync(manifestFile).isSymbolicLink()) return false;
-    const paths = new Set();
-
-    for (const entry of manifest.files) {
-      if (!entry || !isSafeRuntimePath(entry.path) || entry.path.includes("\\") ||
-        paths.has(entry.path)) return false;
-      paths.add(entry.path);
-      const filePath = join(runtimeDir, entry.path);
-      if (!existsSync(filePath)) return false;
-      let currentPath = runtimeDir;
-      for (const part of entry.path.split("/")) {
-        currentPath = join(currentPath, part);
-        if (lstatSync(currentPath).isSymbolicLink()) return false;
-      }
-      const info = lstatSync(filePath);
-      if (!info.isFile()) return false;
-      const sha256 = createHash("sha256")
-        .update(readFileSync(filePath))
-        .digest("hex");
-      if (sha256 !== entry.sha256) return false;
-      const mode = (info.mode & 0o777).toString(8);
-      if (mode !== entry.mode) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function loadSystemConfig(repoPath = repoDir) {
-  const metadataPath = join(repoPath, "src", "config", "metadata.json");
-  const configPath = join(repoPath, "config-templates", "config.json");
-  let system = {};
-  if (existsSync(metadataPath)) {
-    const defaults = readProjectMetadata(metadataPath).systemDefaults ?? {};
-    if (typeof defaults !== "object" || Array.isArray(defaults)) {
-      throw new Error(`systemDefaults must be an object: ${metadataPath}`);
-    }
-    system = {
-      peInstallerUrl: defaults.peInstallerUrl,
-      peInstallerSha256: defaults.peInstallerSha256,
-      uefiVerPi3: defaults.uefiVerPi3,
-      uefiVerPi4: defaults.uefiVerPi4,
-      uefiVerPi5: defaults.uefiVerPi5,
-      driverVer: defaults.driverVer,
-      armv80MaxBuild: defaults.armv80MaxBuild,
-      win11MinBuild: defaults.win11MinBuild,
-      win10OldestBuild: defaults.win10OldestBuild,
-      exampleBid: defaults.exampleBid,
-      armv80SafeBid: defaults.armv80SafeBid,
-      repoSlug: defaults.repoSlug,
-    };
-    system = Object.fromEntries(
-      Object.entries(system).filter(([, value]) => value !== undefined),
-    );
-  }
-  if (!existsSync(configPath)) return { system };
-  const config = JSON.parse(readFileSync(configPath, "utf8"));
-  if (!config || typeof config !== "object" || Array.isArray(config) ||
-    (config.system !== undefined && (!config.system || typeof config.system !== "object" || Array.isArray(config.system)))) {
-    throw new Error(`System configuration must contain JSON objects: ${configPath}`);
-  }
-  return { ...config, system: { ...system, ...config.system } };
-}
-
-//The slug is interpolated into the update URL, so it must match the exact owner/name shape
-//GitHub allows. Anything looser could point the check at an attacker-chosen host.
-export function isSafeRepoSlug(slug) {
-  return (
-    typeof slug === "string" &&
-    /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(slug) &&
-    !slug.split("/").includes("..")
-  );
-}
-
-//Read-only release check: it never writes, never executes anything, and never mutates the
-//installation. The caller is told a newer release exists and decides what to do about it.
-export async function checkReleaseUpdate({
-  currentVersion,
-  repoSlug,
-  repoPath = repoDir,
-  timeoutMs = 5000,
-  fetchImpl = fetch,
-} = {}) {
-  try {
-    const systemConfig = loadSystemConfig(repoPath).system;
-    const finalRepoSlug = repoSlug ?? systemConfig.repoSlug;
-    const version = currentVersion ??
-      readProjectMetadata(join(repoPath, "src/config/metadata.json")).product?.version;
-    if (!isSafeRepoSlug(finalRepoSlug)) {
-      return { updateAvailable: false, error: "unsafe-repo-slug" };
-    }
-    const stableVersion = (value) => typeof value === "string" &&
-      /^v?\d+\.\d+\.\d+$/i.test(value) && parseVersion(value).every(Number.isSafeInteger);
-    if (!stableVersion(version)) {
-      return { updateAvailable: false, error: "invalid-current-version" };
-    }
-    const response = await fetchImpl(
-      `https://api.github.com/repos/${finalRepoSlug}/releases/latest`,
-      {
-        headers: {
-          "User-Agent": "WoR-Flasher-Updater",
-          Accept: "application/vnd.github+json",
-        },
-        redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
-      },
-    );
-    if (!response.ok) return { updateAvailable: false, error: response.status };
-
-    const data = await response.json();
-    if (!data || typeof data !== "object" || Array.isArray(data) ||
-      ["draft", "prerelease"].some((key) => data[key] !== undefined && typeof data[key] !== "boolean")) {
-      return { updateAvailable: false, error: "invalid-release-metadata" };
-    }
-    if (data.draft || data.prerelease) {
-      return { updateAvailable: false, currentVersion: version };
-    }
-
-    const latestVersion = data.tag_name;
-    const htmlUrl = data.html_url ?? "";
-    if (!stableVersion(latestVersion) || typeof htmlUrl !== "string") {
-      return { updateAvailable: false, error: "invalid-release-metadata" };
-    }
-
-    return {
-      updateAvailable: compareVersions(latestVersion, version) > 0,
-      currentVersion: version,
-      latestVersion,
-      htmlUrl: htmlUrl.startsWith("https://") ? htmlUrl : "",
-    };
-  } catch (err) {
-    return { updateAvailable: false, error: err instanceof Error ? err.message : String(err) };
-  }
 }

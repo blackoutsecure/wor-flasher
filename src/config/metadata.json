@@ -3,7 +3,7 @@
   "product": {
     "name": "WoR-Flasher",
     "version": "2.1.0",
-    "description": "Native Rust and classic tooling for preparing Windows on Raspberry Pi media.",
+    "description": "Native Rust CLI and desktop app for preparing Windows on Raspberry Pi media.",
     "license": "GPL-3.0-or-later",
     "keywords": [
       "raspberry-pi",
@@ -54,22 +54,6 @@
     "NOTICE",
     "src/config",
     "src/lib/pi3-boot-refresh",
-    "src/lib/iot-account.ps1",
-    "src/lib/iot-locale.ps1",
-    "src/lib/iot-locale-user.ps1",
-    "config-templates",
-    "assets"
-  ],
-  "runtimePaths": [
-    "README.md",
-    "LICENSE",
-    "NOTICE",
-    "install-wor.sh",
-    "install-wor-gui.sh",
-    "install-wor-hook.sh",
-    "src/lib",
-    "src/config",
-    "src/updater.mjs",
     "config-templates",
     "assets"
   ]

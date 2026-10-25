@@ -759,25 +759,25 @@ at that SHA. Existing edits were left alone.
 
 | Surface | Existing behavior | Consequence for an IoT profile |
 | --- | --- | --- |
-| [Shared GUI definitions](../../src/lib/gui.sh), `wor_rpi_board_options` | Pi 5, Pi 4/400, Pi 3 and Pi 2 v1.2; shared by macOS and Linux | v1.1 would require its own explicitly restricted profile, not a display alias for Pi3. |
-| [Engine](../../install-wor.sh), `select_rpi_board` | v1.2 maps to `RPI_MODEL=3` with `WOR_TARGET_BOARD=pi2-v1.2`; v1.1 is rejected | Preserve the existing v1.2 compatibility route. A new board identity must not silently resolve ARM64 packages. |
-| [Board tests](../../tests/target-board.test.mjs) | Verify picker parity, v1.2 package routing, summary/export, Back navigation and rejection of v1.1 | These are useful regression tests, not evidence of a working rev 1.1 install. All 14 passed during this investigation. |
-| [Engine](../../install-wor.sh), ESD selection | Queries `arch=ARM64&edition=Professional`; build-number filtering is for the current desktop pipeline | IoT needs a separate image source/version policy. An ARM32 catalogue cannot be assumed by changing the query string. |
-| [Engine](../../install-wor.sh), `validate_iso_file` | Accepts ISO extension and requires at least 3 GiB | The reachable official IoT ISO is 787,347,456 bytes, so this preflight rejects it before content inspection. Reproduced with an equally sized sparse fixture. |
-| [Engine](../../install-wor.sh), ISO/ESD extraction | Expects desktop `boot`/`efi`, `sources/boot.wim`, `sources/install.wim` or `install.esd` | A board FFU or ISO/MSI delivery wrapper is not that layout. Do not loosen the size check and then continue down the same extractor. |
-| [Engine](../../install-wor.sh), `release_package_source` | Pi3/Pi4 driver assets named `Windows_ARM64_Drivers`; Pi3 UEFI comes from `pftf/RPi3` | These assets cannot support the original Pi2 CPU. |
+| [Native desktop UI](../../apps/desktop/src/main.rs) | Pi 5, Pi 4/400, Pi 3 and Pi 2 v1.2 are represented in the Rust workflow | v1.1 would require its own explicitly restricted profile, not a display alias for Pi3. |
+| [Rust configuration and board rules](../../crates/domain/src/configuration.rs) | v1.2 maps to its Pi 3 compatibility profile; v1.1 remains rejected | Preserve the existing v1.2 route. A new board identity must not silently resolve ARM64 packages. |
+| [Rust configuration tests](../../crates/domain/tests/configuration.rs) | Verify board selection and compatibility constraints | These are regression tests, not evidence of a working rev 1.1 install. |
+| [Native desktop media](../../crates/desktop-media) | Selects ARM64 ESD/ISO sources and desktop build metadata | IoT needs its separate reviewed FFU image policy. An ARM32 catalogue cannot be assumed by changing the query string. |
+| [Native desktop media](../../crates/desktop-media) | Validates desktop ISO size and layout before extraction | The reachable official IoT ISO is 787,347,456 bytes, so it is not a desktop ISO input. Do not loosen the size check and then continue down the desktop extractor. |
+| [Native IoT media](../../crates/iot-media) | Uses the reviewed FFU/ISO/MSI/CAB acquisition and inspection flow | A board FFU or ISO/MSI delivery wrapper is not the desktop `boot`/`efi`, `sources/boot.wim`, `install.wim` layout. |
+| [Native desktop media](../../crates/desktop-media) | Selects Pi 3/Pi 4 driver assets and Pi 3 UEFI packages | These ARM64 assets cannot support the original Pi2 CPU. |
 | [Canonical metadata](../../src/config/metadata.json) | Pins WoR-PE 1.1.0, ARM64 Pi UEFI/driver releases | No ARM32 PE or IoT image manifest is provided. |
 | WoR-PE 1.1.0 release ZIP | `winpe/2/setup.exe` is **PE32+ AArch64**, verified from the downloaded pinned package | It cannot execute on a Cortex-A7. Merely replacing the final OS WIM is insufficient. |
-| [Engine](../../install-wor.sh), partition/write functions | Creates WoR recovery/setup media with `WOR_BOOT` FAT and `WOR_INSTALL` exFAT, leaving space for installation | An FFU carries its own partition/block layout. Preserve it; do not prepartition as desktop WoR media. |
-| [Engine](../../install-wor.sh), `verify_written_image` | Requires two partitions, `RPI_EFI.fd`, `BOOTAA64.EFI`, BCD, boot/install WIMs and WoR-specific free space | This verifier must remain intact for ARM64. IoT needs a different layout- and image-aware verification path. |
-| [Engine](../../install-wor.sh), answer files; [prefinalization](../../config-templates/prefinalize.cmd) | `processorArchitecture="arm64"`, desktop OOBE/account configuration and `BOOTAA64.EFI` shell handoff | Not applicable to stock IoT FFU provisioning. Do not apply Pi4 RAM unlocks or desktop answer files to IoT. |
+| [Native desktop writer](../../crates/infrastructure/src/native/desktop.rs) | Creates WoR recovery/setup media with `WOR_BOOT` FAT and `WOR_INSTALL` exFAT, leaving space for installation | An FFU carries its own partition/block layout. Preserve it; do not prepartition as desktop WoR media. |
+| [Native desktop writer](../../crates/infrastructure/src/native/desktop.rs) | Verifies the desktop partition, firmware and Windows installation layout | This verifier remains scoped to ARM64 desktop media. IoT uses a separate layout- and image-aware FFU verification path. |
+| [Native desktop setup](../../crates/desktop-media/src/setup.rs); [templates](../../config-templates) | Produces ARM64 answer files, desktop setup and boot finalization payloads | Not applicable to stock IoT FFU provisioning. Do not apply Pi4 RAM unlocks or desktop answer files to IoT. |
 | [Configuration schema](../../config-templates/config.schema.json) | `rpiModel` enum `[3,4,5]`; source media documented as ARM64 ISO | Requires explicit schema/engine validation, not only GUI text. |
-| [Hook](../../install-wor-hook.sh) | Delegates `run` and summary/device operations to the shared engine | Keep one deployment implementation. Do not introduce an unvalidated alternate writer through the hook. |
+| [Native CLI](../../apps/cli) | Dispatches commands to the shared Rust application and infrastructure | Keep one deployment implementation. Do not introduce an unvalidated alternate writer. |
 
 WoR's Windows-only Imager advertises WIM/ESD/ISO/**FFU**, whereas its
 [PE-based installer requirements][wor-downloads] are ARM64 and ISO-based.
 These are different tools. FFU support in the Windows Imager is not evidence
-that this Linux/macOS shell engine already handles an ARM32 IoT FFU.
+that the native Linux/macOS implementation handles a reviewed ARM32 IoT FFU.
 
 ### Evidence that image availability is not entirely lost
 

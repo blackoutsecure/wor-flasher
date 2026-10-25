@@ -5,11 +5,57 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sourcePaths, stageBinary, verifyRustPi3Candidate } from "../src/package-rust.mjs";
+import { sourcePaths, stageBinary, verifyRustPi3Candidate, verifyUniversalMachO } from "../src/package-rust.mjs";
 
 const packager = fileURLToPath(new URL("../src/package-rust.mjs", import.meta.url));
+const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+const packageSource = readFileSync(new URL("../src/package-rust.mjs", import.meta.url), "utf8");
 
 describe("Separate Rust migration packaging", () => {
+  function universal() {
+    const binary = Buffer.alloc(128);
+    binary.writeUInt32BE(0xcafebabe, 0);
+    binary.writeUInt32BE(2, 4);
+    for (const [index, cpu] of [0x01000007, 0x0100000c].entries()) {
+      const entry = 8 + index * 20;
+      const offset = 64 + index * 32;
+      binary.writeUInt32BE(cpu, entry);
+      binary.writeUInt32BE(offset, entry + 8);
+      binary.writeUInt32BE(32, entry + 12);
+      binary.writeUInt32LE(0xfeedfacf, offset);
+      binary.writeUInt32LE(cpu, offset + 4);
+    }
+    return binary;
+  }
+
+  it("requires complete distinct Intel and Apple Silicon Mach-O slices", () => {
+    verifyUniversalMachO(universal());
+    for (const [offset, value] of [[0, 0], [4, 1], [8, 0x0100000c], [20, 999999],
+      [36, 64], [96, 0], [100, 0x01000007]]) {
+      const binary = universal();
+      binary.writeUInt32BE(value, offset);
+      assert.throws(() => verifyUniversalMachO(binary));
+    }
+    for (const size of [0, 7, 47, 100]) {
+      assert.throws(() => verifyUniversalMachO(universal().subarray(0, size)));
+    }
+  });
+
+  it("signs and verifies the complete universal bundle after staging resources", () => {
+    assert.match(packageSource, /codesign", \["--verify", "--deep", "--strict", app\]/);
+    assert.match(packageSource, /MACOSX_DEPLOYMENT_TARGET: product\.minimumMacosVersion/);
+    assert.match(packageSource, /macosTargets = \["aarch64-apple-darwin", "x86_64-apple-darwin"\]/);
+  });
+
+  it("rejects universal mode without desktop before building", () => {
+    const result = spawnSync(process.execPath, [packager, "--universal"], {
+      encoding: "utf8", env: { ...process.env, PATH: "" },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--universal requires a macOS host and --desktop|supports macOS and Linux only/);
+    assert.doesNotMatch(result.stderr, /ENOENT/);
+  });
+
   function candidate() {
     const binary = Buffer.alloc(512);
     binary.write("MZ");
@@ -95,6 +141,19 @@ describe("Separate Rust migration packaging", () => {
   it("describes the build without requiring Cargo or a display", () => {
     const result = spawnSync(process.execPath, [packager, "--help"], {
       encoding: "utf8", env: { ...process.env, PATH: "" },
+    });
+
+    it("publishes validated native Rust packages as the only release clients", () => {
+      assert.match(releaseWorkflow, /node src\/package-rust\.mjs --desktop --check/);
+      assert.match(releaseWorkflow, /node src\/package-rust\.mjs --desktop/);
+      assert.match(releaseWorkflow, /actions\/upload-artifact@/);
+      assert.match(releaseWorkflow, /actions\/download-artifact@/);
+      assert.match(releaseWorkflow, /wor-flasher-\$\{RELEASE_VERSION#v\}-\$\{target\}\.tar\.gz/);
+      assert.match(releaseWorkflow, /wor-flasher-\*\.tar\.gz/);
+      assert.doesNotMatch(releaseWorkflow, /release\/standalone\/install-wor\.sh|linux-cli\.tar\.gz|macos-runtime\.json|\.dmg/);
+      assert.match(releaseWorkflow, /Native physical writes remain explicitly experimental/);
+      assert.match(packageSource, /This is the native Rust application/);
+      assert.match(packageSource, /Physical native writes are experimental/);
     });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /--desktop.*--check/);

@@ -317,12 +317,12 @@ mod tests {
         let (temp, root) = fixture();
         let manifest = temp.path().join("runtime-manifest.json");
         assert!(Runtime::verified(&root, &manifest).is_ok());
-        let changed = root.join("install-wor-hook.sh");
+        let changed = root.join("config-templates/prefinalize.cmd");
         fs::write(&changed, "changed").expect("tamper");
         assert!(Runtime::verified(&root, &manifest).is_err());
         let mut forged: serde_json::Value = serde_json::from_str(CANONICAL_MANIFEST).expect("json");
         for entry in forged["files"].as_array_mut().expect("files") {
-            if entry["path"] == "install-wor-hook.sh" {
+            if entry["path"] == "config-templates/prefinalize.cmd" {
                 entry["sha256"] = format!("{:x}", Sha256::digest(b"changed")).into();
             }
         }

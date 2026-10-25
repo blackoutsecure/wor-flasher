@@ -50,7 +50,6 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = workflow_dispatch ];then
-            #Metadata is JSON-backed; the shell module no longer has a literal version assignment.
             version="$(node -p 'require("./src/config/metadata.json").product.version')"
             [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
               echo "Invalid version: $version" >&2
@@ -79,7 +78,7 @@ jobs:
             else
               if [ "$SKIP_PROJECT_VERSION_UPDATE" != true ];then
                 node src/set-version.mjs "${tag#v}"
-                if [ -n "$(git status --porcelain -- src/config/metadata.json src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json)" ];then
+                if [ -n "$(git status --porcelain -- src/config/metadata.json package.json)" ];then
                   source_branch="${REF#refs/heads/}"
                   [ "$source_branch" != "$REF" ] || {
                     echo "Manual releases must run from a branch." >&2
@@ -87,7 +86,7 @@ jobs:
                   }
                   git config user.name 'github-actions[bot]'
                   git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-                  git add src/config/metadata.json src/lib/metadata.sh src/macos-app/Contents/Info.plist README.md install-wor.sh package.json
+                  git add src/config/metadata.json package.json
                   git commit -m "chore: prepare $tag" \
                     -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
                   git push origin "HEAD:$source_branch"
@@ -113,9 +112,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   validate-linux:
-    name: Validate Linux release candidate
+    name: Validate Linux release candidate (${{ matrix.arch }})
     needs: prepare
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            arch: x64
+          - os: ubuntu-22.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -133,31 +140,49 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version: $version" >&2; exit 1; }
           [ "$RELEASE_TAG" = "v$version" ] || { echo "Tag $RELEASE_TAG does not match v$version." >&2; exit 1; }
 
-      - name: Install ShellCheck and integration test prerequisites
+      - name: Install native desktop build dependencies
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck pv
-
-      - name: Check shell syntax
-        run: |
-          set -euo pipefail
-          bash tests/check-shell-syntax.sh
-
-      - name: Check ShellCheck errors
-        run: shellcheck --severity=error src/standalone-launcher.sh src/lib/*.sh install-wor.sh install-wor-gui.sh install-wor-hook.sh src/macos-app/Contents/MacOS/WoR-Flasher tests/*.sh
-
-      - name: Verify packaged macOS runtime
-        run: npm run build:macos && node src/package-macos-app.mjs --check
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev
 
       - name: Verify release packaging plan
         run: npm run check
 
-      - name: Run Linux test suite
+      - name: Check Rust formatting and native logic
+        run: |
+          set -euo pipefail
+          rustup show
+          cargo fmt --all -- --check
+          cargo test --locked --workspace --exclude wor-desktop
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked -p wor-desktop --features visual-fixtures --bin wor-desktop
+          cargo clippy --locked -p wor-desktop --features visual-fixtures --all-targets -- -D warnings
+
+      - name: Validate and stage the native Rust release package
+        run: |
+          set -euo pipefail
+          node src/package-rust.mjs --desktop --check
+          node src/package-rust.mjs --desktop
+
+      - name: Archive the native Rust package
+        id: native-package
         env:
-          TEST_MODELS: "4"
-          TEST_COMMAND_TIMEOUT: "120"
-        run: ./tests/run-tests.sh
+          RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          target="$(node -p 'process.platform + "-" + process.arch')"
+          archive="$RUNNER_TEMP/wor-flasher-${RELEASE_VERSION#v}-${target}.tar.gz"
+          tar -czf "$archive" -C "release/rust/$target" .
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the native Rust package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wor-flasher-rust-linux-${{ matrix.arch }}
+          path: ${{ steps.native-package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 1
 
   validate-macos:
     name: Validate macOS release candidate
@@ -169,19 +194,44 @@ jobs:
           ref: ${{ needs.prepare.outputs.ref }}
           persist-credentials: false
 
-      - name: Check shell syntax
-        run: |
-          set -euo pipefail
-          /bin/bash tests/check-shell-syntax.sh
-
-      - name: Verify packaged macOS runtime
-        run: npm run build:macos && node src/package-macos-app.mjs --check
-
       - name: Verify release packaging plan
         run: npm run check
 
-      - name: Run macOS test suite
-        run: ./tests/run-tests.sh
+      - name: Check Rust formatting and native logic
+        run: |
+          set -euo pipefail
+          rustup show
+          cargo fmt --all -- --check
+          cargo test --locked --workspace --exclude wor-desktop
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked -p wor-desktop --features visual-fixtures --bin wor-desktop
+          cargo clippy --locked -p wor-desktop --features visual-fixtures --all-targets -- -D warnings
+
+      - name: Validate and stage the native Rust release package
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          node src/package-rust.mjs --desktop --universal --check
+          node src/package-rust.mjs --desktop --universal
+
+      - name: Archive the native Rust package
+        id: native-package
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          target=darwin-universal
+          archive="$RUNNER_TEMP/wor-flasher-${RELEASE_VERSION#v}-${target}.tar.gz"
+          tar -czf "$archive" -C "release/rust/$target" .
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the native Rust package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wor-flasher-rust-macos
+          path: ${{ steps.native-package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 1
 
   publish:
     name: Package and publish release
@@ -198,6 +248,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.ref }}
 
+      - name: Download validated native Rust packages
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: wor-flasher-rust-*
+          path: ${{ runner.temp }}/native-packages
+          merge-multiple: true
+
       - name: Package release artifacts
         id: package
         shell: bash
@@ -209,20 +266,21 @@ jobs:
           archive_dir="$RUNNER_TEMP/release-artifacts"
           release_commit="$(git rev-parse HEAD)"
           mkdir -p "$archive_dir"
-          npm run package:all
-          cp release/standalone/install-wor.sh "$archive_dir/install-wor.sh"
-          cp "release/linux/wor-flasher-$version-linux-cli.tar.gz" "$archive_dir/"
-          cp "release/linux/wor-flasher-$version-linux-gui.tar.gz" "$archive_dir/"
-          cp "release/macos/WoR-Flasher-$version-macos.dmg" "$archive_dir/"
-          tar -czf "$archive_dir/macos-runtime-$version.tar.gz" \
-            -C release/macos/WoR-Flasher.app/Contents/Resources runtime runtime-manifest.json
-          runtime_digest="$(shasum -a 256 "$archive_dir/macos-runtime-$version.tar.gz" | awk '{print $1}')"
-          printf '{\n  "version": "%s",\n  "url": "https://github.com/%s/releases/download/%s/macos-runtime-%s.tar.gz",\n  "sha256": "%s"\n}\n' \
-            "$version" "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$version" "$runtime_digest" > "$archive_dir/macos-runtime.json"
+          find "$RUNNER_TEMP/native-packages" -type f -name "wor-flasher-$version-*.tar.gz" -exec cp {} "$archive_dir/" \;
+          package_count="$(find "$archive_dir" -type f -name "wor-flasher-$version-*.tar.gz" | wc -l | tr -d '[:space:]')"
+          [ "$package_count" = 3 ] || {
+            echo "Expected the validated Linux x64, Linux ARM64 and universal macOS Rust packages; found $package_count." >&2
+            exit 1
+          }
+          for target in linux-x64 linux-arm64 darwin-universal; do
+            [ -s "$archive_dir/wor-flasher-$version-$target.tar.gz" ] || {
+              echo "Missing validated package: $target" >&2
+              exit 1
+            }
+          done
           (
             cd "$archive_dir"
-            shasum -a 256 install-wor.sh wor-flasher-"$version"-linux-cli.tar.gz wor-flasher-"$version"-linux-gui.tar.gz WoR-Flasher-"$version"-macos.dmg \
-              macos-runtime-"$version".tar.gz macos-runtime.json > SHA256SUMS
+            shasum -a 256 wor-flasher-"$version"-*.tar.gz > SHA256SUMS
           )
           {
             echo "directory=$archive_dir"
@@ -251,39 +309,21 @@ jobs:
           target_commitish: ${{ steps.package.outputs.commit }}
           generate_release_notes: true
           body: |
-            `install-wor.sh` is a standalone command-line client for macOS and supported Linux hosts.
-            Save it, verify SHA256SUMS, and run `bash install-wor.sh --help`.
-            It bundles this release's runtime; no Git checkout or Node.js is needed to unpack it.
-            Normal flashing dependencies and disk-write confirmations still apply.
+            The primary releases are native Rust CLI and Dioxus desktop packages for Linux and macOS.
+            Download the matching `wor-flasher-<version>-<platform>-<architecture>.tar.gz`, verify
+            it with `SHA256SUMS`, then follow its `README.txt`. Linux x64 and ARM64 packages include
+            `bin/wor-flasher` and `bin/wor-desktop`; the macOS package also includes the
+            `WoR-Flasher.app` bundle with Intel and Apple Silicon slices in both executables.
+            All packages include the verified native runtime, exact source
+            snapshot, dependency notices and package checksums. No Bash, Python or Node host runtime
+            is needed to run the native application.
 
-            Linux has two minimal tar.gz clients for Debian, Ubuntu, and Raspberry Pi OS:
-            `wor-flasher-*-linux-cli.tar.gz` contains `install-wor.sh`;
-            `wor-flasher-*-linux-gui.tar.gz` contains `install-wor-gui.sh`.
-            Each includes only its entry script, brief instructions, LICENSE, and NOTICE.
-            Files extract directly into your chosen directory, without a wrapper folder.
-            Extract either or both into a new directory. The GUI prefers a complete local runtime
-            or the standalone CLI beside it; otherwise it downloads this release's verified CLI
-            to obtain the engine and supporting files without overwriting local changes.
-
-            `WoR-Flasher-*-macos.dmg` contains the complete `WoR-Flasher.app` and brief instructions.
-            Mount the DMG and copy the app to a writable folder, such as `~/Applications`, before opening it.
-            The application bundle is unsigned and unnotarized.
-            `macos-runtime.json` and its versioned runtime archive are consumed only by the macOS
-            launcher's verified runtime updater.
-
-            Verify downloaded artifacts against `SHA256SUMS` before use.
-
-            macOS GUI disk writes use one administrator authentication and an already-authorized
-            finalizer. Automatic Ignore handles only the exact unreadable-disk system alert
-            during active writes; Accessibility and Automation permission may be required.
-            Physical-media completion and Raspberry Pi boot compatibility are not established
-            by the automated tests. See README and NOTICE for limitations and attribution.
+            Native physical writes remain explicitly experimental and require the documented
+            opt-in and erase consent. Automated checks do not qualify physical media or Raspberry
+            Pi boot compatibility. The Rust Pi 3 on-device helper is not promoted; the existing
+            qualified helper remains in use. macOS bundles are unsigned and unnotarized. See README
+            and NOTICE for host requirements, limitations and attribution.
           files: |
-            ${{ steps.package.outputs.directory }}/install-wor.sh
-            ${{ steps.package.outputs.directory }}/wor-flasher-*-linux-cli.tar.gz
-            ${{ steps.package.outputs.directory }}/wor-flasher-*-linux-gui.tar.gz
-            ${{ steps.package.outputs.directory }}/WoR-Flasher-*-macos.dmg
-            ${{ steps.package.outputs.directory }}/macos-runtime-*.tar.gz
-            ${{ steps.package.outputs.directory }}/macos-runtime.json
+            ${{ steps.package.outputs.directory }}/wor-flasher-*.tar.gz
             ${{ steps.package.outputs.directory }}/SHA256SUMS
           fail_on_unmatched_files: true

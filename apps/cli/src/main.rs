@@ -20,11 +20,6 @@ use wor_infrastructure::{Engine, OutputMode, Runtime, bundled_product, interrupt
 struct Cli {
     #[arg(
         long,
-        help = "Use the retained classic implementation explicitly; failures never fall back"
-    )]
-    classic: bool,
-    #[arg(
-        long,
         help = "Explicitly opt into hardware-unqualified native physical writes"
     )]
     allow_native_write: bool,
@@ -262,7 +257,7 @@ async fn run() -> anyhow::Result<i32> {
         println!("Runtime is complete and valid.");
         return Ok(0);
     }
-    if matches!(cli.command, Action::Wizard) && !cli.classic {
+    if matches!(cli.command, Action::Wizard) {
         let mut command = tokio::process::Command::new(
             executable
                 .parent()
@@ -289,8 +284,8 @@ async fn run() -> anyhow::Result<i32> {
         Action::Summary => Operation::Summary,
         Action::Catalog { kind } => Operation::Catalog(kind),
         Action::Run { arguments } => Operation::Run(arguments),
-        Action::Wizard => Operation::ClassicWizard,
         Action::CheckRuntime
+        | Action::Wizard
         | Action::BootConfig
         | Action::NativeWorker
         | Action::HostBootstrap { .. }
@@ -304,11 +299,7 @@ async fn run() -> anyhow::Result<i32> {
     request.settings = settings;
     request.progress_file = cli.progress_file;
     request.allow_native_write = cli.allow_native_write;
-    let engine = if cli.classic {
-        Engine::classic(runtime, executable)?
-    } else {
-        Engine::new(runtime, executable)?
-    };
+    let engine = Engine::new(runtime, executable)?;
     let (cancel, receiver) = watch::channel(false);
     let cancellation_code = Arc::new(AtomicU8::new(0));
     let signal_code = cancellation_code.clone();

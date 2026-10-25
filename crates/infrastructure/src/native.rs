@@ -108,11 +108,6 @@ impl NativeJob {
             Operation::Catalog(kind) => NativeAction::Catalog(kind.clone()),
             Operation::Run(args) => NativeAction::Run(strings(args)?),
             Operation::IotAccount(args) => NativeAction::IotAccount(strings(args)?),
-            Operation::ClassicWizard => {
-                return Err(NativeError::Failed(
-                    "Launch the native desktop companion for the guided wizard".into(),
-                ));
-            }
         };
         let mut environment = BTreeMap::new();
         for spec in SETTINGS {

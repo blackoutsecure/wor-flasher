@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "WoR-Flasher Configuration Schema",
-  "description": "Shared JSON configuration for the native Rust domain, Clap CLI and Dioxus desktop, with retained classic-loader compatibility. Appearance is stored separately; native physical-write permission requires independent command-line or GUI consent.",
+  "description": "Shared JSON configuration for the native Rust domain, Clap CLI and Dioxus desktop, with compatibility for previously saved settings. Appearance is stored separately; native physical-write permission requires independent command-line or GUI consent.",
   "type": "object",
   "properties": {
     "$schema": {

@@ -70,22 +70,54 @@ impl Host {
         }
         let release = fs::read_to_string("/etc/os-release")
             .map_err(|error| DeviceError::Probe(error.to_string()))?;
-        let mut debian = false;
-        for line in release.lines() {
-            if let Some(value) = line
-                .strip_prefix("ID=")
-                .or_else(|| line.strip_prefix("ID_LIKE="))
-            {
-                debian |= value
-                    .trim_matches('"')
-                    .split_whitespace()
-                    .any(|part| matches!(part, "debian" | "ubuntu" | "linuxmint" | "raspbian"));
-            }
-        }
-        if !debian {
+        if !debian_family(&release) {
             return Err(DeviceError::UnsupportedHost);
         }
         Ok(Self::Linux)
+    }
+}
+
+fn debian_family(release: &str) -> bool {
+    release.lines().any(|line| {
+        line.strip_prefix("ID=")
+            .or_else(|| line.strip_prefix("ID_LIKE="))
+            .is_some_and(|value| {
+                value
+                    .trim_matches(['"', '\''])
+                    .split_whitespace()
+                    .any(|part| matches!(part, "debian" | "ubuntu" | "linuxmint" | "raspbian"))
+            })
+    })
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::debian_family;
+
+    #[test]
+    fn ubuntu_and_both_raspberry_pi_os_identities_are_accepted() {
+        for release in [
+            "ID=ubuntu\nID_LIKE=debian\n",
+            "ID=raspbian\nID_LIKE=debian\n",
+            "ID=debian\nPRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\n",
+            "ID=derivative\nID_LIKE=\"ubuntu debian\"\n",
+            "ID=derivative\nID_LIKE='debian'\n",
+        ] {
+            assert!(debian_family(release), "{release}");
+        }
+    }
+
+    #[test]
+    fn unrelated_distributions_do_not_gain_write_support() {
+        for release in [
+            "",
+            "ID=fedora\n",
+            "ID=arch\n",
+            "ID=notdebian\n",
+            "NAME=ubuntu\n",
+        ] {
+            assert!(!debian_family(release), "{release}");
+        }
     }
 }
 

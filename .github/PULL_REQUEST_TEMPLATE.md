@@ -4,20 +4,19 @@
 
 ## How was it tested?
 
-<!-- Which Raspberry Pi model, which Windows build, and what you observed. -->
+<!-- Include commands and results. Identify any hardware qualification still outstanding. -->
 
-- [ ] `bash -n install-wor.sh install-wor-gui.sh install-wor-hook.sh tests/*.sh` passes
-- [ ] `./tests/run-tests.sh` passes, skips only expected host/display/container checks, or the reason is explained
-- [ ] GUI walkthrough checked with `./tests/run-tests-gui.sh` on the intended host (`yad` on Linux or `osascript` plus a removable drive on macOS)
-- [ ] Tested with `DRY_RUN=1`, or flashed a real drive
-- [ ] Raspberry Pi model tested:
-- [ ] Windows build tested:
+- [ ] `cargo fmt --all -- --check`
+- [ ] `cargo test --locked --workspace --exclude wor-desktop`
+- [ ] `cargo clippy --locked --workspace --all-targets -- -D warnings`
+- [ ] `npm run check`
+- [ ] No physical media was written by automated tests
 
 ## Checklist
 
-- [ ] The GUI and CLI still agree, if shared logic changed
-- [ ] Shared logic lives in `install-wor.sh`, not duplicated into `install-wor-gui.sh`
-- [ ] README updated, if behaviour or variables changed
-- [ ] Version history at the top of `install-wor.sh` and the Versions section of the README updated, if behaviour changed
-- [ ] Sent upstream to Botspot/wor-flasher too, if the fix applies there
-- [ ] No new ShellCheck errors (`shellcheck --severity=error install-wor.sh install-wor-gui.sh install-wor-hook.sh tests/*.sh`)
+- [ ] Shared behavior remains in Rust domain/application/backend crates
+- [ ] CLI and desktop remain consistent
+- [ ] README and runtime inventory are updated when behavior or payloads change
+- [ ] Attribution and third-party notices are preserved
+- [ ] Any remaining hardware qualification is stated explicitly
+- [ ] Sent applicable upstream changes to Botspot/wor-flasher

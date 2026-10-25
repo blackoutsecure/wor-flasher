@@ -20,8 +20,6 @@ body:
       options:
         - Dioxus native Rust desktop
         - Native Rust CLI
-        - Classic Bash CLI
-        - Classic AppKit/yad GUI
     validations:
       required: true
 
@@ -113,8 +111,8 @@ body:
     id: output
     attributes:
       label: Application logs or terminal output
-      description: Include the saved native run log or classic terminal output, especially errors. Remove passwords, keys and other secrets before posting.
-      render: shell
+      description: Include the saved native run log or CLI output, especially errors. Remove passwords, keys and other secrets before posting.
+      render: text
 
   - type: checkboxes
     id: checks

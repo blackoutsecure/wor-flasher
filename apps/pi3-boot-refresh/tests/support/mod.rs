@@ -270,8 +270,8 @@ impl BootstrapDisk for MemoryDisk {
 pub fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .find(|path| path.join("tests/test-pi3-gpt-bootstrap.py").is_file())
-        .expect("source-oracle fixtures require the wor-flasher source checkout")
+        .find(|path| path.join("src/config/metadata.json").is_file())
+        .expect("native fixtures require the wor-flasher source checkout")
         .to_owned()
 }
 

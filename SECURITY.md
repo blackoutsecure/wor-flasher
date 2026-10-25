@@ -15,8 +15,10 @@ next version; there are no long-term support branches.
 Check what you are running with:
 
 ```bash
-./install-wor.sh --version
+./bin/wor-flasher --version
 ```
+
+For a release bundle, run this from the extracted package directory.
 
 ## Reporting a vulnerability
 
@@ -27,7 +29,7 @@ Blackout Secure at [blackoutsecure.app][bos].
 
 Please include:
 
-- The version (`./install-wor.sh --version`) and your host OS.
+- The version (`./bin/wor-flasher --version`) and your host OS.
 - What an attacker can do, and what they need in order to do it.
 - Steps to reproduce, ideally with `DRY_RUN=1` so nothing is written to a drive.
 
@@ -99,10 +101,13 @@ whole disk. The interesting failure modes follow from that:
   run level, and task/files cleanup failures block a verified result. Accepted
   but inactive settings are pending-reboot, not verified. No account membership,
   SSH key authorization, image trust rule or language-pack source is widened.
-- **Privilege escalation through the sudo helpers.** The askpass scripts and the
-  credential keep-alive run while the user's timestamp is live.
+- **Privilege escalation through native sudo execution.** Privileged operations must
+  invoke their selected executable with argument boundaries intact; user-controlled
+  command text must never be interpreted by a shell. Private helper input must not be
+  sent through the sudo-password stream.
 - **Command or argument injection** through a filename, drive label, environment
-  variable or `config.txt` body that reaches a shell, `osascript`, or `yad`.
+  variable or `config.txt` body that reaches a native process or Windows
+  management payload.
 - **Secrets in the logs.** Failures keep timestamped logs under `$DL_DIR/logs/`, refresh
   `$DL_DIR/last-run.log`, or write wherever `WOR_LOG_FILE` points; they must never contain a
   password.
@@ -119,8 +124,8 @@ whole disk. The interesting failure modes follow from that:
 - **The release check.** It is enabled by default, makes one read-only HTTPS request to the
   GitHub releases API, and only prints a notice. It never writes to disk, never executes
   downloaded content, and never modifies the installation. It can be disabled with
-  `CHECK_FOR_UPDATES=0` or the legacy `NO_UPDATE=1`. Report it if you can make it do
-  anything beyond reporting a version.
+  `CHECK_FOR_UPDATES=0` or the backward-compatible `NO_UPDATE=1` setting alias. Report
+  it if you can make it do anything beyond reporting a version.
 - Vulnerabilities in Windows itself, in the WoR PE installer, or in the Pi UEFI
   firmware. Report those to [worproject.com][wor] and [pftf][pftf] respectively.
 

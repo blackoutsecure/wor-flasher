@@ -1,12 +1,8 @@
-# install-wor.sh creates this next to the scripts to cache worproject.com responses
+# Local runtime cache
 cache/
-wget-log*
 
-# Run logs. WOR_LOG_FILE defaults under DL_DIR/logs, but that can be pointed anywhere
+# Runtime logs
 *.log
-
-# Working directory for tests/run-tests.sh: loopback disk images and downloads
-.test-workspace/
 
 # Generated release staging output
 release/
@@ -24,11 +20,9 @@ config.json
 !config-templates/*.config.json
 !config-templates/*.json
 
-# Local developer environment: Python virtualenv used by the test tooling, and
-# editor state. VS Code writes .vscode/settings.json pointing at this machine's
-# interpreter, so it is machine-specific rather than shared project config.
-.venv/
+# Local editor state
 .vscode/
+.venv/
 
 # Downloaded components, if DL_DIR is pointed inside the repo
 peinstaller/

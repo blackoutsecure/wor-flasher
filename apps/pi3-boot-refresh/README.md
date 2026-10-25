@@ -50,12 +50,10 @@ boards. It is not a simulated successful finalizer.
 
 ## Offline verification
 
-Use the workspace's pinned Rust toolchain. The desktop-oracle tests additionally
-need Python 3 and the source checkout's existing GPT/FAT fixture files.
+Use the workspace's pinned Rust toolchain:
 
 ```sh
 cargo test -p wor-pi3-boot-refresh --lib --tests
-python3 apps/pi3-boot-refresh/tests/mutation_check.py
 rustup target add aarch64-pc-windows-msvc
 cargo check -p wor-pi3-boot-refresh --target aarch64-pc-windows-msvc
 cargo clippy -p wor-pi3-boot-refresh --all-targets -- -D warnings
@@ -83,15 +81,10 @@ accepted by this command. The candidate is not installed by the media writer;
 cross-linking is not proof of ARMv8.0, Windows PE or physical-board behavior.
 
 Synthetic byte fixtures cover invalid contexts, IOCTL layouts, GPT/FAT guards,
-backup races, partial/failed writes, flushing, idempotence and readback. Source
-oracle tests reuse `tests/test-pi3-gpt-bootstrap.py` and the desktop Python helper,
-compare all 512 replacement bytes and the SHA-256 metadata fingerprint across
-ten geometries, and follow the fragmented firmware file from both FAT views.
+backup races, partial/failed writes, flushing, idempotence and readback.
 Windows orchestration is exercised through in-memory fake handles, including
-close and discovery failures. The mutation check modifies disposable source
-copies under ignored `target/`, requires a green baseline and requires each
-guard mutation to fail an actual test rather than just compilation. Test files
-and sparse images also live only under ignored `target/` and are cleaned up.
+close and discovery failures. All tests use the Rust implementation and
+synthetic fixtures; no host scripting runtime is involved.
 
 These checks do not execute Windows APIs, prove Windows PE privileges/volume
 semantics, qualify an executable for Pi 3 ARMv8.0 or replace an end-to-end WoR-PE

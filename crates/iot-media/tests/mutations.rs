@@ -57,14 +57,7 @@ fn disposable_guard_mutations() {
     }
     fs::create_dir_all(root.join("src/lib")).unwrap();
     fs::create_dir_all(root.join("src/config")).unwrap();
-    for name in [
-        "iot-media.py",
-        "iot-account.py",
-        "iot-ffu.py",
-        "iot-account.ps1",
-        "iot-locale.ps1",
-        "iot-locale-user.ps1",
-    ] {
+    for name in ["iot-account.ps1", "iot-locale.ps1", "iot-locale-user.ps1"] {
         fs::copy(
             original_root.join("src/lib").join(name),
             root.join("src/lib").join(name),

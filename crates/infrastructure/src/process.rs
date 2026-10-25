@@ -10,7 +10,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::watch;
-use wor_application::{EngineEvent, Operation, Outcome, Request};
+use wor_application::{EngineEvent, Outcome, Request};
 use wor_domain::progress::Progress;
 
 const CAPTURE_LIMIT: usize = 256 * 1024;
@@ -39,8 +39,6 @@ pub enum EngineError {
     UnsupportedHost,
     #[error("Configuration changed after preview; preview it again before continuing")]
     ChangedConfiguration,
-    #[error("This operation requires the native Rust backend")]
-    NativeOnly,
     #[error(transparent)]
     Native(#[from] crate::native::NativeError),
     #[error("Invalid native worker message: {0}")]
@@ -53,7 +51,6 @@ type EventSink = Arc<dyn Fn(EngineEvent) + Send + Sync>;
 pub struct Engine {
     runtime: Runtime,
     native_helper: PathBuf,
-    native_backend: bool,
 }
 
 fn require_host() -> Result<(), EngineError> {
@@ -79,14 +76,7 @@ impl Engine {
         Ok(Self {
             runtime,
             native_helper,
-            native_backend: true,
         })
-    }
-
-    pub fn classic(runtime: Runtime, native_helper: PathBuf) -> Result<Self, EngineError> {
-        let mut engine = Self::new(runtime, native_helper)?;
-        engine.native_backend = false;
-        Ok(engine)
     }
 
     pub async fn execute(
@@ -107,7 +97,6 @@ impl Engine {
             });
         }
         let private = tempfile::tempdir()?;
-        let abort = private.path().join("abort");
         let snapshot = if let Some(expected) = &request.expected_config_digest {
             let source = request
                 .config
@@ -136,68 +125,15 @@ impl Engine {
             .map(|file| file.path().to_owned())
             .or(request.config.clone());
         job_request.progress_file = progress_path.map(PathBuf::from);
-        let payload = if self.native_backend {
-            Some(serde_json::to_vec(
-                &crate::native::NativeJob::from_request(&job_request, &self.runtime)?,
-            )?)
-        } else {
-            None
-        };
-        let mut command = if payload.is_some() {
-            let mut command = Command::new(&self.native_helper);
-            command
-                .arg("native-worker")
-                .stdin(Stdio::piped())
-                .env("WOR_IOT_NATIVE_COMPANION", &self.native_helper);
-            command
-        } else {
-            let script = if matches!(request.operation, Operation::ClassicWizard) {
-                "install-wor-gui.sh"
-            } else {
-                "install-wor-hook.sh"
-            };
-            let mut command = Command::new("/bin/bash");
-            command
-                .arg(self.runtime.root().join(script))
-                .env("WOR_GUI_ABORT_MARKER", &abort);
-            if request.graphical {
-                command.env("RUN_MODE", "gui").stdin(Stdio::null());
-            } else {
-                command.stdin(Stdio::inherit());
-            }
-            if let Some(config) = job_request.config.as_deref() {
-                command.arg("--config").arg(config);
-            }
-            if let Some(path) = progress_path {
-                command.env("WOR_GUI_PROGRESS_FILE", path);
-            }
-            for setting in &request.settings {
-                command.env(setting.name(), setting.value());
-            }
-            command.env("WOR_RUST_BOOT_CONFIG", &self.native_helper);
-            match &request.operation {
-                Operation::ListDevices => {
-                    command.arg("list-devices");
-                }
-                Operation::DescribeDevice(path) => {
-                    command.arg("describe-device").arg(path);
-                }
-                Operation::Summary => {
-                    command.arg("summary");
-                }
-                Operation::Run(arguments) => {
-                    command.arg("run").args(arguments);
-                }
-                Operation::ClassicWizard => {}
-                Operation::DeviceInventory
-                | Operation::Preview
-                | Operation::Catalog(_)
-                | Operation::IotAccount(_) => {
-                    return Err(EngineError::NativeOnly);
-                }
-            }
-            command
-        };
+        let payload = serde_json::to_vec(&crate::native::NativeJob::from_request(
+            &job_request,
+            &self.runtime,
+        )?)?;
+        let mut command = Command::new(&self.native_helper);
+        command
+            .arg("native-worker")
+            .stdin(Stdio::piped())
+            .env("WOR_IOT_NATIVE_COMPANION", &self.native_helper);
         command.kill_on_drop(true);
         if mode == OutputMode::Inherit {
             command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
@@ -223,23 +159,21 @@ impl Engine {
             id,
             armed: true,
             privileged_cleanup: request.operation.may_write(),
-            abort,
         };
         let stdout_task = child.stdout.take().map(|pipe| tokio::spawn(capture(pipe)));
         let stderr_task = child.stderr.take().map(|pipe| tokio::spawn(capture(pipe)));
-        if let Some(payload) = payload {
-            let mut stdin = child
-                .stdin
-                .take()
-                .ok_or_else(|| EngineError::Cleanup("Missing private native worker pipe".into()))?;
-            tokio::time::timeout(Duration::from_secs(5), stdin.write_all(&payload))
-                .await
-                .map_err(|_| {
-                    EngineError::Cleanup("Native worker did not accept its private request".into())
-                })?
-                .map_err(shutdown_error)?;
-            stdin.shutdown().await.map_err(shutdown_error)?;
-        }
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| EngineError::Cleanup("Missing private native worker pipe".into()))?;
+        tokio::time::timeout(Duration::from_secs(5), stdin.write_all(&payload))
+            .await
+            .map_err(|_| {
+                EngineError::Cleanup("Native worker did not accept its private request".into())
+            })?
+            .map_err(shutdown_error)?;
+        stdin.shutdown().await.map_err(shutdown_error)?;
+        drop(stdin);
         let mut pending = String::new();
         let mut interval = tokio::time::interval(Duration::from_millis(150));
         let mut cancelled = false;
@@ -248,7 +182,6 @@ impl Engine {
                 status = child.wait() => break status.map_err(shutdown_error)?,
                 () = cancellation_requested(&mut cancellation) => {
                     cancelled = true;
-                    File::create(&group.abort).and_then(|mut file| file.flush()).map_err(shutdown_error)?;
                     group.signal(false)?;
                     let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
                         Ok(status) => status.map_err(shutdown_error)?,
@@ -428,7 +361,6 @@ struct ProcessGroup {
     id: i32,
     armed: bool,
     privileged_cleanup: bool,
-    abort: PathBuf,
 }
 
 impl ProcessGroup {
@@ -502,13 +434,10 @@ impl ProcessGroup {
 
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
-        if self.armed {
-            if let Err(error) = File::create(&self.abort) {
-                tracing::error!(error = %error, "Failed to mark the owned engine as aborted");
-            }
-            if let Err(error) = self.signal(true) {
-                tracing::error!(error = %error, "Failed to stop the owned engine process group");
-            }
+        if self.armed
+            && let Err(error) = self.signal(true)
+        {
+            tracing::error!(error = %error, "Failed to stop the owned engine process group");
         }
     }
 }
@@ -516,6 +445,7 @@ impl Drop for ProcessGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wor_application::Operation;
 
     fn fixture(body: &str) -> (tempfile::TempDir, Engine) {
         let temp = tempfile::tempdir().expect("fixture");
@@ -537,57 +467,62 @@ mod tests {
             )
             .expect("fixture file");
         }
-        fs::write(
-            root.join("install-wor-hook.sh"),
-            format!("#!/bin/bash\n{body}\n"),
-        )
-        .expect("hook");
+        let helper = temp.path().join("native-helper");
+        fs::write(&helper, format!("#!/bin/sh\nset -eu\n{body}\n")).expect("helper");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).expect("mode");
+        }
         let runtime = Runtime::source(&root).expect("complete fixture runtime");
-        let engine = Engine::classic(runtime, std::env::current_exe().expect("test executable"))
-            .expect("engine");
+        let engine = Engine::new(runtime, helper).expect("engine");
         (temp, engine)
     }
 
     #[tokio::test]
-    async fn forwards_options_as_arguments_and_values_as_environment_without_shell_evaluation() {
-        let (_temp, engine) =
-            fixture(r#"printf '<%s>\n' "$@"; printf 'setting=<%s>\n' "$SOURCE_FILE"; exit 7"#);
-        let mut request = Request::new(Operation::Run(vec!["--version".into()]));
-        request.config = Some("/tmp/config with spaces.json".into());
-        request.settings.push(
-            "SOURCE_FILE=literal; $(not-a-command)"
-                .parse()
-                .expect("setting"),
-        );
+    async fn sends_a_native_job_payload_and_captures_worker_output() {
+        let temp = tempfile::tempdir().expect("fixture");
+        let payload = temp.path().join("payload.json");
+        let body = format!("cat > '{}'\nprintf 'native worker\\n'", payload.display());
+        let (_runtime_temp, engine) = fixture(&body);
         let (_sender, receiver) = watch::channel(false);
-        let result = engine
-            .execute(request, OutputMode::Capture, receiver, Arc::new(|_| {}))
-            .await
-            .expect("execute");
-        assert_eq!(result.exit_code, 7);
-        assert!(!result.succeeded());
-        assert_eq!(
-            result.stdout,
-            "<--config>\n</tmp/config with spaces.json>\n<run>\n<--version>\nsetting=<literal; $(not-a-command)>\n"
-        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            engine.execute(
+                Request::new(Operation::Run(vec!["--version".into()])),
+                OutputMode::Capture,
+                receiver,
+                Arc::new(|_| {}),
+            ),
+        )
+        .await
+        .expect("worker must receive EOF and finish")
+        .expect("execute");
+        assert!(result.succeeded());
+        assert_eq!(result.stdout, "native worker\n");
+        let job: serde_json::Value =
+            serde_json::from_slice(&fs::read(payload).expect("worker payload")).expect("JSON");
+        assert_eq!(job["action"]["kind"], "Run");
+        assert_eq!(job["action"]["arguments"][0], "--version");
     }
 
     #[tokio::test]
     async fn cancellation_stops_owned_children_and_preserves_non_success() {
-        let (temp, engine) = fixture(
-            "trap 'kill \"$worker\" 2>/dev/null; wait \"$worker\" 2>/dev/null; exit 143' TERM\nsleep 60 &\nworker=$!\nprintf '%s' \"$worker\" > \"$WOR_TEST_READY\"\nwait",
-        );
+        let temp = tempfile::tempdir().expect("fixture");
         let ready = temp.path().join("ready");
-        let mut request = Request::new(Operation::Run(Vec::new()));
-        request.settings.push(
-            format!("WOR_TEST_READY={}", ready.display())
-                .parse()
-                .expect("setting"),
-        );
+        let (_runtime_temp, engine) = fixture(&format!(
+            "cat >/dev/null\nsleep 60 &\nworker=$!\nprintf '%s' \"$worker\" > '{}'\nwait",
+            ready.display()
+        ));
         let (sender, receiver) = watch::channel(false);
         let task = tokio::spawn(async move {
             engine
-                .execute(request, OutputMode::Capture, receiver, Arc::new(|_| {}))
+                .execute(
+                    Request::new(Operation::Run(Vec::new())),
+                    OutputMode::Capture,
+                    receiver,
+                    Arc::new(|_| {}),
+                )
                 .await
         });
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -618,7 +553,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_pre_canceled_request_never_starts_the_engine() {
-        let (_temp, engine) = fixture("printf 'must not execute'; exit 0");
+        let temp = tempfile::tempdir().expect("fixture");
+        let marker = temp.path().join("started");
+        let body = format!("touch '{}'", marker.display());
+        let (_runtime_temp, engine) = fixture(&body);
         let (_sender, receiver) = watch::channel(true);
         let result = engine
             .execute(
@@ -631,11 +569,15 @@ mod tests {
             .expect("cancel");
         assert!(result.cancelled);
         assert!(result.stdout.is_empty());
+        assert!(!marker.exists());
     }
 
     #[tokio::test]
     async fn changed_config_is_rejected_before_the_engine_is_started() {
-        let (temp, engine) = fixture("printf 'must not execute'");
+        let temp = tempfile::tempdir().expect("fixture");
+        let marker = temp.path().join("started");
+        let body = format!("touch '{}'", marker.display());
+        let (_runtime_temp, engine) = fixture(&body);
         let config = temp.path().join("config.json");
         fs::write(&config, "{}").expect("config");
         let mut request = Request::new(Operation::Run(Vec::new()));
@@ -646,31 +588,28 @@ mod tests {
             .execute(request, OutputMode::Capture, receiver, Arc::new(|_| {}))
             .await;
         assert!(matches!(result, Err(EngineError::ChangedConfiguration)));
+        assert!(!marker.exists());
     }
 
     #[tokio::test]
     async fn the_engine_reads_a_private_snapshot_not_a_later_config_change() {
-        let (temp, engine) = fixture(
-            "printf ready > \"$WOR_TEST_READY\"\nwhile [ ! -f \"$WOR_TEST_RELEASE\" ];do sleep 0.01;done\ncat \"$2\"",
-        );
+        let temp = tempfile::tempdir().expect("fixture");
         let config = temp.path().join("config.json");
+        let payload = temp.path().join("payload.json");
         let ready = temp.path().join("ready");
         let release = temp.path().join("release");
+        let body = format!(
+            "cat > '{}'\ntouch '{}'\nwhile [ ! -f '{}' ];do sleep 0.01;done",
+            payload.display(),
+            ready.display(),
+            release.display()
+        );
+        let (_runtime_temp, engine) = fixture(&body);
         let original = r#"{"execution":{"dryRun":true}}"#;
         fs::write(&config, original).expect("config");
         let mut request = Request::new(Operation::Summary);
         request.config = Some(config.clone());
         request.expected_config_digest = Some(format!("{:x}", Sha256::digest(original.as_bytes())));
-        request.settings.push(
-            format!("WOR_TEST_READY={}", ready.display())
-                .parse()
-                .expect("setting"),
-        );
-        request.settings.push(
-            format!("WOR_TEST_RELEASE={}", release.display())
-                .parse()
-                .expect("setting"),
-        );
         let (_sender, receiver) = watch::channel(false);
         let task = tokio::spawn(async move {
             engine
@@ -684,9 +623,18 @@ mod tests {
         })
         .await
         .expect("snapshot ready");
+        let job: serde_json::Value =
+            serde_json::from_slice(&fs::read(&payload).expect("worker payload")).expect("JSON");
+        let snapshot = PathBuf::from(job["config"].as_str().expect("config path"));
+        assert_ne!(snapshot, config);
+        assert_eq!(fs::read_to_string(&snapshot).expect("snapshot"), original);
         fs::write(&config, r#"{"execution":{"dryRun":false}}"#).expect("changed");
+        assert_eq!(
+            fs::read_to_string(&snapshot).expect("private snapshot"),
+            original
+        );
         fs::write(&release, "continue").expect("release fixture");
         let result = task.await.expect("worker").expect("result");
-        assert_eq!(result.stdout, original);
+        assert!(result.succeeded());
     }
 }

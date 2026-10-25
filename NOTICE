@@ -19,8 +19,8 @@ Read that as a statement of intent, not as settled fact. Only Botspot can
 license the upstream code he wrote. Until he adds a LICENSE file upstream, or
 confirms GPL-3.0 in writing:
 
-- The Blackout Secure additions listed in the version history at the top of
-  install-wor.sh are offered under GPL-3.0 without reservation.
+- The Blackout Secure additions in the native Rust source are offered under
+  GPL-3.0 without reservation.
 - The pre-existing upstream code carries no explicit grant. Anyone planning to
   redistribute this fork commercially, or to relicense it, should get that
   confirmation first.

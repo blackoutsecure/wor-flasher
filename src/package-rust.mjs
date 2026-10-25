@@ -16,6 +16,7 @@ import { verifyPE } from "./build-pi3-boot-refresh.mjs";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
 let temporary;
+const macosTargets = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
 function run(program, arguments_, options = {}) {
   const result = spawnSync(program, arguments_, {
@@ -41,29 +42,66 @@ function runtime(directory, product) {
   writeFileSync(join(directory, "runtime-manifest.json"), formatRuntimeManifest(manifest));
 }
 
-export function stageBinary(name, target, targetDirectory) {
+export function verifyUniversalMachO(binary) {
+  if (binary.length < 8 || binary.readUInt32BE(0) !== 0xcafebabe ||
+      binary.readUInt32BE(4) !== 2 || binary.length < 48) {
+    throw new Error("Expected a universal Mach-O with exactly two architecture slices.");
+  }
+  const slices = [];
+  for (let index = 0; index < 2; index++) {
+    const entry = 8 + index * 20;
+    const cpu = binary.readUInt32BE(entry);
+    const offset = binary.readUInt32BE(entry + 8);
+    const size = binary.readUInt32BE(entry + 12);
+    if (offset < 48 || size < 32 || offset + size > binary.length ||
+        binary.readUInt32LE(offset) !== 0xfeedfacf ||
+        binary.readUInt32LE(offset + 4) !== cpu) {
+      throw new Error("Invalid universal Mach-O slice.");
+    }
+    slices.push({ cpu, offset, size });
+  }
+  const [first, second] = [...slices].sort((a, b) => a.offset - b.offset);
+  if (first.offset + first.size > second.offset ||
+      !slices.some(slice => slice.cpu === 0x01000007) ||
+      !slices.some(slice => slice.cpu === 0x0100000c)) {
+    throw new Error("Universal Mach-O must contain separate Intel x86_64 and Apple Silicon arm64 slices.");
+  }
+}
+
+export function stageBinary(name, target, targetDirectory, universal = false) {
+  if (universal) {
+    const sources = macosTargets.map(triple => join(targetDirectory, triple, "release", name));
+    for (const source of sources) {
+      if (!existsSync(source)) throw new Error(`Missing compiled Rust executable: ${source}`);
+    }
+    run("/usr/bin/lipo", ["-create", ...sources, "-output", target]);
+    verifyUniversalMachO(readFileSync(target));
+    run("/usr/bin/codesign", ["--force", "--sign", "-", target]);
+    run("/usr/bin/codesign", ["--verify", "--strict", target]);
+    chmodSync(target, 0o755);
+    return;
+  }
   const source = join(targetDirectory, "release", name);
   if (!existsSync(source)) throw new Error(`Missing compiled Rust executable: ${name}`);
   copyTree(source, target);
   chmodSync(target, 0o755);
 }
 
-function macosApp(destination, product, targetDirectory) {
-  const contents = join(destination, "WoR-Flasher Rust.app/Contents");
+function macosApp(destination, product, targetDirectory, universal) {
+  const contents = join(destination, "WoR-Flasher.app/Contents");
   const macos = join(contents, "MacOS");
   const resources = join(contents, "Resources");
   mkdirSync(macos, { recursive: true });
   runtime(resources, product);
-  stageBinary("wor-flasher", join(macos, "wor-flasher"), targetDirectory);
-  stageBinary("wor-desktop", join(macos, "wor-desktop"), targetDirectory);
-  copyTree(join(root, "src/macos-app/Contents/Resources", product.iconFilename),
-    join(resources, product.iconFilename));
+  stageBinary("wor-flasher", join(macos, "wor-flasher"), targetDirectory, universal);
+  stageBinary("wor-desktop", join(macos, "wor-desktop"), targetDirectory, universal);
+  copyTree(join(root, "assets", product.iconFilename), join(resources, product.iconFilename));
   writeFileSync(join(contents, "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleName</key><string>${xml(product.name)} Rust</string>
-<key>CFBundleDisplayName</key><string>${xml(product.name)} Rust</string>
-<key>CFBundleIdentifier</key><string>${xml(product.bundleIdentifier)}.rust</string>
+<key>CFBundleName</key><string>${xml(product.name)}</string>
+<key>CFBundleDisplayName</key><string>${xml(product.name)}</string>
+<key>CFBundleIdentifier</key><string>${xml(product.bundleIdentifier)}</string>
 <key>CFBundleExecutable</key><string>wor-desktop</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>${xml(product.version)}</string>
@@ -195,8 +233,8 @@ function preparePi3Candidate(toolchain, targetDirectory, product) {
 const sourceRoots = [
     "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "crates", "apps", "src",
     "config-templates", "assets", "docs", "tests", ".github", ".editorconfig",
-    ".gitignore", ".gitattributes", "AGENTS.md", "install-wor.sh", "install-wor-gui.sh",
-    "install-wor-hook.sh", "package.json", "package-lock.json", "playwright.config.mjs", "README.md", "CONTRIBUTING.md",
+    ".gitignore", ".gitattributes", "AGENTS.md", "package.json", "package-lock.json",
+    "playwright.config.mjs", "README.md", "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md", "SECURITY.md", "LICENSE", "NOTICE",
 ];
 
@@ -260,26 +298,38 @@ function checksums(directory) {
 if (isMainModule(import.meta.url)) {
 try {
   for (const arg of args) {
-    if (!["--desktop", "--pi3-helper", "--check", "--help"].includes(arg)) throw new Error(`Unknown option: ${arg}`);
+    if (!["--desktop", "--universal", "--pi3-helper", "--check", "--clean", "--help"].includes(arg)) throw new Error(`Unknown option: ${arg}`);
   }
+  if (args.includes("--clean") && args.length !== 1) throw new Error("--clean cannot be combined with build options.");
   if (args.includes("--help")) {
-    console.log("Usage: node src/package-rust.mjs [--desktop] [--pi3-helper] [--check]\nStages a complete host-native Rust runtime; --check uses temporary staging.\n--pi3-helper also builds an unqualified Windows ARM64 candidate using LLVM_MINGW_ROOT.");
+    console.log("Usage: node src/package-rust.mjs [--desktop] [--universal] [--pi3-helper] [--check] [--clean]\nStages a complete host-native Rust runtime; --check uses temporary staging.\n--universal requires macOS and --desktop; builds Intel and Apple Silicon binaries.\n--pi3-helper also builds an unqualified Windows ARM64 candidate using LLVM_MINGW_ROOT.\n--clean removes only release/rust staging output.");
+  } else if (args.includes("--clean")) {
+    rmSync(join(root, "release/rust"), { recursive: true, force: true });
+    console.log("Removed release/rust staging output.");
   } else {
     if (!["darwin", "linux"].includes(process.platform)) {
       throw new Error("Rust frontend packaging supports macOS and Linux only.");
     }
     const desktop = args.includes("--desktop");
+    const universal = args.includes("--universal");
+    if (universal && (process.platform !== "darwin" || !desktop)) {
+      throw new Error("--universal requires a macOS host and --desktop.");
+    }
     if (args.includes("--pi3-helper") && !process.env.LLVM_MINGW_ROOT?.trim()) {
       throw new Error("Set LLVM_MINGW_ROOT to an installed open-source LLVM-MinGW toolchain; no SDK is downloaded or licensed automatically.");
     }
     const build = ["build", "--locked", "--release", "-p", "wor-flasher"];
     if (desktop) build.push("-p", "wor-desktop");
-    run("cargo", build, { stdio: "inherit" });
-    const cargoMetadata = JSON.parse(run("cargo", ["metadata", "--locked", "--format-version=1"]));
     const { product } = readProjectMetadata();
+    if (universal) build.push("--target", macosTargets[0]);
+    const buildOptions = { stdio: "inherit", env: { ...process.env,
+      ...(process.platform === "darwin" ? { MACOSX_DEPLOYMENT_TARGET: product.minimumMacosVersion } : {}) } };
+    run("cargo", build, buildOptions);
+    if (universal) run("cargo", [...build.slice(0, -1), macosTargets[1]], buildOptions);
+    const cargoMetadata = JSON.parse(run("cargo", ["metadata", "--locked", "--format-version=1"]));
     const candidate = args.includes("--pi3-helper")
       ? preparePi3Candidate(resolve(process.env.LLVM_MINGW_ROOT), cargoMetadata.target_directory, product) : undefined;
-    const target = `${process.platform}-${process.arch}`;
+    const target = `${process.platform}-${universal ? "universal" : process.arch}`;
     const destination = args.includes("--check")
       ? (temporary = mkdtempSync(join(tmpdir(), "wor-rust-package-")))
       : join(root, "release/rust", target);
@@ -287,9 +337,10 @@ try {
     mkdirSync(join(destination, "bin"), { recursive: true });
     runtime(destination, product);
     const cli = join(destination, "bin/wor-flasher");
-    stageBinary("wor-flasher", cli, cargoMetadata.target_directory);
-    if (desktop) stageBinary("wor-desktop", join(destination, "bin/wor-desktop"), cargoMetadata.target_directory);
-    const appCli = desktop && process.platform === "darwin" ? macosApp(destination, product, cargoMetadata.target_directory) : undefined;
+    const binaryDirectory = cargoMetadata.target_directory;
+    stageBinary("wor-flasher", cli, binaryDirectory, universal);
+    if (desktop) stageBinary("wor-desktop", join(destination, "bin/wor-desktop"), binaryDirectory, universal);
+    const appCli = desktop && process.platform === "darwin" ? macosApp(destination, product, binaryDirectory, universal) : undefined;
     notices(destination, cargoMetadata);
     if (candidate) {
       const directory = join(destination, "candidates/pi3-boot-refresh");
@@ -308,13 +359,18 @@ try {
       for (const path of ["THIRD-PARTY-NOTICES.txt", "licenses", "source", ...(candidate ? ["candidates"] : [])]) {
         copyTree(join(destination, path), join(resources, path));
       }
+      if (universal) {
+        const app = join(destination, "WoR-Flasher.app");
+        run("/usr/bin/codesign", ["--force", "--sign", "-", app]);
+        run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
+      }
     }
     writeFileSync(join(destination, "README.txt"), [
-      `WoR-Flasher ${product.version} Rust migration build (${target})`,
+      `WoR-Flasher ${product.version} (${target})`,
       "",
       "Verify SHA256SUMS before use. Keep bin/, runtime/ and runtime-manifest.json together.",
       "CLI: bin/wor-flasher --help",
-      "Desktop (when included): bin/wor-desktop, or WoR-Flasher Rust.app on macOS.",
+      "Desktop: bin/wor-flasher wizard, or open WoR-Flasher.app on macOS.",
       "The desktop uses the guided Dioxus workflow over the same native backend as the CLI.",
       "The host backend, configuration, image preparation and imaging helpers are native Rust.",
       "No Bash, Python or Node host runtime is included. Native image/OS tools are still required.",
@@ -322,8 +378,9 @@ try {
       "The Rust Pi 3 on-device helper is not promoted to installation media pending hardware qualification.",
       ...(candidate ? ["candidates/pi3-boot-refresh contains the cross-linked Rust helper, its import/qualification manifest and matching source/licenses. It is not installed by the writer."] : []),
       "Host flashing dependencies are still required. Windows and WSL hosts are unsupported.",
-      "macOS applications are unsigned and unnotarized. Linux desktops require the matching WebKitGTK runtime.",
-      "This separate migration package does not replace the classic release or its verified updater.",
+      ...(universal ? ["Both CLI and desktop contain verified Intel x86_64 and Apple Silicon arm64 slices."] : []),
+      "macOS applications have no Developer ID signature or notarization. Linux desktops require the matching WebKitGTK runtime.",
+      "This is the native Rust application. It has no self-update mechanism.",
       "The exact first-party build source is in source/; third-party license notices are supplied alongside it.",
       "Botspot and the WoR-Flasher contributors; Blackout Secure. See runtime/LICENSE and runtime/NOTICE.",
       "",

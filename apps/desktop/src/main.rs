@@ -1412,7 +1412,7 @@ fn App() -> Element {
                     h2 {"Review and bind erase consent"}
                     if let Some(approved)=preview.read().as_ref(){pre {"{approved.summary}"}}
                     if !dry {
-                        p {class:"warning","Native physical writing has not been hardware-qualified. It is explicitly experimental; the stable classic release remains separate."}
+                        p {class:"warning","Native physical writing has not been hardware-qualified. It is explicitly experimental."}
                         label {input {r#type:"checkbox",checked:native(),disabled,onchange:move|event|native.set(event.checked())}"I accept the experimental native writer and its remaining hardware qualification."}
                         label {input {r#type:"checkbox",checked:erase(),disabled,onchange:move|event|erase.set(event.checked())}"Erase the selected whole drive and apply the reviewed operations."}
                         if iot&&at_path(&document.read(),"execution.wipeIotDrive")==Some(&json!(true)){

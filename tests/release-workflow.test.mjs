@@ -1,127 +1,71 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
-import { readProjectMetadata, readRuntimePaths } from "../src/lib/node-runtime.mjs";
+import { readProjectMetadata } from "../src/lib/node-runtime.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
-const checks = readFileSync(join(root, ".github/workflows/shellcheck.yml"), "utf8");
-const harness = readFileSync(join(root, "tests/run-tests.sh"), "utf8");
+const release = readFileSync(`${root}/.github/workflows/release.yml`, "utf8");
+const rust = readFileSync(`${root}/.github/workflows/rust.yml`, "utf8");
 
-describe("Release workflow prerequisites", () => {
-  it("resolves the canonical version in preparation, validation, and packaging", () => {
-    const lookups = [...release.matchAll(/^\s*(version="\$\(.+\)")$/gm)];
-    assert.equal(lookups.length, 3);
-    for (const [, lookup] of lookups) {
-      const result = spawnSync("bash", ["-c", `set -euo pipefail\n${lookup}\nprintf '%s' "$version"`], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout, readProjectMetadata().product.version);
-    }
+describe("Rust-only release workflow", () => {
+  it("resolves release versions from canonical native metadata", () => {
+    const lookup = `node -p 'require("./src/config/metadata.json").product.version'`;
+    assert.equal(release.split(lookup).length - 1, 3);
+    assert.match(readProjectMetadata().product.version, /^\d+\.\d+\.\d+$/);
+    assert.match(release, /Release tag must be vX\.Y\.Z/);
   });
 
-  it("scopes version-commit permissions to the prepare job", () => {
+  it("limits release version commits to metadata and derived package metadata", () => {
     assert.match(release, /^permissions:\n  contents: read$/m);
     const prepare = release.slice(release.indexOf("  prepare:"), release.indexOf("  validate-linux:"));
     assert.match(prepare, /    permissions:\n      contents: write/);
+    assert.match(prepare, /git add src\/config\/metadata\.json package\.json/);
     assert.match(prepare, /Co-authored-by: Copilot/);
+    assert.doesNotMatch(prepare, /install-wor|src\/macos-app|metadata\.sh/);
   });
 
-  it("installs pv before integration checks on both release and push workflows", () => {
-    for (const [workflow, testStep] of [
-      [checks, "- name: Run one-model dry-run integration suite"],
-      [release, "- name: Run Linux test suite"],
+  it("validates both native host builds and publishes only their packages", () => {
+    for (const command of [
+      "cargo fmt --all -- --check",
+      "cargo test --locked --workspace --exclude wor-desktop",
+      "cargo clippy --locked --workspace --all-targets -- -D warnings",
     ]) {
-      const prerequisite = workflow.search(/sudo apt-get install[^\n]*\bpv\b/);
-      assert.ok(prerequisite >= 0 && prerequisite < workflow.indexOf(testStep));
+      assert.equal(release.split(command).length - 1, 2, command);
     }
-    assert.match(harness, /command -v pv >\/dev\/null \|\| die /);
-  });
-
-  it("runs CI for standalone GUI helper and canonical metadata changes", () => {
-    assert.equal((checks.match(/      - "\*\*\.js"/g) || []).length, 2);
-    assert.equal((checks.match(/      - "src\/config\/\*\*"/g) || []).length, 2);
-  });
-
-  it("includes source attribution and license notices in both runtime distributions", () => {
-    const paths = readRuntimePaths();
-    for (const document of ["README.md", "LICENSE", "NOTICE"]) {
-      assert.ok(paths.includes(document), `${document} is missing from the runtime manifest`);
+    for (const suffix of ["", " --universal"]) {
+      assert.equal(release.split(`node src/package-rust.mjs --desktop${suffix} --check\n`).length - 1, 1);
+      assert.equal(release.split(`node src/package-rust.mjs --desktop${suffix}\n`).length - 1, 1);
     }
+    assert.match(release, /actions\/upload-artifact@/);
+    assert.match(release, /actions\/download-artifact@/);
+    assert.match(release, /wor-flasher-\$\{RELEASE_VERSION#v\}-\$\{target\}\.tar\.gz/);
+    assert.match(release, /Expected the validated Linux x64, Linux ARM64 and universal macOS Rust packages/);
+    assert.match(release, /for target in linux-x64 linux-arm64 darwin-universal/);
+    assert.match(release, /shasum -a 256 wor-flasher-/);
+    assert.match(release, /WoR-Flasher\.app/);
+    assert.doesNotMatch(release, /install-wor|shellcheck|run-tests\.sh|\.dmg|linux-cli\.tar\.gz/);
   });
 
-  it("publishes both minimal Linux tarballs with checksums instead of the combined ZIP", () => {
-    for (const flavor of ["cli", "gui"]) {
-      assert.ok(release.includes(`cp "release/linux/wor-flasher-$version-linux-${flavor}.tar.gz" "$archive_dir/"`));
-      assert.ok(release.includes(`wor-flasher-"$version"-linux-${flavor}.tar.gz`));
-      assert.ok(release.includes(`\${{ steps.package.outputs.directory }}/wor-flasher-*-linux-${flavor}.tar.gz`));
+  it("covers native Linux architectures, both Macs and explicitly limited Windows scope", () => {
+    for (const runner of ["ubuntu-24.04", "ubuntu-24.04-arm", "macos-latest", "macos-15-intel"]) {
+      assert.ok(rust.includes(runner), runner);
     }
-    assert.doesNotMatch(release, /linux-rpi\.zip/);
-    assert.match(release, /\/install-wor\.sh/);
+    assert.match(release, /os: ubuntu-22\.04-arm/);
+    assert.match(release, /name: wor-flasher-rust-linux-\$\{\{ matrix\.arch \}\}/);
+    assert.match(release, /target=darwin-universal/);
+    assert.match(rust, /cargo build --locked -p wor-flasher --target armv7-unknown-linux-gnueabihf/);
+    assert.match(rust, /cargo test --locked -p wor-domain -p wor-application/);
+    assert.match(rust, /not a Windows host app/);
+    assert.match(rust, /runner\.os == 'macOS' \|\| runner\.arch == 'X64'/);
   });
 
-  it("publishes the macOS DMG with checksums instead of a ZIP", () => {
-    assert.ok(release.includes('cp "release/macos/WoR-Flasher-$version-macos.dmg" "$archive_dir/"'));
-    assert.ok(release.includes('WoR-Flasher-"$version"-macos.dmg'));
-    assert.ok(release.includes("${{ steps.package.outputs.directory }}/WoR-Flasher-*-macos.dmg"));
-    assert.doesNotMatch(release, /macos\.zip/);
-    const publisher = release.slice(release.indexOf("  publish:"));
-    assert.match(publisher, /runs-on: macos-latest/);
+  it("runs native Rust and Node contracts when Rust source or package inputs change", () => {
+    for (const path of ["crates/**", "apps/**", "src/**", "tests/**", "README.md"]) {
+      assert.match(rust, new RegExp(path.replaceAll("*", "\\*")));
+    }
+    assert.match(rust, /npm run check/);
+    assert.match(rust, /cargo test --locked --workspace --exclude wor-desktop/);
+    assert.doesNotMatch(rust, /install-wor|shellcheck|run-tests\.sh/);
   });
-});
-
-describe("CI loop-device verification", () => {
-  for (const fails of [false, true]) {
-    it(fails ? "fails explicitly when privileged geometry inspection fails" : "reads partition geometry using the same privileges as the flash", () => {
-      const directory = mkdtempSync(join(tmpdir(), "wor-release-layout-"));
-      try {
-        writeFileSync(join(directory, "sudo"), `#!/bin/bash
-[ "$1" == parted ] || exit 99
-shift
-export WOR_TEST_PRIVILEGED=1
-exec "$WOR_TEST_BIN/parted" "$@"
-`, { mode: 0o755 });
-        writeFileSync(join(directory, "parted"), `#!/bin/bash
-[ "$WOR_TEST_PRIVILEGED" == 1 ] || { printf "permission denied\\n" >&2; exit 1; }
-[ "$WOR_TEST_FAIL" != 1 ] || { printf "mock geometry failure\\n" >&2; exit 42; }
-printf 'BYT;\\n/dev/wor-test-loop:52428800s:file:512:512:gpt:fixture:;\\n1:2048s:3147775s:3145728s:fat32:WOR_BOOT:boot, esp;\\n2:3147776s:40013823s:36866048s::WOR_INSTALL:msftdata;\\n'
-`, { mode: 0o755 });
-        const start = harness.indexOf('partition_layout="$(sudo parted');
-        const stop = harness.indexOf('\nboot_mount=', start);
-        assert.ok(start >= 0 && stop > start);
-        const result = spawnSync("bash", ["-c", `
-          die() { printf '%s\\n' "$*" >&2; exit 1; }
-          DEV_INSTALL=/dev/wor-test-loop
-          [ "$(command -v sudo)" == "$WOR_TEST_BIN/sudo" ] || exit 99
-          ${harness.slice(start, stop)}
-          printf '%s|%s\\n' "$partition_count" "$boot_filesystem"
-        `], {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            PATH: `${directory}:${process.env.PATH}`,
-            WOR_TEST_BIN: directory,
-            WOR_TEST_PRIVILEGED: "0",
-            WOR_TEST_FAIL: fails ? "1" : "0",
-          },
-        });
-        if (fails) {
-          assert.equal(result.status, 1);
-          assert.match(result.stderr, /Could not inspect the test loop-device partition layout/);
-          assert.equal(result.stdout, "");
-        } else {
-          assert.equal(result.status, 0, result.stderr);
-          assert.equal(result.stdout.trim(), "2|fat32");
-        }
-      } finally {
-        rmSync(directory, { recursive: true, force: true });
-      }
-    });
-  }
 });
