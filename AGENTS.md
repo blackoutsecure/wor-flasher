@@ -2,7 +2,7 @@
 
 ## What this is
 
-WoR-Flasher is a Bash-based tool for creating bootable Windows 10 or Windows 11
+WoR-Flasher creates bootable Windows 10 or Windows 11
 ARM64 media for Raspberry Pi from Debian-based Linux or macOS. It automates the
 Windows on Raspberry installation process: obtain or import Windows media, add
 UEFI firmware and drivers, partition and write a selected drive, verify the
@@ -13,8 +13,15 @@ original priorities: a straightforward interactive workflow, readable Bash,
 community compatibility, and one implementation of the flashing logic. The
 Blackout Secure maintained source extends that direction with macOS support,
 native GUI paths, stronger validation and verification, caching, automation
-interfaces, and broader tests. Do not erase the original authorship or replace
-the established design with a new framework.
+interfaces, and broader tests. Do not erase the original authorship.
+
+The user-approved Rust migration now provides native configuration, preparation,
+desktop/FFU writers, acquisition, SSH services and a guided Dioxus UI over plain
+domain/application crates and Clap. See [Rust migration](README.md#rust-migration)
+for the implemented boundaries and explicit experimental-write gate. The native
+package must not delegate to the classic Bash/Python engine. Retain classic
+interfaces and source oracles until deliberate stable release promotion; software
+tests do not qualify physical hardware or the unpromoted Windows helper.
 
 Read `README.md` for supported hosts, Raspberry Pi models, user-facing behavior,
 and parameters. Read `CONTRIBUTING.md` before changing code, `SECURITY.md` before
@@ -23,7 +30,8 @@ attribution text.
 
 ## Commands
 
-Run the narrowest applicable check first. The repository has no compilation step.
+Run the narrowest applicable check first. Classic scripts need no compilation;
+the separate Rust workspace uses the committed toolchain and lockfile.
 
 ```bash
 # Syntax and ShellCheck for all maintained Bash entry points, libraries, and tests.
@@ -45,6 +53,12 @@ npm run clean
 
 # Remove loop devices and test state left by an interrupted run
 ./tests/run-tests.sh --clean
+
+# Native replacements and the separate Rust frontend package
+cargo fmt --all -- --check
+cargo test --locked --workspace --exclude wor-desktop
+cargo clippy --locked --workspace --all-targets -- -D warnings
+node src/package-rust.mjs --desktop --check
 ```
 
 On a non-Linux host the suite prints three summaries: the Docker container's nested run,
@@ -58,7 +72,7 @@ compatibility changes, record real hardware coverage separately when available.
 
 ## Architecture
 
-- `install-wor.sh` is the engine and the single source of truth. Drive discovery,
+- For retained classic entry points, `install-wor.sh` is the shared engine. Drive discovery,
   host and target validation, downloads, caching, ISO handling, partitioning,
   writing, settings summaries, and post-flash verification belong here.
 - `install-wor-gui.sh` is presentation only. It sources the engine and presents
@@ -77,9 +91,21 @@ compatibility changes, record real hardware coverage separately when available.
   must stay safe to source and must not source one another.
 - `assets/` holds the shared UI artwork used by the README, both GUIs, and the macOS app
   icon. Reference it through `WOR_ASSETS_DIR` rather than rebuilding the path.
-- Both front-ends run the engine in-process and report progress through a native
-  progress window. Do not reintroduce a spawned terminal emulator or launcher
-  detection; the GUI must not depend on a visible terminal on either platform.
+- Classic front-ends source shared helpers and start owned engine workers.
+  Rust frontends use a native Rust worker, not the Bash/Python engine. Native
+  runtime data comes from `nativeRuntimePaths`; legacy `runtimePaths` remains
+  unchanged for stable consumers. Preserve worker ownership, cancellation and cleanup; never
+  detach a writer or require a visible terminal on either platform.
+- `crates/domain`, `crates/application` and `crates/infrastructure` separate native
+  rules, use cases and concrete OS/process adapters. `apps/cli` and `apps/desktop`
+  are presentation boundaries. The Rust Pi 3 helper in `apps/pi3-boot-refresh`
+  is not promoted over the shipped Go helper before ARMv8.0/WoR-PE qualification.
+  Do not add HTTP servers, databases or UI/OS services to the domain layer.
+- `crates/ffu`, `crates/iot-media`, `crates/iot-account` and `crates/desktop-media`
+  own native host functionality. All callers use those same implementations.
+  Propagate `PreparedMedia::cleanup()` failures before verified success. A new
+  physical writer still needs explicit experimental consent and hardware QA;
+  do not promote the Rust on-device helper or stable release implicitly.
 - `src/macos-app/` holds the canonical macOS application bundle template (`Info.plist`,
   launcher executable, icons, and logo). The checked-in root `WoR-Flasher.app` is deleted;
   staged bundles are written to `release/macos/WoR-Flasher.app` by Node release tooling
@@ -204,8 +230,9 @@ in and changes can be offered back. The working branch is `patch-1`.
 
 ### Always
 
-- Keep `install-wor.sh` as the shared decision-making engine and test behavior
-  through its real functions rather than reimplementing it in tests.
+- Keep decisions in the shared Rust domain/application/backend for native
+  callers and in `install-wor.sh` for classic callers. Test their real functions;
+  never duplicate decisions in frontends or add an automatic writer fallback.
 - Run the relevant commands above, mutation-test new coverage, and report what
   was tested and what could not be tested.
 - Update `README.md` and the version history at the top of `install-wor.sh` with

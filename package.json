@@ -3,7 +3,7 @@
   "version": "2.1.0",
   "private": true,
   "type": "module",
-  "description": "Release tooling for WoR-Flasher packaging; disk flashing remains in the shell engine.",
+  "description": "Native Rust and classic tooling for preparing Windows on Raspberry Pi media.",
   "license": "GPL-3.0-or-later",
   "homepage": "https://github.com/blackoutsecure/wor-flasher#readme",
   "repository": {
@@ -30,7 +30,9 @@
     "flasher",
     "arm64",
     "macos",
-    "linux"
+    "linux",
+    "rust",
+    "dioxus"
   ],
   "scripts": {
     "clean": "node src/build-release.mjs --clean",
@@ -48,12 +50,16 @@
     "metadata:write": "node src/sync-package-metadata.mjs --write",
     "update-check": "node src/updater.mjs --check-release",
     "version:set": "node src/set-version.mjs",
-    "test": "node --test tests/*.test.mjs && ./tests/run-tests.sh",
+    "test": "npm run test:visual && ./tests/run-tests.sh",
     "test:node": "node --test tests/*.test.mjs",
+    "test:visual": "node src/test-ui.mjs",
     "check:shell": "bash tests/check-shell-syntax.sh",
     "check": "npm run check:shell && node --check src/build-release.mjs && node --check src/build-pi3-boot-refresh.mjs && node --check src/package-macos-dmg.mjs && node --check src/package-standalone.mjs && node --check src/check-pe-installer.mjs && node --check src/sync-package-metadata.mjs && node --check src/updater.mjs && node --check src/package-macos-app.mjs && node --check src/set-version.mjs && node --check src/lib/node-runtime.mjs && node --test tests/*.test.mjs && node src/sync-package-metadata.mjs --check && node src/build-release.mjs --check --platform=all"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
   }
 }

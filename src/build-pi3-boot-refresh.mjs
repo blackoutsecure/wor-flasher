@@ -25,7 +25,7 @@ function sourceHash(root) {
   return hash.digest("hex");
 }
 
-function verifyPE(binary) {
+export function verifyPE(binary) {
   if (binary.length < 256 || binary.toString("ascii", 0, 2) !== "MZ") {
     throw new Error("Pi 3 finalizer is not a Windows executable");
   }

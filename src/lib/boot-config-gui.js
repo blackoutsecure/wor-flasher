@@ -2,8 +2,9 @@
 
 function worBootConfigCall(context, changes) {
   const task = $.NSTask.alloc.init;
-  task.launchPath = $(context.python);
-  task.arguments = $([context.helper]);
+  const native = Object.prototype.hasOwnProperty.call(context, "executable");
+  task.launchPath = $(native ? context.executable : context.python);
+  task.arguments = $(native ? context.arguments : [context.helper]);
   const input = $.NSPipe.pipe;
   const output = $.NSPipe.pipe;
   const errors = $.NSPipe.pipe;

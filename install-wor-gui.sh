@@ -4187,7 +4187,7 @@ linux_boot_config_editor() { #Input: pending config file, model, profile. Never 
   [ -f "$file" ] || { warning "The pending boot configuration is missing."; return 1; }
   context="$(boot_config_editor_context "$profile")" || return 1
   text="$(cat "$file")" || return 1
-  if ! state="$(jq --arg config "$text" '. + {config: $config}' <<<"$context" | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+  if ! state="$(jq --arg config "$text" '. + {config: $config}' <<<"$context" | boot_config_run)";then
     error_message="$(jq -r '.error // "Cannot read boot settings."' <<<"$state")"
     yad "${yadflags[@]}" --no-markup --text="$error_message" --button=Close:0 >/dev/null
     return 1
@@ -4226,7 +4226,7 @@ linux_boot_config_editor() { #Input: pending config file, model, profile. Never 
     if [ "$response" == 3 ];then
       text="$(jq -r .config <<<"$state")"
       if next="$(jq --arg config "$text" '. + {config: $config, reset: true}' <<<"$context" \
-        | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+        | boot_config_run)";then
         state="$next"
       else
         yad "${yadflags[@]}" --no-markup --text="$(jq -r .error <<<"$next")" --button=Close:0 >/dev/null
@@ -4256,7 +4256,7 @@ linux_boot_config_editor() { #Input: pending config file, model, profile. Never 
     text="$(jq -r .config <<<"$state")"
     if ! next="$(jq --arg config "$text" --argjson values "$values" --arg mode "$selected_mode" --arg previous "$mode" \
       '. + {config: $config, values: $values} + (if $mode == $previous then {} else {hdmiMode: $mode} end)' <<<"$context" \
-      | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+      | boot_config_run)";then
       yad "${yadflags[@]}" --no-markup --text="$(jq -r .error <<<"$next")" --button=Close:0 >/dev/null
       continue
     fi
@@ -4275,7 +4275,7 @@ linux_boot_config_editor() { #Input: pending config file, model, profile. Never 
         [ "$raw_response" == 0 ] || break
         text="$(jq -r .config <<<"$state")"
         if next="$(jq --arg config "$text" --arg userText "$draft" '. + {config: $config, userText: $userText}' <<<"$context" \
-          | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+          | boot_config_run)";then
           state="$next"
           break
         fi

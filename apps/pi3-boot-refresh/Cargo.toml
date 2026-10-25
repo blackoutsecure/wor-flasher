@@ -1,0 +1,24 @@
+[package]
+name = "wor-pi3-boot-refresh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Source-anchored Pi 3 GPT boot finalizer; hardware qualification pending"
+
+[dependencies]
+crc32fast.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Registry",
+] }
+
+[lints]
+workspace = true

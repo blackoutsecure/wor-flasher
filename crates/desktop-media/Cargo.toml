@@ -1,0 +1,23 @@
+[package]
+name = "wor-desktop-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+reqwest.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+wor-domain.workspace = true
+sha1 = "0.10"
+quick-xml = "0.38"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+fs2.workspace = true
+
+[lints]
+workspace = true

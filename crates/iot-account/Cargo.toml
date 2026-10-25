@@ -1,0 +1,27 @@
+[package]
+name = "wor-iot-account"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "0.22"
+libc.workspace = true
+rpassword = "7"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+signal-hook.workspace = true
+zeroize = "1"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "native-protocol"
+path = "tests/native_protocol.rs"
+harness = false

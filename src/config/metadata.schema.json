@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "WoR-Flasher Project Metadata",
-  "description": "Project/runtime metadata used by shell runtime and Node release tooling. User run configuration belongs in config-templates/config.json.",
+  "description": "Canonical product, runtime inventory and platform defaults shared by the native Rust host, retained classic runtime and release tooling. User imaging configuration belongs in config-templates/config.json; Cargo and UI appearance settings are separate.",
   "type": "object",
   "required": ["product", "systemDefaults", "runtimePaths"],
   "properties": {
@@ -105,6 +105,12 @@
         "logDirname": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": false
+    },
+    "nativeRuntimePaths": {
+      "type": "array",
+      "description": "Data and Windows management payloads for the native Rust host. No host Bash, Python or Node runtime is shipped.",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
     },
     "runtimePaths": {
       "type": "array",

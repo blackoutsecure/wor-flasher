@@ -8,6 +8,9 @@ indent_style = space
 indent_size = 2
 trim_trailing_whitespace = true
 
+[*.rs]
+indent_size = 4
+
 [*.md]
 # Markdown uses two trailing spaces as a hard line break
 trim_trailing_whitespace = false

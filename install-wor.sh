@@ -92,6 +92,16 @@
 #             Add a simple Boot Config Editor with shared checkbox/dropdown controls and a separate
 #               Advanced Text Edit for user additions. Protect required UEFI entries, validate and
 #               normalize GUI/CLI settings before flashing, and keep IoT editing display-only.
+#             Allow a verified native runtime to select its Rust boot validator explicitly;
+#               preserve classic Python behavior and never retry a failed native validation.
+#             Provide a separate native Rust host runtime with Clap and a guided Dioxus UI,
+#               native media/FFU/SSH/device workflows, private logging and owned cancellation.
+#               Keep physical native writes explicitly experimental and stable callers unchanged;
+#               retain the shipped Pi 3 PE helper until its Rust candidate is hardware-qualified.
+#             Share System/Light/Dark styling and responsive accessible controls in the native GUI;
+#               preserve safe inert visual fixtures, screenshot/video regression evidence and OS-native classic appearance.
+#             Reuse native presentation derivations and operation-local payload buffers without caching authorization or verification results.
+#             Align the native light/dark partnership theme and local artwork with clear creator/maintainer credits.
 #             Honor explicit false JSON preferences and forwarded GUI configuration arguments.
 #             Recheck target safety and capacity immediately before writing; exclude read-only,
 #               partition and boot-disk aliases, including Linux root layers and macOS APFS stores.
@@ -2783,6 +2793,31 @@ boot_config_context() { #Input: optional profile. Output: trusted defaults for t
   fi
 }
 
+boot_config_native_path() { #Output: the explicitly selected executable; runtime verification belongs to its launcher.
+  case "${WOR_RUST_BOOT_CONFIG:-}" in
+    /*)
+      if [ -f "$WOR_RUST_BOOT_CONFIG" ] && [ -x "$WOR_RUST_BOOT_CONFIG" ];then
+        printf '%s' "$WOR_RUST_BOOT_CONFIG"
+        return 0
+      fi ;;
+  esac
+  printf '%s\n' 'WOR_RUST_BOOT_CONFIG must name an absolute executable file.' >&2
+  return 1
+}
+
+boot_config_run() { #Input: editor JSON on stdin. A selected native failure is final, never a Python retry.
+  if [ "${WOR_RUST_BOOT_CONFIG+x}" == x ];then
+    local executable
+    executable="$(boot_config_native_path)" || {
+      printf '%s\n' '{"ok":false,"error":"WOR_RUST_BOOT_CONFIG must name an absolute executable file."}'
+      return 1
+    }
+    "$executable" boot-config
+  else
+    python3 "$DIRECTORY/src/lib/boot-config.py"
+  fi
+}
+
 boot_config_state() { #Input: config text, optional profile/mode. Output: normalized editor state or an explicit error.
   local context values="${BOOT_CONFIG_SETTINGS:-}"
   [ -n "$values" ] || values='{}'
@@ -2794,12 +2829,19 @@ boot_config_state() { #Input: config text, optional profile/mode. Output: normal
         elif . == null then "" elif type == "number" or type == "string" then tostring
         else error("Invalid boot setting value") end) end)}
       + (if $mode == "" then {} else {hdmiMode: $mode} end)' <<<"$context" \
-    | python3 "$DIRECTORY/src/lib/boot-config.py"
+    | boot_config_run
 }
 
 boot_config_editor_context() { #Input: optional image profile. Native and Linux editors share one validator.
-  boot_config_context "${1:-desktop}" | jq --arg python "$(command -v python3)" \
-    --arg helper "$DIRECTORY/src/lib/boot-config.py" '. + {python: $python, helper: $helper}'
+  if [ "${WOR_RUST_BOOT_CONFIG+x}" == x ];then
+    local executable
+    executable="$(boot_config_native_path)" || return 1
+    boot_config_context "${1:-desktop}" | jq --arg executable "$executable" \
+      '. + {executable: $executable, arguments: ["boot-config"]}'
+  else
+    boot_config_context "${1:-desktop}" | jq --arg python "$(command -v python3)" \
+      --arg helper "$DIRECTORY/src/lib/boot-config.py" '. + {python: $python, helper: $helper}'
+  fi
 }
 
 validate_boot_config() { #Normalize and validate the exact desktop config before image preparation or disk writes.
@@ -2842,7 +2884,7 @@ set_default_config_txt() { #Sets CONFIG_TXT from the selected model's shipped te
         [ "$previous_model" != "$RPI_MODEL" ] || return 0
         previous_context="$(RPI_MODEL="$previous_model" boot_config_context)" || return 1
         if ! next_state="$(boot_config_context | jq --arg config "$CONFIG_TXT" --argjson previous "$previous_context" \
-          '. + {config: $config, previousDefaults: $previous}' | python3 "$DIRECTORY/src/lib/boot-config.py")";then
+          '. + {config: $config, previousDefaults: $previous}' | boot_config_run)";then
           warning "Cannot adapt the managed boot settings to this model: $(jq -r .error <<<"$next_state")"
           return 1
         fi

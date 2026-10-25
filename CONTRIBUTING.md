@@ -8,6 +8,7 @@ preserving Botspot's original authorship and the project's community connections
 - [Where to send your change](#where-to-send-your-change)
 - [Getting set up](#getting-set-up)
 - [Running the tests](#running-the-tests)
+  - [Rust migration development](#rust-migration-development)
 - [House style](#house-style)
 - [Traps that have bitten us](#traps-that-have-bitten-us)
 - [Opening a pull request](#opening-a-pull-request)
@@ -71,6 +72,88 @@ be merged. CI runs the same commands on Ubuntu and macOS.
 The syntax gate checks each file separately: `bash -n first.sh second.sh` parses
 only `first.sh` and passes the remaining filenames as arguments. Keep local and
 CI checks on the shared gate rather than reintroducing that multi-file form.
+
+### Rust migration development
+
+The native host now uses Rust for configuration, preparation, storage workflows,
+FFU, acquisition and SSH rather than delegating to the classic host scripts.
+Classic sources remain explicit compatibility/oracle code, not native runtime
+requirements. See the [Rust migration guide](README.md#rust-migration)
+for the implemented scope, local desktop prerequisites and package commands.
+Use rustup with the committed toolchain and keep `Cargo.lock` tracked.
+
+Keep Rust configuration at the workspace boundary: shared dependency versions
+and lints in `Cargo.toml`, exact compiler/components in `rust-toolchain.toml`,
+and formatter policy in `rustfmt.toml`. Desktop/document features belong to
+the frontend, not the framework base inherited by future headless consumers.
+Editor Rust indentation is four spaces; Cargo/rustfmt remain the authority.
+The limited dev/test debug profile is measured and backtrace-tested; use
+`--config profile.dev.debug=2` for full debugger variables rather than changing
+release panic/CPU settings or silently disabling diagnostics. Configuration
+contracts run in the existing Node suite; update the CI path filters and
+corresponding-source inventory when introducing another root configuration file.
+
+```bash
+cargo fmt --all -- --check
+cargo test --locked --workspace --exclude wor-desktop
+cargo clippy --locked --workspace --all-targets -- -D warnings
+rustup target add aarch64-pc-windows-msvc
+cargo check --locked -p wor-pi3-boot-refresh --target aarch64-pc-windows-msvc
+cargo test --locked -p wor-desktop-media --test guard_mutations -- --ignored --nocapture
+cargo test --locked -p wor-iot-media --test mutations -- --ignored --nocapture
+node src/package-rust.mjs --desktop --check
+```
+
+The optional Windows ARM64 candidate is now actually cross-linked, not merely
+type-checked. Install the `aarch64-pc-windows-gnullvm` target, point
+`LLVM_MINGW_ROOT` at the checksum-verified LLVM-MinGW 20261020 installation and run
+`node src/package-rust.mjs --desktop --pi3-helper --check`. CI pins each host archive
+and its SHA-256. Preserve the import/hardening checks, static runtime policy and
+Rust/LLVM/MinGW redistribution notices; never treat a successful link as hardware
+qualification or install this candidate through the existing payload manifest.
+
+Keep domain/application code independent of Dioxus and concrete OS providers.
+Native replacements need source-anchored parity and mutation tests, not just new
+happy-path tests. The Windows ARM64 check is a type-check, not proof that a
+cross-linked helper boots on ARMv8.0 or works inside WoR-PE. Do not replace the
+shipped helper/manifest/license pair without that separate qualification. Keep
+the classic test suite while its engine and helpers are distributed.
+Real native writes require experimental opt-in and still need separate hardware
+qualification. Do not use that opt-in in automated physical-media tests. Native
+runtime data is the `nativeRuntimePaths` inventory; do not add host scripts there.
+Source packages must use their reviewed source inventory and exclude every nested
+`target` directory, credential state, log and generated fixture cache.
+
+UI changes must update the shared stylesheet and versioned visual design
+contract together when an intentional design change is required. Run
+`npm run test:visual` after `npm ci` and `npx playwright install --with-deps
+chromium firefox webkit`; use `npm test` for the canonical combined suite.
+The optional SSR exporter uses the real App markup but no native engine.
+Never replace it with independently drawn mock screens, enable physical actions
+in fixture/smoke mode, collect real credentials in recordings, or count an
+unavailable browser as passed. Screenshots/video/trace/coverage and the offline
+gallery go under ignored `release/ui-evidence/`, not the corresponding-source
+snapshot. Rust CI runs browser checks and actual native palette/width probes.
+Screenshot originals are temporary: the helper removes them after Playwright
+copies the retained attachments. Keep those attachments and report media intact.
+macOS 27's reproduced Firefox profile failure is explicitly reported; Linux
+and unaffected macOS runs still require all three configured engines.
+
+Use the canonical partnership artwork as the visual reference, not a background
+behind forms. Preserve the creator/maintainer distinction, contrast-adjusted
+light/dark brand tokens and clear primary/secondary/destructive action hierarchy.
+Artwork must remain local and unchanged; new brand tests check its hash,
+rendered dimensions and decoded native/fixture image. Keep the native asset
+route exact-path/read-only and fixture export atomic without following a linked
+asset directory.
+
+Preserve the derived-work contracts when changing presentation or streaming IO.
+The real App test counts configuration/schema work across rerenders, real edits
+and invalid inputs; the protected editor test checks independent edit-context
+invalidation. The payload test uses large, short and empty regular files,
+same-size corruption and cancellation while asserting bounded buffer allocation.
+Instrumentation is test-only. Never reuse the presentation cache as write
+authorization or cache successful source/target/hash checks to obtain a speedup.
 
 Two things to know about the harness:
 

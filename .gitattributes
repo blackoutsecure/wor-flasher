@@ -3,6 +3,9 @@
 
 *.sh text eol=lf
 *.mjs text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+Cargo.lock text eol=lf
 *.json text eol=lf
 *.md text eol=lf
 
@@ -12,6 +15,7 @@
 
 # Binary assets
 *.png binary
+*.exe binary
 
 # Large generated SVGs produce unreadable diffs
 *.svg -diff

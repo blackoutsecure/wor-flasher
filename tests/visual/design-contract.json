@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "provenance": "wor-partnership-ui-2026-10-v2",
+  "requirements": ["UI-001", "UI-002", "UI-003", "UI-004", "BRAND-001", "BRAND-002", "BRAND-003"],
+  "minimumControlHeight": 44,
+  "minimumTextSize": 14,
+  "normalTextContrast": 4.5,
+  "branding": {
+    "label": "Botspot and Blackout Secure partnership",
+    "artwork": "assets/partnership.png",
+    "artworkSha256": "c9966d0ea58664fc0874ff28429e3bc892761217b507a56fa8fbfedf9924b7d7",
+    "width": 800,
+    "height": 533
+  },
+  "themes": {
+    "light": {
+      "canvas": "rgb(242, 246, 252)",
+      "surface": "rgb(255, 255, 255)",
+      "text": "rgb(16, 33, 57)",
+      "muted": "rgb(69, 92, 119)",
+      "creator": "rgb(176, 22, 70)",
+      "maintainer": "rgb(7, 87, 168)",
+      "future": "rgb(66, 103, 4)",
+      "accent": "rgb(17, 88, 175)"
+    },
+    "dark": {
+      "canvas": "rgb(5, 11, 20)",
+      "surface": "rgb(11, 24, 41)",
+      "text": "rgb(238, 244, 255)",
+      "muted": "rgb(178, 196, 220)",
+      "creator": "rgb(255, 115, 153)",
+      "maintainer": "rgb(80, 182, 255)",
+      "future": "rgb(176, 230, 74)",
+      "accent": "rgb(24, 96, 190)"
+    }
+  }
+}

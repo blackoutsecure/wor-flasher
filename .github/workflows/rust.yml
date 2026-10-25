@@ -1,0 +1,179 @@
+name: Rust migration checks
+
+on:
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - ".editorconfig"
+      - ".gitattributes"
+      - "crates/**"
+      - "apps/**"
+      - "src/package-rust.mjs"
+      - "src/build-pi3-boot-refresh.mjs"
+      - "src/test-ui.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "playwright.config.mjs"
+      - "src/config/**"
+      - "src/lib/**"
+      - "install-wor*.sh"
+      - "config-templates/**"
+      - "assets/**"
+      - "tests/**"
+      - "README.md"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "rustfmt.toml"
+      - ".editorconfig"
+      - ".gitattributes"
+      - "crates/**"
+      - "apps/**"
+      - "src/package-rust.mjs"
+      - "src/build-pi3-boot-refresh.mjs"
+      - "src/test-ui.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "playwright.config.mjs"
+      - "src/config/**"
+      - "src/lib/**"
+      - "install-wor*.sh"
+      - "config-templates/**"
+      - "assets/**"
+      - "tests/**"
+      - "README.md"
+      - ".github/workflows/rust.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Linux desktop build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev xvfb dbus-x11
+
+      - name: Select the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup show
+
+      - name: Check formatting and native logic
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo test --locked --workspace --exclude wor-desktop
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Check the Windows ARM64 helper without promoting it
+        run: |
+          set -euo pipefail
+          rustup target add aarch64-pc-windows-msvc
+          cargo check --locked -p wor-pi3-boot-refresh --target aarch64-pc-windows-msvc
+
+      - name: Test shared UI rendering and record visual evidence
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium firefox webkit
+          cargo test --locked -p wor-desktop --features visual-fixtures --bin wor-desktop
+          cargo clippy --locked -p wor-desktop --features visual-fixtures --all-targets -- -D warnings
+          npm run test:visual
+
+      - name: Probe the actual native WebView themes and sizes
+        run: |
+          set -euo pipefail
+          for mode in system light dark; do
+            for width in 320 1100; do
+              if [ "$RUNNER_OS" = Linux ]; then
+                dbus-run-session -- xvfb-run -a target/debug/wor-desktop --runtime-dir "$PWD" --appearance "$mode" --smoke-test --smoke-width "$width"
+              else
+                target/debug/wor-desktop --runtime-dir "$PWD" --appearance "$mode" --smoke-test --smoke-width "$width"
+              fi
+            done
+          done
+
+      - name: Preserve UI screenshots recordings and coverage
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-consistency-${{ runner.os }}
+          path: release/ui-evidence/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Install the verified open-source Windows cross-toolchain
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            macOS)
+              archive=llvm-mingw-20261020-ucrt-macos-universal.tar.xz
+              digest=e9c13e4ede38e715003ffc674d4d00a1088df8235439d1f0c16188ff0704c17e
+              ;;
+            Linux)
+              archive=llvm-mingw-20261020-ucrt-ubuntu-22.04-x86_64.tar.xz
+              digest=55064b60b991a1e1e8090b8c2f84e82b22cfe5903d12c159d65064cf5e8ae335
+              ;;
+            *)
+              printf 'Unsupported LLVM-MinGW build host: %s\n' "$RUNNER_OS" >&2
+              exit 1
+              ;;
+          esac
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20261020/$archive" \
+            -o "$RUNNER_TEMP/$archive"
+          printf '%s  %s\n' "$digest" "$RUNNER_TEMP/$archive" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/wor-llvm-mingw"
+          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/wor-llvm-mingw"
+          printf 'LLVM_MINGW_ROOT=%s/%s\n' "$RUNNER_TEMP/wor-llvm-mingw" "${archive%.tar.xz}" >> "$GITHUB_ENV"
+          rustup target add aarch64-pc-windows-gnullvm
+
+      - name: Validate the complete Rust migration package
+        run: |
+          set -euo pipefail
+          node src/package-rust.mjs --desktop --pi3-helper --check
+
+  windows-helper:
+    name: Link Windows ARM64 helper (not promoted)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Select the pinned toolchain and Windows target
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          rustup show
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup target add aarch64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Link with the runner's licensed Visual Studio SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cargo build --locked --release -p wor-pi3-boot-refresh --target aarch64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

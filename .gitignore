@@ -11,6 +11,13 @@ wget-log*
 # Generated release staging output
 release/
 
+# Browser regression tooling is development-only.
+node_modules/
+
+# Rust build output; the workspace lockfile is tracked.
+**/target/
+*.rs.bk
+
 # User local configuration
 config.json
 *.config.json

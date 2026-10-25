@@ -4,16 +4,16 @@
 
 ![Maintainer partnership banner](assets/partnership.png)
 
-[![Version](https://img.shields.io/badge/version-2.1.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=semanticrelease&logoColor=ffffff)](#versions)
-[![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=555555&logo=githubactions&logoColor=ffffff&color=0a7ea4&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
-[![License](https://img.shields.io/badge/license-GPL--3.0-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnu&logoColor=ffffff)](LICENSE)
-[![Platform](https://img.shields.io/badge/host-Linux%20%7C%20macOS-0a7ea4?style=for-the-badge&labelColor=555555&logo=linux&logoColor=ffffff)](#requirements)
-[![Shell](https://img.shields.io/badge/written%20in-bash-0a7ea4?style=for-the-badge&labelColor=555555&logo=gnubash&logoColor=ffffff)](install-wor.sh)
+[![Version](https://img.shields.io/badge/version-2.1.0-1158af?style=for-the-badge&labelColor=0b1829&logo=semanticrelease&logoColor=ffffff)](#versions)
+[![CI](https://img.shields.io/github/actions/workflow/status/blackoutsecure/wor-flasher/shellcheck.yml?style=for-the-badge&labelColor=0b1829&logo=githubactions&logoColor=ffffff&color=1158af&label=CI)](https://github.com/blackoutsecure/wor-flasher/actions/workflows/shellcheck.yml)
+[![License](https://img.shields.io/badge/license-GPL--3.0-1158af?style=for-the-badge&labelColor=0b1829&logo=gnu&logoColor=ffffff)](LICENSE)
+[![Platform](https://img.shields.io/badge/host-Linux%20%7C%20macOS-1158af?style=for-the-badge&labelColor=0b1829&logo=linux&logoColor=ffffff)](#requirements)
+[![Shell](https://img.shields.io/badge/written%20in-bash-1158af?style=for-the-badge&labelColor=0b1829&logo=gnubash&logoColor=ffffff)](install-wor.sh)
 
-[![Discord](https://img.shields.io/badge/Discord-Botspot%20Software-5865F2?style=for-the-badge&labelColor=555555&logo=discord&logoColor=ffffff)](https://discord.gg/RXSTvaUvuu)
-[![Sponsor](https://img.shields.io/badge/sponsor-Botspot-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/Botspot)
-[![Sponsor](https://img.shields.io/badge/sponsor-Blackout%20Secure-EA4AAA?style=for-the-badge&labelColor=555555&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/blackoutsecure)
-[![Blackout Secure](https://img.shields.io/badge/maintained%20by-Blackout%20Secure-0a7ea4?style=for-the-badge&labelColor=555555&logo=shieldsdotio&logoColor=ffffff)](https://blackoutsecure.app)
+[![Discord](https://img.shields.io/badge/Discord-Botspot%20Software-5865F2?style=for-the-badge&labelColor=0b1829&logo=discord&logoColor=ffffff)](https://discord.gg/RXSTvaUvuu)
+[![Sponsor](https://img.shields.io/badge/sponsor-Botspot-b01646?style=for-the-badge&labelColor=0b1829&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/Botspot)
+[![Sponsor](https://img.shields.io/badge/sponsor-Blackout%20Secure-0757a8?style=for-the-badge&labelColor=0b1829&logo=githubsponsors&logoColor=ffffff)](https://github.com/sponsors/blackoutsecure)
+[![Blackout Secure](https://img.shields.io/badge/maintained%20by-Blackout%20Secure-0757a8?style=for-the-badge&labelColor=0b1829&logo=shieldsdotio&logoColor=ffffff)](https://blackoutsecure.app)
 
 > [!NOTE]
 > [Blackout Secure](https://blackoutsecure.app/) is proud to partner with [Botspot](https://github.com/Botspot) and the [Windows on R](https://worproject.com/) community as part of this endeavour. Together, we are carrying WoR-Flasher forward while keeping Botspot's original authorship, project direction, and community connections visible.
@@ -63,6 +63,7 @@ It does not turn IoT Core into desktop Windows or add an ARM64 IoT Core image.
   - [Updating](#updating)
   - [Troubleshooting](#troubleshooting)
   - [Development](#development)
+    - [Rust migration](#rust-migration)
     - [Repository layout](#repository-layout)
   - [Support](#support)
   - [Maintainer partnership](#maintainer-partnership)
@@ -661,6 +662,13 @@ image conversion or decompression, which the existing engine delegates to native
 tools. Keep the established Bash interfaces and the existing native helpers rather
 than creating a second flashing implementation.
 
+For the company-standard production runtime and desktop migration assessment,
+see the [Rust/Dioxus migration review](docs/research/rust-migration-review.md).
+It recommends Dioxus presentation and a shared Rust backend/Clap CLI, with staged
+safety, compatibility and packaging gates. The first native replacements and
+separate migration builds are described under [Rust migration](#rust-migration);
+the tooling guidance above does not rule out that runtime migration.
+
 ```bash
 npm run check          # shell syntax, macOS runtime freshness and release-plan validation
 npm run check:shell    # parse every maintained Bash script individually
@@ -1193,8 +1201,6 @@ WoR-Flasher never grants permission itself or caches a successful check as autho
 
 macOS may also ask whether `wiminfo` can access files on a removable volume. WoR-Flasher now triggers that consent check against the copied startup image before copying the much larger Windows installation image; choose **Allow** to continue. This approval cannot be granted automatically. If it is denied, WoR-Flasher opens **Privacy & Security > Files and Folders** and stops with instructions instead of continuing into the long copy and failing during final verification.
 
-The developer-only `src/macos-disk-claim.c` prototype explores a per-disk claim held by a control pipe. It is not packaged or invoked by the app: compilation succeeded, but claim acquisition timed out on a disposable disk image on the development host. Prompt suppression and formatter compatibility remain unverified. Do not use this prototype on physical media until its lifecycle and formatting interactions have been validated on disposable images.
-
 <details>
 <summary><b>macOS: "Operation not permitted" formatting the drive</b></summary>
 
@@ -1337,6 +1343,262 @@ Runtime distributions include this README, LICENSE, and NOTICE. The standalone C
 runtime source; GitHub additionally offers the full repository source archive for
 each tag. The macOS app bundle is unsigned and unnotarized; verify
 downloaded artifacts against `SHA256SUMS` before use.
+
+### Rust migration
+
+The company-standard native implementation uses **Clap** and **Dioxus Desktop**
+over shared Rust domain/application/infrastructure crates. The native package
+now runs configuration, media preparation, device safety, desktop writing, IoT
+FFU deployment and SSH personalization without a Bash/Python/Node host bridge.
+This is software implementation and offline validation, **not hardware
+qualification or stable-release promotion**.
+Botspot's authorship, the current license and the caveat in [NOTICE](NOTICE)
+remain unchanged.
+
+| Component | Implemented boundary |
+| --- | --- |
+| [`crates/domain`](crates/domain) | Source-compatible configuration, image/board/build/capacity rules, boot validation and typed progress; no UI or OS services |
+| [`crates/application`](crates/application) | Shared requests, settings, preview-bound consent and result states |
+| [`crates/infrastructure`](crates/infrastructure) | Linux/macOS topology and consent binding, native partition/copy/verify/eject, private snapshots/logs, owned cancellation and exact macOS disk-alert handling |
+| [`crates/desktop-media`](crates/desktop-media) | Native ESD/ISO/catalogue/cache/PE/driver/UEFI/WIM preparation and private setup customization |
+| [`crates/ffu`](crates/ffu) | Bounded approved FFU parser/writer, identity/geometry/GPT/wipe/HDMI checks and mandatory readback |
+| [`crates/iot-media`](crates/iot-media) | Digest-pinned native ISO/MSI/CAB acquisition, extraction and atomic private cache |
+| [`crates/iot-account`](crates/iot-account) | Local-endpoint discovery, pinned SSH, administrator SID and DefaultAccount language/task verification |
+| [`apps/cli`](apps/cli) | Native commands, helper protocols, guarded terminal choices and optional explicit `--classic` compatibility mode |
+| [`apps/desktop`](apps/desktop) | Guided image/board/drive/options/review/progress/results, protected boot editor, masked credentials and post-boot IoT pairing |
+| [`apps/pi3-boot-refresh`](apps/pi3-boot-refresh) | Rust replacement candidate for the Go boot-finalization helper; synthetic tests and Windows ARM64 checks, not promoted to installation media |
+
+Native failures never retry Python, Bash or another writer. The original scripts
+remain source oracles and explicit compatibility entry points for existing users;
+they are not included in the native host runtime. The shipped Go Pi 3 executable
+is still an on-device PE payload, not a host dependency. Its Rust replacement is
+implemented, type-checked and cross-linked as a separate candidate using
+open-source LLVM-MinGW. It is not promoted without ARMv8.0/WoR-PE qualification.
+
+Install Rust through [rustup](https://rustup.rs/). The committed
+[`rust-toolchain.toml`](rust-toolchain.toml) pins the compiler/components and
+[`Cargo.lock`](Cargo.lock) pins the dependency graph. Headless CLI/core tests do
+not require Dioxus, WebKit or a display:
+
+```bash
+cargo test --locked --workspace --exclude wor-desktop
+cargo build --locked -p wor-flasher
+cargo run --locked -p wor-flasher -- --runtime-dir "$PWD" run --version
+cargo run --locked -p wor-flasher -- --runtime-dir "$PWD" \
+  --config config-templates/config.json --set DEVICE=/dev/does-not-exist summary
+```
+
+Rust configuration follows edition 2024 with the MSRV-aware Cargo resolver and
+the pinned minimal toolchain. Repeated foundational dependencies live in the
+workspace; Dioxus desktop/document features and the optional SSR test renderer
+are owned by the frontend. Every crate inherits private-package metadata and
+the shared lint policy, including rejection of debug/unfinished placeholder
+macros. [rustfmt.toml](rustfmt.toml) and the Rust
+[editor rules](.editorconfig) agree on Rust 2024 formatting and four-space
+indentation.
+
+Development and test profiles use limited (`debug = 1`) debug information:
+an isolated CLI+desktop comparison allocated 16.9% less build storage on the
+validation host, while a real backtrace test retained function names and source
+lines. Timings/storage vary by platform. Release ThinLTO, stripping, portable
+CPU behavior and panic unwinding are unchanged. For a full local-variable
+debugger session, override without editing the shared policy:
+
+```bash
+cargo build --config profile.dev.debug=2 -p wor-flasher -p wor-desktop
+cargo test --locked -p wor-application --test profile_contract
+node --test tests/rust-config.test.mjs
+```
+
+The application still uses the shared
+[JSON configuration](config-templates/config.json) and
+[schema](config-templates/config.schema.json), not a new Rust-only TOML format.
+Existing aliases, precedence, explicit false/empty handling and all storage,
+TLS, verification and consent defaults are retained. Appearance remains separate
+from imaging configuration, and no JSON key can grant native physical-write
+permission.
+
+For the desktop, build the CLI companion as well:
+
+```bash
+cargo build --locked -p wor-flasher -p wor-desktop
+cargo run --locked -p wor-desktop -- --runtime-dir "$PWD" \
+  --config config-templates/config.json
+```
+
+The native desktop defaults to dry run. It requires a fresh settings preview
+bound to configuration, target identity, geometry and partition layout. Changes
+invalidate consent, and the run consumes a private digest-bound configuration
+snapshot. Physical writing additionally requires explicit acceptance of the
+experimental native writer and erase consent; a full IoT wipe requires separate
+confirmation. Closing the window cancels and waits for owned work; uncertain
+shutdown or mount cleanup cannot become verified success.
+
+The CLI supports complete configs/environment settings or guarded terminal
+choices. Real native writes require the global `--allow-native-write` option;
+without it the command refuses before erasing a target. This opt-in is not
+hardware certification. `--classic` deliberately selects a retained complete
+classic checkout; it is never an automatic fallback and cannot run from the
+native-only data bundle.
+
+CLI and desktop share regional defaults: macOS reads its system regional
+preference; Linux uses nonempty `LC_ALL`, `LC_MESSAGES`, then `LANG`. Completion
+sounds use the existing platform catalogue and fall back to `Glass`/`complete`
+for an unsupported selection, with a visible warning. Missing optional feedback
+providers never turn a verified imaging result into a failed disk operation.
+
+On macOS, live Accessibility preflight offers **Open Settings**, **Recheck** and
+**Continue manually**. Approved automation presses only **Ignore** on one exact
+system unreadable-disk alert during an active write; other or multiple alerts
+remain manual. It does not disable Disk Arbitration or grant permission itself.
+The native Accessibility provider does not require the former JXA/System Events
+host. Digest-bound configuration files must be regular, non-symlink JSON.
+
+The guided results screen offers explicit post-boot IoT connection and SSH
+fingerprint confirmation. It distinguishes verified account changes, language
+pending reboot and Not Assessed states. Credentials are masked, sent through
+private input/state and never included in process arguments or summaries.
+
+#### Consistent appearance and visual regression evidence
+
+The native GUI shares one [responsive stylesheet](apps/desktop/src/styles.css)
+across supported macOS and Linux hosts. **System** is the default appearance;
+**Light** and **Dark** are explicit overrides. The selection is saved separately
+from imaging configuration, so changing appearance does not change a target,
+invalidate a storage preview or enable a write. macOS stores the private
+preference under `~/Library/Application Support/WoR-Flasher/appearance.json`;
+Linux uses `~/.config/wor-flasher/appearance.json`. Invalid preferences produce a
+visible error, not a silent successful reset. The native window theme follows
+the selection; retained classic AppKit/yad interfaces keep OS-native appearance.
+
+The shared theme follows the [partnership artwork](assets/partnership.png):
+midnight/navy surfaces, blue primary actions, raspberry creator credit and
+lime accents. A compact header distinguishes Botspot's original-creator role
+from Blackout Secure's community-maintainer role. The unchanged artwork is a
+desktop detail; smaller windows keep the text credits and workflow without a
+crowded poster. Light mode uses darker accent shades for readable contrast.
+The image is local and offline: the native WebView serves only the compiled
+partnership PNG through a read-only allowlisted route, and the inert exporter
+copies the same canonical bytes. No remote image service is required.
+
+Presentation work is derived once per configuration change: immutable form
+descriptors are shared, inherited fields reuse one normalized settings model,
+and appearance/progress rerenders do not reparse imaging configuration. The
+protected editor similarly recomputes only when its edit context changes.
+These are display-only caches: operation/consent/target checks and Apply
+validation still run freshly at their existing boundaries.
+
+Native payload manifests, copies and readback reuse operation-local streaming
+buffers rather than allocating one per file. Every source recheck, copied-byte
+digest and written-file readback remains mandatory; only scratch memory is
+reused, never a prior successful verification result.
+
+Layouts are checked at 320, 375, 768, 1280 and 1920 CSS pixels, including
+phone/tablet-sized views, high-density rendering and keyboard focus. This is
+responsive presentation coverage, **not mobile flashing support**. Windows, WSL,
+Android and iOS do not become supported flashing hosts.
+
+```bash
+npm ci
+npx playwright install --with-deps chromium firefox webkit
+npm run test:visual
+```
+
+The test-only `visual-fixtures` Rust feature renders the **actual Dioxus App and
+shared CSS** into deterministic image, drive, options, confirmation, progress,
+result, protected editor, IoT and error states. It has no engine, cannot send
+native operations and does not download images, invoke sudo, scan disks or
+connect to SSH. It is excluded from normal release builds. The browser fixture
+driver only navigates sample screens and appearance modes; it is not a simulated
+successful imaging backend.
+
+Three browser spec files enforce the versioned
+[design contract](tests/visual/design-contract.json): contrast, minimum 44px
+interactive targets, readable text, labelled controls, overflow, masked passwords
+and explicit pending/error/Not Assessed messages. `npm test` includes this visual
+suite alongside the existing tests; `npm run check` remains the fast classic
+contract/release-tooling check.
+
+Screenshots, videos, traces and the offline comparison gallery are generated
+under `release/ui-evidence/` (`index.html` is the gallery). CI preserves them for
+14 days and also probes real native WebViews at narrow/desktop widths in all
+three appearance modes. Review these artifacts when intentionally updating the
+shared design contract; never weaken contrast or geometry thresholds to accept
+a broken layout. Browser fixtures are presentation evidence, not native
+OS-dialog, physical-device or hardware certification.
+
+Firefox 157 / Playwright 1.64.1 cannot start a profile on the current macOS 27
+host, including fresh canonical-temp and HOME profiles; the preceding Firefox
+155 build also failed. The launcher reports this as **Not Assessed** in the
+console and gallery, runs Chromium/WebKit locally, and still requires Firefox
+on Linux and unaffected macOS CI. An explicit `--project=firefox` retries it,
+and changing the pinned Playwright version automatically removes this
+version-specific exception. See
+[Moltenship/time#182](https://github.com/Moltenship/time/issues/182).
+
+Native theme/layout smoke checks never attach an engine or save preferences:
+
+```bash
+cargo run --locked -p wor-desktop -- --runtime-dir "$PWD" \
+  --appearance dark --smoke-test --smoke-width 320
+```
+
+They report actual WebView palette/width metrics, reject a mismatched palette or
+horizontal overflow and close the window. A passing smoke probe is not a real
+flash.
+
+On Linux the desktop requires the selected Dioxus release's WebKitGTK/GTK build
+and runtime libraries; Debian/Ubuntu build prerequisites include
+`libwebkit2gtk-4.1-dev`, `libxdo-dev` and `libayatana-appindicator3-dev`.
+macOS uses its system WebKit. Qualify Raspberry Pi OS host architectures and older
+supported distributions separately; building on one host does not establish
+support for every architecture. Windows and WSL flashing remain unsupported.
+
+Image preparation uses the native `wimlib-imagex` tool and root-free `bsdtar`
+ISO import (`libarchive-tools` on Debian/Ubuntu). Writing uses the platform's
+partition, filesystem, mount and eject tools; SSH personalization uses OpenSSH.
+macOS Homebrew `wimlib`/`gptfdisk` and Debian `wimtools`/`libarchive-tools` plus the
+existing filesystem tools provide these. No host language runtime is needed.
+PowerShell and batch files are Windows management/install payloads, and the small
+macOS notification request is an OS provider boundary; domain decisions stay Rust.
+
+Stage a self-contained host-native migration package, without changing classic
+release artifacts:
+
+```bash
+node src/package-rust.mjs --desktop
+node src/package-rust.mjs --desktop --check  # temporary staging and package smoke checks
+```
+
+To include the separately identified Windows ARM64 helper candidate, install the
+`aarch64-pc-windows-gnullvm` Rust target and a verified
+[LLVM-MinGW toolchain](https://github.com/mstorsjo/llvm-mingw/releases/tag/20261020),
+set `LLVM_MINGW_ROOT` to its extracted directory, then add `--pi3-helper`.
+The packager uses fixed generic/static-runtime compiler flags, verifies PE
+architecture/hardening/system imports, and supplies matching source and Rust,
+LLVM and MinGW runtime notices. It does not download or accept terms for a
+Microsoft SDK. The `candidates/pi3-boot-refresh/` manifest explicitly records
+`qualification: "not-assessed"` and `installedByDefault: false`; the normal
+writer continues to use the existing qualified deployment payload.
+
+Output goes under `release/rust/<platform>-<architecture>/`, containing native
+executables, a data-only native runtime, its manifest, dependency notices and
+`SHA256SUMS`, plus the matching first-party build source under `source/`. macOS
+desktop builds also contain **WoR-Flasher Rust.app** with a
+separate bundle identifier for side-by-side evaluation. Keep each complete
+package together. Packaged binaries verify the runtime against digests compiled
+into the executable; they never clone a mutable branch or fall back to the current
+directory. `--runtime-dir` is an explicit development trust override for a complete
+source checkout, not a way to skip final device validation.
+
+These macOS builds remain unsigned/unnotarized. The migration package does not
+replace the classic app's verified updater or enable a new self-update mechanism.
+Native release checking is read-only. The Windows ARM64 helper has a separate
+licensed Windows CI link gate; no Microsoft SDK was downloaded or license
+accepted on this development host without approval.
+No physical media is used by native automated tests. See the
+[migration review](docs/research/rust-migration-review.md) for remaining cutover
+and physical-board qualification gates.
 
 ### Repository layout
 

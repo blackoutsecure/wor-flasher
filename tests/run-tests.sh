@@ -170,10 +170,15 @@ static_checks() {
   fi
 
   deprecated_update_file='no-''update'
-  if grep -RIn --exclude-dir=.git --exclude-dir=.test-workspace --exclude='*.svg' "$deprecated_update_file" "$REPO_DIR" >/dev/null 2>&1 ;then
+  if grep -RIn --exclude-dir=.git --exclude-dir=.test-workspace --exclude-dir=target --exclude-dir=node_modules --exclude-dir=release --exclude-dir=__pycache__ --exclude-dir=.cache --exclude='*.svg' "$deprecated_update_file" "$REPO_DIR" >/dev/null 2>&1 ;then
     fail "deprecated updater sentinel file hook is not referenced"
   else
-    pass "deprecated updater sentinel file hook is not referenced"
+    scan_status=$?
+    if [ "$scan_status" == 1 ];then
+      pass "deprecated updater sentinel file hook is not referenced"
+    else
+      fail "deprecated updater source scan could not be assessed"
+    fi
   fi
 
   grep -qF 'register_device_cleanup "$ISO_DEVICE"' "$REPO_DIR/install-wor.sh" \
